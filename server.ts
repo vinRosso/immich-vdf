@@ -20,9 +20,10 @@ startScheduler();
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev, hostname: config.host, port: config.port });
 const handle = app.getRequestHandler();
-const upgrade = app.getUpgradeHandler();
 
+async function main(): Promise<void> {
 await app.prepare();
+const upgrade = app.getUpgradeHandler();
 
 const httpServer = createServer(async (request, response) => {
   try {
@@ -61,6 +62,9 @@ httpServer.on("upgrade", (request, socket, head) => {
 httpServer.listen(config.port, config.host, () => {
   console.log(`VDF web listening on http://${config.host}:${config.port}`);
 });
+}
+
+void main();
 
 function isPublicPage(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/_next") || pathname === "/favicon.ico";
