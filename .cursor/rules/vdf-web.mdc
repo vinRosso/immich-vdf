@@ -1,0 +1,17 @@
+---
+description: vdf-web goals, constraints, and where to read the plan
+alwaysApply: true
+---
+
+# vdf-web
+
+Read [docs/project-context.md](docs/project-context.md) and [docs/vdf-web-plan.md](docs/vdf-web-plan.md) before large changes.
+
+- **Upstream VDF**: git submodule at `upstream/`, release-tagged only. Never edit inside `upstream/`. Invoke `vdf-cli scan-and-compare --format json`. AGPLv3.
+- **Two UI sections**: Server (local media, `.vdf-trash/`) and Immich (read-only library mount + API for stack/trash).
+- **Runtime**: custom `server.ts` (not `next start`) for scheduler, single scan job, ffmpeg streaming.
+- **Security**: `APP_PASSWORD` session, path jail on all file access, spawn CLI/ffmpeg with argv arrays, secrets only on data volume.
+- **Deploy**: Docker Compose, port 47821, separate `--db` dirs per section.
+- **Tests**: `npm test`, `verify-fixture`, `check-cli-help` must stay green when touching CLI parsing or Docker build.
+
+Keep changes focused. Match existing conventions in `src/lib/` and shadcn components.
