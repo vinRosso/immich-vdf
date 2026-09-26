@@ -4,6 +4,12 @@ A small web app for [Video Duplicate Finder](https://github.com/0x90d/videodupli
 
 Video Duplicate Finder stays an unmodified git submodule at `upstream/`, pinned to the release tag **v4.1.1** (commit `21ec967`). It is not pinned to `master` or to the moving `4.1.x` tag. The app runs `vdf-cli scan-and-compare --format json --output <file>` and does not patch upstream. Upstream is AGPLv3.
 
+## Project docs (Cursor context in-repo)
+
+- [docs/project-context.md](docs/project-context.md) — goals, layout, Windows dev notes.
+- [docs/vdf-web-plan.md](docs/vdf-web-plan.md) — full architecture and feature plan.
+- [.cursor/rules/vdf-web.mdc](.cursor/rules/vdf-web.mdc) — agent rules for this repo.
+
 ## Deploy
 
 Install Docker, then from this directory:
