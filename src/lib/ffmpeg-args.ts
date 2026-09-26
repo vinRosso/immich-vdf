@@ -1,0 +1,38 @@
+export function posterArgs(file: string, seconds: number, output: string): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-y"];
+  if (seconds > 0) args.push("-ss", seconds.toFixed(3));
+  args.push("-i", file, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4", output);
+  return args;
+}
+
+export function filmstripArgs(file: string, seconds: number, output: string): string[] {
+  return posterArgs(file, seconds, output);
+}
+
+export function transcodeArgs(file: string, seconds: number, mode: "remux" | "transcode"): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-ss", Math.max(0, seconds).toFixed(3), "-i", file];
+  if (mode === "remux") args.push("-c", "copy");
+  else args.push("-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac");
+  args.push("-movflags", "frag_keyframe+empty_moov", "-f", "mp4", "pipe:1");
+  return args;
+}
+
+export function ffprobeArgs(file: string): string[] {
+  return ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "--", file];
+}
+
+export const STRIP_FRAMES = 6;
+
+export function sampleTimes(duration: number, count: number): number[] {
+  if (duration <= 0) return [0];
+  const times: number[] = [];
+  for (let index = 0; index < count; index += 1) {
+    times.push(duration * ((index + 1) / (count + 1)));
+  }
+  return times;
+}
+
+export function posterTime(duration: number): number {
+  if (duration <= 0) return 0;
+  return duration * 0.1;
+}

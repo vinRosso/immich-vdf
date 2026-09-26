@@ -1,0 +1,12 @@
+node_modules
+.next
+data
+dev-media
+dev-immich
+media
+immich-library
+agent-tools
+.git
+upstream/.git
+*.md
+!README.md
