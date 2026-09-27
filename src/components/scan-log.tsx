@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { formatDuration } from "@/lib/format";
+import { parseScanProgress } from "@/lib/scan-progress";
 import type { SectionId } from "@/lib/types";
 
 type Snapshot = {
@@ -37,18 +39,43 @@ export function useScanFeed(onDone: () => void) {
 }
 
 export function ScanLog({ lines, running }: { lines: string[]; running: boolean }) {
-  const ref = useRef<HTMLPreElement>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [tick, setTick] = useState(() => Date.now());
+
   useEffect(() => {
-    const node = ref.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [lines]);
-  if (!running && lines.length === 0) return null;
+    if (!running) {
+      setStartedAt(null);
+      return;
+    }
+    setStartedAt(Date.now());
+    const id = window.setInterval(() => setTick(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [running]);
+
+  if (!running) return null;
+
+  const progress = parseScanProgress(lines);
+  const elapsed =
+    startedAt === null ? null : formatDuration(Math.max(0, (tick - startedAt) / 1000));
+
   return (
-    <pre
-      ref={ref}
-      className="max-h-56 overflow-auto rounded-xl bg-black/40 p-3 font-mono text-xs leading-5 text-foreground/90"
-    >
-      {lines.length === 0 ? "Waiting for vdf-cli…" : lines.join("\n")}
-    </pre>
+    <div className="space-y-2 rounded-xl bg-black/40 px-4 py-3">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-foreground">{progress.label}</span>
+        <span className="tabular-nums text-muted-foreground">
+          {elapsed ? `Elapsed ${elapsed}` : "Elapsed —"}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted/80">
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span>{progress.detail ?? "Waiting for vdf-cli…"}</span>
+        <span className="tabular-nums">{progress.percent}%</span>
+      </div>
+    </div>
   );
 }

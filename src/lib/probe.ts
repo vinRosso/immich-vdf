@@ -4,6 +4,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { ffprobeArgs } from "./ffmpeg-args";
+import { imageBitDepthFromFfprobe } from "./image-bit-depth";
 import { parseFfprobe, type ProbeSummary } from "./playback";
 
 export function ffmpegBin(): string {
@@ -19,6 +20,21 @@ export async function fileCacheKey(file: string): Promise<string> {
   return createHash("sha256")
     .update(`${file}\0${info.size}\0${Math.round(info.mtimeMs)}`)
     .digest("hex");
+}
+
+export async function probeImageBitDepth(file: string): Promise<number> {
+  const key = await fileCacheKey(file);
+  const cachePath = path.join(loadConfig().dataDir, "probe", `${key}.json`);
+  try {
+    return imageBitDepthFromFfprobe(JSON.parse(await readFile(cachePath, "utf8")));
+  } catch {
+    // Cache miss or a stale file. Probe again.
+  }
+  const stdout = await capture(ffprobeBin(), ffprobeArgs(file));
+  const parsed = JSON.parse(stdout) as unknown;
+  await mkdir(path.dirname(cachePath), { recursive: true });
+  await writeFile(cachePath, JSON.stringify(parsed));
+  return imageBitDepthFromFfprobe(parsed);
 }
 
 export async function probeFile(file: string): Promise<ProbeSummary> {

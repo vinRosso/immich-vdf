@@ -11,6 +11,9 @@ export type ScanSettings = {
   partialClip: boolean;
   aiMatching: boolean;
   aiPartial: boolean;
+  compareHorizontallyFlipped: boolean;
+  ignoreBlackPixels: boolean;
+  ignoreWhitePixels: boolean;
 };
 
 export type ScheduleSettings = {
@@ -80,6 +83,9 @@ export type StoredItem = {
   width: number;
   height: number;
   bitrateKbps: number;
+  bitDepth: number;
+  audioBitrateKbps: number;
+  dateCreatedMs: number;
   flags: string[];
   partialClipOffsetSeconds: number;
   isImage: boolean;
@@ -108,6 +114,11 @@ export type IgnoredEntry = {
   labels: string[];
 };
 
+export type IgnoredGroupCard = {
+  entry: IgnoredEntry;
+  group: ClientGroup | null;
+};
+
 export type RunRecord = {
   slotKey: string | null;
   at: string | null;
@@ -132,6 +143,9 @@ export type ClientItem = {
   width: number;
   height: number;
   bitrateKbps: number;
+  bitDepth: number;
+  audioBitrateKbps: number;
+  dateCreatedMs: number;
   flags: string[];
   partialClipOffsetSeconds: number;
   isImage: boolean;
@@ -162,10 +176,15 @@ export type ResultsResponse = {
 export type RuntimeInfo = {
   cpuCount: number;
   suggestedFfmpegConcurrency: number;
+  suggestedParallelism: number;
   mediaRoots: string[];
   immichLibrary: string;
+  immichScanRoots: string[];
   cliAvailable: boolean;
   cliPath: string;
+  cliVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
   serverTimeZone: string;
 };
 
@@ -178,6 +197,7 @@ export type TrashEntry = {
   mount: string;
   relative: string;
   sizeBytes: number;
+  addedAtMs: number;
 };
 
 export type MediaInfo = {

@@ -24,7 +24,7 @@ export function LoginForm() {
       });
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(body.error || "Sign-in failed");
-      router.replace("/server");
+      router.replace("/");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");

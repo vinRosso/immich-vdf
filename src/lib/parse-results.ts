@@ -5,6 +5,8 @@ export type ParsedItem = {
   durationSeconds: number;
   resolution: string | null;
   bitrateKbps: number;
+  audioBitrateKbps: number;
+  dateCreatedMs: number;
   flags: string[];
   partialClipOffsetSeconds: number;
   isImage: boolean;
@@ -49,6 +51,8 @@ function parseItem(value: unknown, groupIndex: number, itemIndex: number): Parse
     durationSeconds: parseTimeSpan(item.Duration, where, "Duration"),
     resolution: optionalString(item.FrameSize),
     bitrateKbps: requiredNumber(item, "BitRateKbs", where),
+    audioBitrateKbps: optionalNumber(item.AudioBitRateKbs),
+    dateCreatedMs: parseOptionalDate(item.DateCreated),
     flags: parseFlags(item.Flags, where),
     partialClipOffsetSeconds:
       item.PartialClipOffset === undefined ? 0 : parseTimeSpan(item.PartialClipOffset, where, "PartialClipOffset"),
@@ -98,4 +102,14 @@ function requiredNumber(record: Record<string, unknown>, key: string, where: str
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function optionalNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function parseOptionalDate(value: unknown): number {
+  if (typeof value !== "string" || value.length === 0) return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
 }

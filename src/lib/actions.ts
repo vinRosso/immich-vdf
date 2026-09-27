@@ -1,14 +1,26 @@
 import { baseName } from "./format";
 import { AppError } from "./errors";
-import { ignoreKey, memberIds } from "./ignore";
-import { attachAssets } from "./immich-join";
-import { listImmichAssets, pingImmich, stackAssets, trashAssets } from "./immich";
+import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
+import { assetsForOriginalPaths } from "./immich-asset-index";
+import { attachAssets, originalPathsForGroups } from "./immich-join";
+import { resolveImmichScanRoots } from "./immich-mounts";
+import { resolveImmichPathMap } from "./immich-path-map";
+import { fetchImmichUser, pingImmich, stackAssets, trashAssets, type ImmichUser } from "./immich";
 import { pickPrimaryIndex } from "./primary";
 import { resolveInside } from "./path-jail";
 import { loadConfig } from "./config";
 import { loadIgnored, loadResults, loadSettings, saveIgnored, saveResults } from "./store";
-import { moveToTrash } from "./trash";
-import type { ClientGroup, ClientItem, ResultsResponse, SectionId, StoredGroup, StoredItem, StoredResults } from "./types";
+import { moveToTrash, resolveMediaFile } from "./trash";
+import type {
+  ClientGroup,
+  ClientItem,
+  IgnoredGroupCard,
+  ResultsResponse,
+  SectionId,
+  StoredGroup,
+  StoredItem,
+  StoredResults,
+} from "./types";
 
 export async function resultsView(section: SectionId): Promise<ResultsResponse> {
   const [results, ignored] = await Promise.all([loadResults(section), loadIgnored(section)]);
@@ -50,6 +62,24 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
   };
 }
 
+export async function ignoredGroupsView(section: SectionId): Promise<IgnoredGroupCard[]> {
+  const [results, ignored] = await Promise.all([loadResults(section), loadIgnored(section)]);
+  if (!results) return ignored.map((entry) => ({ entry, group: null }));
+  const entries = pruneIgnoredEntries(section, ignored, results.groups);
+  if (entries.length !== ignored.length) await saveIgnored(section, entries);
+  const byKey = new Map<string, StoredGroup>();
+  for (const group of results.groups) {
+    byKey.set(ignoreKey(memberIds(section, group.items)), group);
+  }
+  return entries.map((entry) => {
+    const stored = byKey.get(entry.key);
+    if (!stored) return { entry, group: null };
+    const primary = pickPrimaryIndex(stored.items);
+    const items = stored.items.map((item, index) => toClient(section, item, index === primary));
+    return { entry, group: { groupId: stored.groupId, items } };
+  });
+}
+
 function toClient(section: SectionId, item: StoredItem, isPrimary: boolean): ClientItem {
   return {
     ...item,
@@ -87,10 +117,18 @@ export async function trashServerGroup(groupId: string, keepPath: string): Promi
   const group = requireGroup(results, groupId);
   const keep = await realResultPath("server", keepPath, group);
   const victims = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keep);
-  if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
-  const moved = await moveToTrash(victims);
-  await saveResults("server", dropItems(results, (item) => victims.includes(item.path)));
-  return moved;
+  return commitServerTrash(results, victims);
+}
+
+export async function trashServerItems(groupId: string, victimPaths: string[]): Promise<number> {
+  const results = await requireResults("server");
+  const group = requireGroup(results, groupId);
+  if (victimPaths.length === 0) throw new AppError("Choose a file to trash");
+  const victims: string[] = [];
+  for (const victimPath of victimPaths) victims.push(await realResultPath("server", victimPath, group));
+  const unique = [...new Set(victims)];
+  if (unique.length >= group.items.length) throw new AppError("Keep at least one file in this group");
+  return commitServerTrash(results, unique);
 }
 
 export async function stackImmichGroup(groupId: string, primaryId: string): Promise<void> {
@@ -112,33 +150,75 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
   const group = requireGroup(results, groupId);
   const ids = matchedIds(group);
   if (!ids.includes(keepId)) throw new AppError("The kept file is not a matched Immich asset");
-  const victims = ids.filter((id) => id !== keepId);
-  if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
-  await trashAssets(settings.immich.baseUrl, settings.immich.apiKey, victims);
-  await saveResults("immich", dropItems(results, (item) => item.assetId !== null && victims.includes(item.assetId)));
-  return victims.length;
+  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, ids.filter((id) => id !== keepId));
+}
+
+export async function trashImmichItems(groupId: string, victimIds: string[]): Promise<number> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const ids = matchedIds(group);
+  const unique = [...new Set(victimIds)];
+  if (unique.length === 0) throw new AppError("Choose a file to trash");
+  if (unique.some((id) => !ids.includes(id))) throw new AppError("That file is not a matched Immich asset");
+  if (unique.length >= ids.length) throw new AppError("Keep at least one file in this group");
+  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, unique);
 }
 
 export async function rejoinImmich(): Promise<number> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
   const results = await requireResults("immich");
-  const assets = await listImmichAssets(
+  const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
+  const maps = await resolveImmichPathMap(creds);
+  const assets = await assetsForOriginalPaths(
     settings.immich.baseUrl,
     settings.immich.apiKey,
+    originalPathsForGroups(results.groups, maps),
     settings.immich.scan.includeImages,
   );
-  const groups = attachAssets(results.groups, assets, settings.immich.pathMap);
+  const groups = attachAssets(results.groups, assets, maps);
   await saveResults("immich", { ...results, warning: null, groups });
   return groups.reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
 }
 
-export async function testImmichConnection(baseUrl: string, apiKey: string): Promise<void> {
+export type ImmichConnectionInfo = { baseUrl: string; user: ImmichUser };
+
+export async function immichConnectionInfo(baseUrl = "", apiKey = ""): Promise<ImmichConnectionInfo> {
   const settings = await loadSettings();
   const url = baseUrl.trim() || settings.immich.baseUrl;
   const key = apiKey.trim() || settings.immich.apiKey;
   requireImmich(url, key);
   await pingImmich(url, key);
+  const user = await fetchImmichUser(url, key);
+  return { baseUrl: url, user };
+}
+
+export async function testImmichConnection(baseUrl: string, apiKey: string): Promise<ImmichConnectionInfo> {
+  return immichConnectionInfo(baseUrl, apiKey);
+}
+
+export async function savedImmichStatus(): Promise<
+  | { connected: true; baseUrl: string; user: ImmichUser; scanRoots: string[] }
+  | { connected: false; baseUrl?: string; error?: string }
+> {
+  const settings = await loadSettings();
+  if (!settings.immich.baseUrl || !settings.immich.apiKey) {
+    return { connected: false };
+  }
+  const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
+  try {
+    const info = await immichConnectionInfo();
+    const scanRoots = await resolveImmichScanRoots(creds);
+    return { connected: true, ...info, scanRoots };
+  } catch (err) {
+    return {
+      connected: false,
+      baseUrl: settings.immich.baseUrl,
+      error: err instanceof Error ? err.message : "Could not reach Immich",
+    };
+  }
 }
 
 export async function realResultPath(section: SectionId, candidate: string, group?: StoredGroup): Promise<string> {
@@ -146,8 +226,13 @@ export async function realResultPath(section: SectionId, candidate: string, grou
   const source = group ?? results.groups.find((item) => item.items.some((entry) => entry.path === candidate));
   const known = new Set((source ? source.items : results.groups.flatMap((item) => item.items)).map((item) => item.path));
   if (!known.has(candidate)) throw new AppError("That file is not in the current results");
-  const roots = section === "server" ? loadConfig().mediaRoots : [loadConfig().immichLibrary];
-  const real = await resolveInside(roots, candidate);
+  const config = loadConfig();
+  const settings = await loadSettings();
+  const roots =
+    section === "server"
+      ? config.mediaRoots
+      : await resolveImmichScanRoots({ baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey });
+  const real = section === "server" ? await resolveMediaFile(roots, candidate) : await resolveInside(roots, candidate);
   if (!known.has(real) && !known.has(candidate)) throw new AppError("That file is not in the current results");
   return real;
 }
@@ -170,6 +255,20 @@ function matchedIds(group: StoredGroup): string[] {
 
 function requireImmich(baseUrl: string, apiKey: string): void {
   if (!baseUrl || !apiKey) throw new AppError("Save the Immich URL and API key first");
+}
+
+async function commitServerTrash(results: StoredResults, victims: string[]): Promise<number> {
+  if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
+  const moved = await moveToTrash(victims);
+  await saveResults("server", dropItems(results, (item) => victims.includes(item.path)));
+  return moved;
+}
+
+async function commitImmichTrash(baseUrl: string, apiKey: string, results: StoredResults, victims: string[]): Promise<number> {
+  if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
+  await trashAssets(baseUrl, apiKey, victims);
+  await saveResults("immich", dropItems(results, (item) => item.assetId !== null && victims.includes(item.assetId)));
+  return victims.length;
 }
 
 function dropItems(results: StoredResults, remove: (item: StoredItem) => boolean): StoredResults {

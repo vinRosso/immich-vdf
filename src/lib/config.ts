@@ -1,11 +1,14 @@
-import { accessSync, constants, mkdirSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export type AppConfig = {
   dataDir: string;
   mediaRoots: string[];
+  /** Upload library mount inside vdf-web (Compose: `${IMMICH_PATH}` → `/immich`). */
   immichLibrary: string;
+  /** Scan roots for the Immich section (upload + external libraries). */
+  immichScanRoots: string[];
   port: number;
   host: string;
   password: string;
@@ -19,16 +22,24 @@ export function suggestFfmpegConcurrency(cores: number): number {
   return Math.min(4, Math.max(1, Math.floor(cores / 2)));
 }
 
+/** Hashing parallelism: leave headroom for thumbnails and the OS. */
+export function suggestScanParallelism(cores: number): number {
+  return Math.min(8, Math.max(1, Math.floor(cores / 4)));
+}
+
 export function loadConfig(): AppConfig {
   const cwd = process.cwd();
   const dataDir = process.env.DATA_DIR?.trim() || path.join(cwd, "data");
   const mediaRoots = splitList(process.env.MEDIA_ROOTS, path.join(cwd, "dev-media"));
-  const immichLibrary = process.env.IMMICH_LIBRARY?.trim() || path.join(cwd, "dev-immich");
+const immichLibrary =
+  process.env.IMMICH_LIBRARY?.trim() || process.env.IMMICH_PATH?.trim() || path.join(cwd, "dev-immich");
+  const immichScanRoots = splitList(process.env.IMMICH_SCAN_ROOTS, immichLibrary);
   const cpuCount = Math.max(1, os.cpus().length);
   return {
     dataDir,
     mediaRoots,
     immichLibrary,
+    immichScanRoots,
     port: Number(process.env.PORT || 47821),
     host: process.env.HOST || "0.0.0.0",
     password: process.env.APP_PASSWORD ?? "",
@@ -49,8 +60,10 @@ export function ensureRuntimeDirs(config: AppConfig): void {
     path.join(config.dataDir, "thumbs"),
     path.join(config.dataDir, "probe"),
     path.join(config.dataDir, "tmp"),
+    path.join(config.dataDir, "cli"),
     ...config.mediaRoots,
     config.immichLibrary,
+    ...config.immichScanRoots,
   ];
   for (const dir of dirs) {
     try {
@@ -61,25 +74,61 @@ export function ensureRuntimeDirs(config: AppConfig): void {
   }
 }
 
-export function cliAvailable(command: string): boolean {
-  if (command.includes("/") || command.includes("\\")) {
+function executableNames(command: string): string[] {
+  if (process.platform === "win32" && !command.toLowerCase().endsWith(".exe")) {
+    return [command, `${command}.exe`];
+  }
+  return [command];
+}
+
+function canExecute(filePath: string): boolean {
+  for (const name of executableNames(filePath)) {
     try {
-      accessSync(command, constants.X_OK);
+      accessSync(name, constants.X_OK);
       return true;
     } catch {
-      return false;
+      // try next candidate
     }
+  }
+  return false;
+}
+
+export function cliAvailable(command: string): boolean {
+  if (command.includes("/") || command.includes("\\")) {
+    return canExecute(command);
   }
   return (process.env.PATH || "")
     .split(path.delimiter)
     .some((dir) => {
-      try {
-        accessSync(path.join(dir, command), constants.X_OK);
-        return true;
-      } catch {
-        return false;
+      for (const name of executableNames(command)) {
+        try {
+          accessSync(path.join(dir, name), constants.X_OK);
+          return true;
+        } catch {
+          // try next candidate
+        }
       }
+      return false;
     });
+}
+
+export function resolveVdfCli(config: AppConfig = loadConfig()): string {
+  const override = installedCliOverride(config.dataDir);
+  return override ?? config.vdfCli;
+}
+
+function installedCliOverride(dataDir: string): string | null {
+  try {
+    const raw = readFileSync(path.join(dataDir, "cli", "active.json"), "utf8");
+    const parsed = JSON.parse(raw) as { path?: unknown };
+    if (typeof parsed.path !== "string" || !parsed.path.trim()) return null;
+    const resolved = path.resolve(parsed.path);
+    const root = path.resolve(dataDir, "cli");
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+    return cliAvailable(resolved) ? resolved : null;
+  } catch {
+    return null;
+  }
 }
 
 function splitList(value: string | undefined, fallback: string): string[] {

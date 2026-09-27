@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ignoreGroup, restoreIgnored } from "@/lib/actions";
+import { ignoredGroupsView, ignoreGroup, restoreIgnored } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 import { loadIgnored } from "@/lib/store";
@@ -10,12 +10,16 @@ function sectionOf(value: unknown): SectionId {
   throw new AppError("Unknown section");
 }
 
-export const GET = api(async () =>
-  NextResponse.json({
+export const GET = api(async (request) => {
+  const section = request.nextUrl.searchParams.get("section");
+  if (section === "server" || section === "immich") {
+    return NextResponse.json(await ignoredGroupsView(section));
+  }
+  return NextResponse.json({
     server: await loadIgnored("server"),
     immich: await loadIgnored("immich"),
-  }),
-);
+  });
+});
 
 export const POST = api(async (request) => {
   const body = (await request.json()) as { section?: string; groupId?: string };

@@ -1,22 +1,10 @@
 import path from "node:path";
 import { loadConfig, suggestFfmpegConcurrency } from "./config";
 import { exclusive, readJson, writeJson } from "./json-file";
+import { defaultScan } from "./scan-defaults";
 import type { IgnoredEntry, RunRecord, RunsFile, SectionId, Settings, StoredResults } from "./types";
 
-export function defaultScan() {
-  return {
-    includes: [] as string[],
-    excludes: [] as string[],
-    threshold: 5,
-    percent: 96,
-    parallelism: 1,
-    includeImages: false,
-    usePhash: false,
-    partialClip: false,
-    aiMatching: false,
-    aiPartial: false,
-  };
-}
+export { defaultScan } from "./scan-defaults";
 
 export function defaultSchedule() {
   return {
@@ -71,6 +59,64 @@ function ignorePath(section: SectionId): string {
 
 function runsPath(): string {
   return path.join(loadConfig().dataDir, "runs.json");
+}
+
+function trashStatsPath(): string {
+  return path.join(loadConfig().dataDir, "trash-stats.json");
+}
+
+export type TrashStats = {
+  bytesFreed: number;
+};
+
+export function loadTrashStats(): Promise<TrashStats> {
+  return readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0 });
+}
+
+function trashAddedPath(): string {
+  return path.join(loadConfig().dataDir, "trash-added.json");
+}
+
+export function trashAddedKey(mount: string, relative: string): string {
+  return `${mount}\n${relative}`;
+}
+
+export function loadTrashAdded(): Promise<Record<string, number>> {
+  return readJson<Record<string, number>>(trashAddedPath(), {});
+}
+
+export function rememberTrashAdded(mount: string, relative: string, atMs = Date.now()): Promise<void> {
+  return rememberTrashAddedMany([{ mount, relative, atMs }]);
+}
+
+export function rememberTrashAddedMany(items: { mount: string; relative: string; atMs: number }[]): Promise<void> {
+  if (items.length === 0) return Promise.resolve();
+  return exclusive(async () => {
+    const current = await readJson<Record<string, number>>(trashAddedPath(), {});
+    for (const item of items) current[trashAddedKey(item.mount, item.relative)] = item.atMs;
+    await writeJson(trashAddedPath(), current);
+  });
+}
+
+export function forgetTrashAdded(keys: string[]): Promise<void> {
+  return exclusive(async () => {
+    const current = await readJson<Record<string, number>>(trashAddedPath(), {});
+    for (const key of keys) delete current[key];
+    await writeJson(trashAddedPath(), current);
+  });
+}
+
+export function clearTrashAdded(): Promise<void> {
+  return exclusive(() => writeJson(trashAddedPath(), {}));
+}
+
+export function addTrashFreed(bytes: number): Promise<TrashStats> {
+  return exclusive(async () => {
+    const current = await readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0 });
+    const next = { bytesFreed: current.bytesFreed + Math.max(0, bytes) };
+    await writeJson(trashStatsPath(), next);
+    return next;
+  });
 }
 
 export function loadSettings(): Promise<Settings> {

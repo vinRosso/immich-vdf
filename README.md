@@ -22,7 +22,8 @@ Edit `.env`:
 
 - `APP_PASSWORD` is the single password for the UI. It is not baked into the image.
 - `MEDIA_PATH` is the host folder of videos you want to scan. The container mounts it read-write at `/media`. Trash is a rename into `/media/.vdf-trash/`, so it does not fill the data volume.
-- `IMMICH_LIBRARY_PATH` is the host path of the Immich library (often the upload directory, or an external library). The container mounts it **read-only** at `/immich`.
+- `IMMICH_PATH` must be the same host path as `UPLOAD_LOCATION` in the Immich `.env` (a common default is `/data/upload`). Immich mounts that folder at `/data`; this app mounts it read-only at `/immich` and maps `originalPath` `/data/...` to `/immich/...`. Originals are in `library/<storageLabel>/` inside that folder. The admin user's folder is `admin`, not their display name. The older `upload/<user id>/` tree is scanned only when `library/` has no folder for that user.
+- External libraries: add the same `host:container` volume lines as in Immich. After you connect with an API key, scan roots are read from Immich (`GET /api/libraries` → `importPaths`), plus `/immich` for uploads. Optional `IMMICH_SCAN_ROOTS` in `.env` is only a fallback if the key cannot list libraries.
 - `TRUSTED_PROXY_CIDR` is optional. Set it to the reverse proxy's address range if TLS ends at the proxy and you want the session cookie marked Secure when `X-Forwarded-Proto` is `https`. Leave it empty on a plain LAN. The header is ignored from any other address.
 
 Start it:
@@ -33,7 +34,7 @@ docker compose up -d --build
 
 Open `http://<host>:47821`. One Compose service publishes that port. Settings, results, thumbnails, and the two scan databases live in the `vdf-data` volume.
 
-In Immich, set a path map from the asset `originalPath` prefix (often `/usr/src/app/upload`, or your external library path) to `/immich`. An API key only sees one user's assets. Files that do not match an asset are shown and cannot be stacked or trashed.
+Mirror Immich’s volume layout in `docker-compose.yml`; only host paths live in `.env`. An API key only sees one user's assets. Matched items use Immich thumbnails; unmatched files cannot be stacked or trashed.
 
 Run this on the LAN or behind your reverse proxy, the same way upstream describes its own web UI. The app can read every mounted file and trash an Immich library. The container sets `no-new-privileges`. Secrets stay in `.env` and on the data volume, not in git.
 

@@ -3,6 +3,14 @@ export function baseName(filePath: string): string {
   return parts[parts.length - 1] || filePath;
 }
 
+/** Path on the media mount before the file was moved to .vdf-trash. */
+export function mountMediaPath(mount: string, relative: string): string {
+  const root = mount.replace(/[\\/]+$/, "");
+  const tail = relative.replace(/^[/\\]+/, "");
+  const sep = root.includes("\\") ? "\\" : "/";
+  return `${root}${sep}${tail}`;
+}
+
 export function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) return "—";
   if (size < 1024) return `${Math.round(size)} B`;
@@ -40,4 +48,18 @@ export function formatClock(iso: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+/** Under Scan: latest successful run, 24-hour clock. */
+export function formatLatestOkRun(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const stamp = date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `Latest: ${stamp}`;
 }

@@ -1,9 +1,12 @@
 import { loadConfig } from "./config";
+import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
 import { AppError } from "./errors";
+import { resolveImmichPathMap } from "./immich-path-map";
 import { resolveInside } from "./path-jail";
 import { isValidTimeZone } from "./schedule";
 import { assertHttpUrl } from "./urls";
-import type { PathMapEntry, ScanSettings, ScheduleSettings, SectionId, Settings, SettingsUpdate } from "./types";
+import { defaultScan } from "./scan-defaults";
+import type { ScanSettings, ScheduleSettings, SectionId, Settings, SettingsUpdate } from "./types";
 
 export async function applySettingsUpdate(current: Settings, update: SettingsUpdate): Promise<Settings> {
   const next: Settings = structuredClone(current);
@@ -19,10 +22,11 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
     if (update.immich.baseUrl !== undefined) next.immich.baseUrl = cleanBaseUrl(update.immich.baseUrl);
     if (update.immich.clearApiKey) next.immich.apiKey = "";
     else if (update.immich.apiKey) next.immich.apiKey = update.immich.apiKey.trim().slice(0, 2000);
-    if (update.immich.pathMap) next.immich.pathMap = cleanPathMap(update.immich.pathMap);
     next.immich.scan = mergeScan(next.immich.scan, update.immich.scan);
     next.immich.schedule = mergeSchedule(next.immich.schedule, update.immich.schedule);
-    await jailScan("immich", next.immich.scan);
+    const creds: ImmichCredentials = { baseUrl: next.immich.baseUrl, apiKey: next.immich.apiKey };
+    await jailScan("immich", next.immich.scan, creds);
+    next.immich.pathMap = await resolveImmichPathMap(creds);
   }
   if (update.clearWebhook) next.webhookUrl = "";
   else if (update.webhookUrl !== undefined) next.webhookUrl = cleanWebhook(update.webhookUrl);
@@ -30,7 +34,7 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
 }
 
 function mergeScan(current: ScanSettings, patch: Partial<ScanSettings> | undefined): ScanSettings {
-  const next = { ...current, ...patch };
+  const next = { ...defaultScan(), ...current, ...patch };
   next.threshold = integerIn(next.threshold, 0, 10, "Threshold");
   if (!Number.isFinite(next.percent) || next.percent < 0 || next.percent > 100) {
     throw new AppError("Percent must be between 0 and 100");
@@ -43,6 +47,9 @@ function mergeScan(current: ScanSettings, patch: Partial<ScanSettings> | undefin
   next.partialClip = Boolean(next.partialClip);
   next.aiMatching = Boolean(next.aiMatching);
   next.aiPartial = Boolean(next.aiPartial);
+  next.compareHorizontallyFlipped = Boolean(next.compareHorizontallyFlipped);
+  next.ignoreBlackPixels = Boolean(next.ignoreBlackPixels);
+  next.ignoreWhitePixels = Boolean(next.ignoreWhitePixels);
   return next;
 }
 
@@ -62,11 +69,13 @@ function mergeSchedule(current: ScheduleSettings, patch: Partial<ScheduleSetting
   return next;
 }
 
-async function jailScan(section: SectionId, scan: ScanSettings): Promise<void> {
+async function jailScan(section: SectionId, scan: ScanSettings, immichCreds?: ImmichCredentials): Promise<void> {
   const config = loadConfig();
-  const roots = section === "server" ? config.mediaRoots : [config.immichLibrary];
+  const immichRoots = section === "immich" ? await resolveImmichScanRoots(immichCreds) : [];
+  const roots = section === "server" ? config.mediaRoots : immichRoots;
+  const includeSources = section === "immich" && scan.includes.length === 0 ? immichRoots : scan.includes;
   const includes: string[] = [];
-  for (const folder of scan.includes) includes.push(await resolveInside(roots, folder));
+  for (const folder of includeSources) includes.push(await resolveInside(roots, folder));
   const excludes: string[] = [];
   for (const folder of scan.excludes) excludes.push(await resolveInside(roots, folder));
   scan.includes = includes;
@@ -105,12 +114,3 @@ function cleanWebhook(value: string): string {
   return trimmed;
 }
 
-function cleanPathMap(entries: PathMapEntry[]): PathMapEntry[] {
-  if (!Array.isArray(entries) || entries.length > 50) throw new AppError("Path map is too large");
-  return entries.map((entry) => {
-    const from = entry?.from?.trim() ?? "";
-    const to = entry?.to?.trim() ?? "";
-    if (!from || !to || from.length > 4096 || to.length > 4096) throw new AppError("Path map entries need both paths");
-    return { from, to };
-  });
-}

@@ -1,7 +1,7 @@
 import type { ScanSettings } from "./types";
 
 export function buildVdfArgs(
-  scan: ScanSettings & { dbDir: string; outputFile: string },
+  scan: ScanSettings & { dbDir: string; outputFile: string; settingsFile: string },
 ): string[] {
   const args = ["scan-and-compare"];
   for (const include of scan.includes) args.push("--include", include);
@@ -25,6 +25,7 @@ export function buildVdfArgs(
   if (scan.partialClip) args.push("--partial-clip-detection");
   if (scan.aiMatching) args.push("--ai-matching");
   if (scan.aiPartial) args.push("--ai-partial");
+  args.push("--settings", scan.settingsFile);
   return args;
 }
 
@@ -41,6 +42,7 @@ export const REQUIRED_CLI_HELP = [
   "--partial-clip-detection",
   "--ai-matching",
   "--ai-partial",
+  "--settings",
   "--format",
   "--output",
 ] as const;

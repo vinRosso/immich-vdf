@@ -77,9 +77,12 @@ export class ScanManager {
 
   push(text: string): void {
     this.pending += text;
-    const parts = this.pending.split(/\r?\n/);
+    const parts = this.pending.split(/\r\n|\n|\r/);
     this.pending = parts.pop() ?? "";
-    for (const line of parts) this.addLine(line);
+    for (const line of parts) {
+      const trimmed = line.trim();
+      if (trimmed) this.addLine(trimmed);
+    }
   }
 
   addLine(line: string): void {

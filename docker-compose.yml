@@ -14,9 +14,13 @@ services:
       VDF_CLI: /opt/vdf/vdf-cli
       NODE_ENV: production
     volumes:
-      - ${MEDIA_PATH:?Set MEDIA_PATH}:/media
-      - ${IMMICH_LIBRARY_PATH:?Set IMMICH_LIBRARY_PATH}:/immich:ro
       - vdf-data:/data
+      - ${MEDIA_PATH:?Set MEDIA_PATH}:/media
+      # Same host path as Immich UPLOAD_LOCATION (Immich mounts it at /data; a common value is /data/upload).
+      # Originals are library/<storageLabel>/ inside that folder. The admin folder is "admin", not the display name.
+      - ${IMMICH_PATH:?Set IMMICH_PATH}:/immich:ro
+      # External libraries: same host:container paths as in Immich (import paths come from GET /api/libraries)
+      # - /home/user/photos1:/home/user/photos1:ro
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

@@ -1,17 +1,33 @@
-import { cliAvailable, loadConfig, suggestFfmpegConcurrency } from "./config";
+import { compareRelease, latestStableVersion, readCliVersion } from "./cli-release";
+import { cliAvailable, loadConfig, resolveVdfCli, suggestFfmpegConcurrency, suggestScanParallelism } from "./config";
+import { resolveImmichScanRoots } from "./immich-mounts";
+import { resolveImmichPathMapSync } from "./immich-path-map";
 import { nextOccurrence } from "./schedule";
 import { loadRuns, loadSettings } from "./store";
 import type { PublicSettings, RunsResponse, RuntimeInfo } from "./types";
 
 export async function runtimeInfo(): Promise<RuntimeInfo> {
   const config = loadConfig();
+  const settings = await loadSettings();
+  const cliPath = resolveVdfCli(config);
+  const available = cliAvailable(cliPath);
+  const [cliVersion, latestVersion, immichScanRoots] = await Promise.all([
+    available ? readCliVersion(cliPath) : Promise.resolve(null),
+    latestStableVersion().catch(() => null),
+    resolveImmichScanRoots({ baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey }),
+  ]);
   return {
     cpuCount: config.cpuCount,
     suggestedFfmpegConcurrency: suggestFfmpegConcurrency(config.cpuCount),
+    suggestedParallelism: suggestScanParallelism(config.cpuCount),
     mediaRoots: config.mediaRoots,
     immichLibrary: config.immichLibrary,
-    cliAvailable: cliAvailable(config.vdfCli),
-    cliPath: config.vdfCli,
+    immichScanRoots,
+    cliAvailable: available,
+    cliPath,
+    cliVersion,
+    latestVersion,
+    updateAvailable: compareRelease(cliVersion, latestVersion) === "update",
     serverTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   };
 }
@@ -23,7 +39,7 @@ export async function publicSettings(): Promise<PublicSettings> {
     immich: {
       baseUrl: settings.immich.baseUrl,
       apiKeyConfigured: settings.immich.apiKey.length > 0,
-      pathMap: settings.immich.pathMap,
+      pathMap: resolveImmichPathMapSync(),
       scan: settings.immich.scan,
       schedule: settings.immich.schedule,
     },

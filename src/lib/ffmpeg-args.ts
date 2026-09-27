@@ -10,10 +10,46 @@ export function filmstripArgs(file: string, seconds: number, output: string): st
 }
 
 export function transcodeArgs(file: string, seconds: number, mode: "remux" | "transcode"): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-ss", Math.max(0, seconds).toFixed(3), "-i", file];
+  const args = ["-hide_banner", "-loglevel", "error"];
+  if (mode === "transcode") args.push("-fflags", "nobuffer", "-flags", "low_delay");
+  args.push("-ss", Math.max(0, seconds).toFixed(3), "-i", file);
   if (mode === "remux") args.push("-c", "copy");
-  else args.push("-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac");
-  args.push("-movflags", "frag_keyframe+empty_moov", "-f", "mp4", "pipe:1");
+  else {
+    args.push(
+      "-vf",
+      "scale='min(1920,iw)':-2",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-tune",
+      "zerolatency",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-g",
+      "60",
+      "-force_key_frames",
+      "expr:gte(t,n_forced*0.5)",
+    );
+  }
+  // Flush a fragment every 0.5s. frag_keyframe alone waits for the next keyframe, so a long GOP delays the first frame.
+  args.push(
+    "-muxdelay",
+    "0",
+    "-muxpreload",
+    "0",
+    "-flush_packets",
+    "1",
+    "-f",
+    "mp4",
+    "-movflags",
+    "frag_keyframe+empty_moov+default_base_moof",
+    "-frag_duration",
+    "500000",
+    "pipe:1",
+  );
   return args;
 }
 

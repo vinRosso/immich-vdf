@@ -30,6 +30,15 @@ export function playbackMode(probe: ProbeSummary): PlaybackMode {
   return "transcode";
 }
 
+/** Container and codec pairs the browser can play without a probe. */
+export function likelyDirectPlayback(filePath: string, format: string | null): boolean {
+  const ext = filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase();
+  const codec = format?.toLowerCase() ?? "";
+  if ((ext === "mp4" || ext === "m4v" || ext === "mov") && (codec === "h264" || codec === "avc" || codec === "av1")) return true;
+  if (ext === "webm" && (codec === "vp8" || codec === "vp9" || codec === "av1")) return true;
+  return false;
+}
+
 export function parseFfprobe(json: unknown): ProbeSummary {
   if (!json || typeof json !== "object") throw new Error("ffprobe returned an unexpected payload");
   const record = json as { format?: { format_name?: string; duration?: string }; streams?: unknown[] };

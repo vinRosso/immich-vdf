@@ -13,6 +13,8 @@ test("fixture matches the v4.1.1 CLI group shape", () => {
   assert.equal(groups[0].items[0].durationSeconds, 90);
   assert.equal(groups[0].items[0].resolution, "1920x1080");
   assert.equal(groups[0].items[0].bitrateKbps, 8000);
+  assert.equal(groups[0].items[0].audioBitrateKbps, 192);
+  assert.equal(groups[0].items[0].dateCreatedMs, Date.parse("2025-01-01T00:00:00Z"));
   assert.deepEqual(groups[0].items[0].flags, []);
   assert.equal(groups[0].items[1].durationSeconds, 90.5);
   const clip = groups[1].items[1];

@@ -8,6 +8,7 @@ import { AppError } from "../lib/errors";
 import { transcodeArgs } from "../lib/ffmpeg-args";
 import { enqueueFfmpeg } from "../lib/ffmpeg-pool";
 import { playbackMode } from "../lib/playback";
+import { claimPlayback } from "../lib/playback-sessions";
 import { ffmpegBin, probeFile } from "../lib/probe";
 import { parseByteRange } from "../lib/range";
 import { loadResults, loadSettings } from "../lib/store";
@@ -20,50 +21,98 @@ export async function streamMedia(
   section: SectionId,
   filePath: string,
   startSeconds: number | null,
+  requestedMode: string | null,
+  playId: string | null,
 ): Promise<void> {
   const real = await realResultPath(section, filePath);
+  const session = claimPlayback(playId);
+  const onDisconnect = () => {
+    if (!response.writableFinished) session.abort();
+  };
+  response.on("close", onDisconnect);
+  try {
+    await streamClaimedMedia(request, response, section, real, filePath, startSeconds, requestedMode, session.signal);
+  } finally {
+    response.off("close", onDisconnect);
+    session.release();
+  }
+}
+
+async function streamClaimedMedia(
+  request: IncomingMessage,
+  response: ServerResponse,
+  section: SectionId,
+  real: string,
+  filePath: string,
+  startSeconds: number | null,
+  requestedMode: string | null,
+  signal: AbortSignal,
+): Promise<void> {
   const results = await loadResults(section);
   const item = results?.groups.flatMap((group) => group.items).find((entry) => entry.path === real || entry.path === filePath);
   const info = await stat(real);
+  if (signal.aborted || response.destroyed || response.writableEnded) return;
   if (item?.isImage || isImageExt(real)) {
     sendFile(request, response, real, info.size, contentType(real));
     return;
   }
-  let mode: "direct" | "remux" | "transcode" = "transcode";
-  try {
-    mode = playbackMode(await probeFile(real));
-  } catch {
-    mode = "transcode";
+  let mode: "direct" | "remux" | "transcode" =
+    requestedMode === "direct" || requestedMode === "remux" || requestedMode === "transcode" ? requestedMode : "transcode";
+  if (requestedMode !== "direct" && requestedMode !== "remux" && requestedMode !== "transcode") {
+    try {
+      mode = playbackMode(await probeFile(real));
+    } catch {
+      mode = "transcode";
+    }
   }
+  if (signal.aborted || response.destroyed || response.writableEnded) return;
   if (mode === "direct") {
     sendFile(request, response, real, info.size, contentType(real));
     return;
   }
   const settings = await loadSettings();
   const offset = startSeconds && Number.isFinite(startSeconds) ? Math.max(0, Math.min(startSeconds, 24 * 60 * 60)) : 0;
+  if (signal.aborted || response.destroyed || response.writableEnded) return;
   response.writeHead(200, {
     "Content-Type": "video/mp4",
     "Cache-Control": "private, no-store",
     "X-Playback-Mode": mode,
     "X-Content-Type-Options": "nosniff",
   });
-  await enqueueFfmpeg(settings.server.ffmpegConcurrency, () =>
-    pipeFfmpeg(request, response, transcodeArgs(real, offset, mode)),
-  );
+  await enqueueFfmpeg(settings.server.ffmpegConcurrency, () => pipeFfmpeg(response, transcodeArgs(real, offset, mode), signal), {
+    priority: "playback",
+    signal,
+  });
 }
 
-function pipeFfmpeg(request: IncomingMessage, response: ServerResponse, args: string[]): Promise<void> {
+function pipeFfmpeg(response: ServerResponse, args: string[], signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    if (signal.aborted || response.destroyed || response.writableEnded) {
+      resolve();
+      return;
+    }
     const child: ChildProcess = spawn(ffmpegBin(), args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
     child.stderr?.resume();
-    child.stdout?.pipe(response);
-    const stop = () => {
-      child.kill("SIGKILL");
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", stop);
+      resolve();
     };
-    request.on("close", stop);
-    response.on("close", stop);
-    child.on("close", () => resolve());
-    child.on("error", () => resolve());
+    const stop = () => {
+      child.stdout?.unpipe(response);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+      setTimeout(finish, 1000);
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    child.stdout?.on("error", () => stop());
+    child.stdout?.pipe(response);
+    child.on("close", finish);
+    child.on("error", finish);
   });
 }
 

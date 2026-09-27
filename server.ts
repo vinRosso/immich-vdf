@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { parse } from "node:url";
+import { loadEnvConfig } from "@next/env";
 import next from "next";
 import { ensureRuntimeDirs, loadConfig } from "./src/lib/config";
 import { errorText } from "./src/lib/errors";
@@ -8,6 +9,8 @@ import { startScheduler } from "./src/lib/scheduler";
 import { cookieIsValid } from "./src/lib/session";
 import { loadSettings, secretValues } from "./src/lib/store";
 import { handleRaw } from "./src/server/raw";
+
+loadEnvConfig(process.cwd());
 
 const config = loadConfig();
 if (!config.password) {
@@ -41,8 +44,8 @@ const httpServer = createServer(async (request, response) => {
       response.end();
       return;
     }
-    if (authed && (url.pathname === "/login" || url.pathname === "/")) {
-      response.writeHead(302, { Location: "/server" });
+    if (authed && url.pathname === "/login") {
+      response.writeHead(302, { Location: "/" });
       response.end();
       return;
     }

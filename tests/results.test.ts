@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestFfmpegConcurrency } from "../src/lib/config";
+import { suggestFfmpegConcurrency, suggestScanParallelism } from "../src/lib/config";
 import { attachAssets, cliPathToOriginal, matchAsset } from "../src/lib/immich-join";
-import { playbackMode, type ProbeSummary } from "../src/lib/playback";
+import { likelyDirectPlayback, playbackMode, type ProbeSummary } from "../src/lib/playback";
 import { pickPrimaryIndex } from "../src/lib/primary";
 import { dueSlot, nextOccurrence } from "../src/lib/schedule";
 import type { ScheduleSettings, StoredGroup } from "../src/lib/types";
@@ -14,11 +14,59 @@ test("ffmpeg concurrency suggestion is half the cores, clamped to 1..4", () => {
   assert.equal(suggestFfmpegConcurrency(16), 4);
 });
 
-test("primary prefers bitrate, then pixels, then size", () => {
+test("scan parallelism suggestion is a quarter of the cores, clamped to 1..8", () => {
+  assert.equal(suggestScanParallelism(1), 1);
+  assert.equal(suggestScanParallelism(4), 1);
+  assert.equal(suggestScanParallelism(8), 2);
+  assert.equal(suggestScanParallelism(20), 5);
+  assert.equal(suggestScanParallelism(40), 8);
+});
+
+test("primary prefers resolution, then video bitrate, then smaller size", () => {
   const index = pickPrimaryIndex([
-    { bitrateKbps: 1000, width: 1920, height: 1080, sizeBytes: 10 },
-    { bitrateKbps: 8000, width: 1280, height: 720, sizeBytes: 1 },
-    { bitrateKbps: 8000, width: 1920, height: 1080, sizeBytes: 2 },
+    { bitrateKbps: 8000, width: 1920, height: 1080, sizeBytes: 10, isImage: false },
+    { bitrateKbps: 8000, width: 1280, height: 720, sizeBytes: 1, isImage: false },
+    { bitrateKbps: 1000, width: 1920, height: 1080, sizeBytes: 2, isImage: false },
+  ]);
+  assert.equal(index, 0);
+});
+
+test("primary uses bit depth instead of bitrate for images", () => {
+  const index = pickPrimaryIndex([
+    { bitrateKbps: 0, bitDepth: 8, width: 1920, height: 1080, sizeBytes: 10, isImage: true },
+    { bitrateKbps: 9999, bitDepth: 16, width: 1920, height: 1080, sizeBytes: 20, isImage: true },
+  ]);
+  assert.equal(index, 1);
+});
+
+test("primary tie-breaks on audio bitrate then oldest date", () => {
+  const older = Date.parse("2020-01-01T00:00:00Z");
+  const newer = Date.parse("2024-01-01T00:00:00Z");
+  const index = pickPrimaryIndex([
+    {
+      bitrateKbps: 5000,
+      width: 1920,
+      height: 1080,
+      sizeBytes: 100,
+      audioBitrateKbps: 128,
+      dateCreatedMs: newer,
+    },
+    {
+      bitrateKbps: 5000,
+      width: 1920,
+      height: 1080,
+      sizeBytes: 100,
+      audioBitrateKbps: 320,
+      dateCreatedMs: newer,
+    },
+    {
+      bitrateKbps: 5000,
+      width: 1920,
+      height: 1080,
+      sizeBytes: 100,
+      audioBitrateKbps: 320,
+      dateCreatedMs: older,
+    },
   ]);
   assert.equal(index, 2);
 });
@@ -51,6 +99,9 @@ test("Immich originalPath joins through the longest mount prefix", () => {
           width: 1,
           height: 1,
           bitrateKbps: 1,
+          bitDepth: 0,
+          audioBitrateKbps: 0,
+          dateCreatedMs: 0,
           flags: [],
           partialClipOffsetSeconds: 0,
           isImage: false,
@@ -72,6 +123,9 @@ test("playback mode sends browser-safe mp4 and transcodes hevc", () => {
   assert.equal(playbackMode({ ...base, formatNames: ["matroska", "webm"], videoCodec: "vp9", audioCodec: "opus" }), "direct");
   assert.equal(playbackMode({ ...base, formatNames: ["matroska"], videoCodec: "h264", audioCodec: "aac" }), "remux");
   assert.equal(playbackMode({ ...base, videoCodec: "hevc" }), "transcode");
+  assert.equal(likelyDirectPlayback("/media/clip.mp4", "h264"), true);
+  assert.equal(likelyDirectPlayback("/media/clip.mkv", "h264"), false);
+  assert.equal(likelyDirectPlayback("/media/clip.mp4", "hevc"), false);
 });
 
 test("daily schedule is due only inside the window and not twice", () => {

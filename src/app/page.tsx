@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { HomeScreen } from "@/components/home-screen";
 
 export default function Home() {
-  redirect("/server");
+  return <HomeScreen />;
 }

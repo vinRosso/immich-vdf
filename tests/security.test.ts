@@ -6,7 +6,7 @@ import test from "node:test";
 import { ipInCidr } from "../src/lib/cidr";
 import { buildVdfArgs } from "../src/lib/cli-args";
 import { filmstripArgs, posterArgs, transcodeArgs } from "../src/lib/ffmpeg-args";
-import { ignoreKey, memberIds } from "../src/lib/ignore";
+import { ignoreKey, memberIds, pruneIgnoredEntries } from "../src/lib/ignore";
 import { isInside, resolveInside } from "../src/lib/path-jail";
 import { parseByteRange } from "../src/lib/range";
 import { redact } from "../src/lib/redact";
@@ -76,6 +76,9 @@ test("ignore keys change when a member is added", () => {
     width: 0,
     height: 0,
     bitrateKbps: 1,
+    bitDepth: 0,
+    audioBitrateKbps: 0,
+    dateCreatedMs: 0,
     flags: [],
     partialClipOffsetSeconds: 0,
     isImage: false,
@@ -90,6 +93,24 @@ test("ignore keys change when a member is added", () => {
   assert.equal(ignoreKey(["b", "a"]), ignoreKey(["a", "b"]));
 });
 
+test("stale ignore entries drop when scan membership no longer matches", () => {
+  const paths = ["/a.mkv", "/b.mkv"];
+  const key = ignoreKey(paths);
+  const entries = [{ key, ignoredAt: "2020-01-01T00:00:00.000Z", groupId: "g1", labels: ["a", "b"] }];
+  const stillThere = pruneIgnoredEntries(
+    "server",
+    entries,
+    [{ groupId: "g2", items: paths.map((file) => ({ path: file } as StoredItem)) }],
+  );
+  assert.equal(stillThere.length, 1);
+  const restored = pruneIgnoredEntries(
+    "server",
+    entries,
+    [{ groupId: "g3", items: [({ path: "/a.mkv" } as StoredItem), ({ path: "/b.mkv" } as StoredItem), ({ path: "/c.mkv" } as StoredItem)] }],
+  );
+  assert.equal(restored.length, 0);
+});
+
 test("CLI and ffmpeg arguments keep the path out of the shell and the filter", () => {
   const args = buildVdfArgs({
     includes: ["/media/a"],
@@ -102,8 +123,12 @@ test("CLI and ffmpeg arguments keep the path out of the shell and the filter", (
     partialClip: true,
     aiMatching: false,
     aiPartial: false,
+    compareHorizontallyFlipped: false,
+    ignoreBlackPixels: false,
+    ignoreWhitePixels: false,
     dbDir: "/data/db/server",
     outputFile: "/data/tmp/out.json",
+    settingsFile: "/data/tmp/settings.json",
   });
   assert.equal(args[0], "scan-and-compare");
   assert.equal(args[args.indexOf("--include") + 1], "/media/a");
@@ -116,5 +141,10 @@ test("CLI and ffmpeg arguments keep the path out of the shell and the filter", (
   const transcode = transcodeArgs("/media/file.mkv", 12, "transcode");
   assert.equal(transcode.includes("pipe:1"), true);
   assert.equal(transcode[transcode.indexOf("-i") + 1], "/media/file.mkv");
+  assert.equal(transcode[transcode.indexOf("-frag_duration") + 1], "500000");
+  assert.equal(transcode.includes("expr:gte(t,n_forced*0.5)"), true);
+  const remux = transcodeArgs("/media/file.mkv", 0, "remux");
+  assert.equal(remux.includes("expr:gte(t,n_forced*0.5)"), false);
+  assert.equal(remux[remux.indexOf("-frag_duration") + 1], "500000");
   assert.equal(filmstripArgs("/tmp/x", 0, "/tmp/y").includes("-ss"), false);
 });

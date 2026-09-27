@@ -21,6 +21,7 @@ import {
 } from "../lib/session";
 import { loadResults, loadSettings, secretValues } from "../lib/store";
 import { HttpUrlError } from "../lib/urls";
+import { trashThumbFile } from "../lib/trash";
 import { sectionParam, streamMedia, thumbnailFile } from "./media";
 
 export async function handleRaw(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
@@ -52,17 +53,30 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       const section = sectionParam(url.searchParams.get("section"));
       const filePath = requiredQuery(url, "path");
       const start = url.searchParams.get("t");
-      await streamMedia(request, response, section, filePath, start === null ? null : Number(start));
+      await streamMedia(
+        request,
+        response,
+        section,
+        filePath,
+        start === null ? null : Number(start),
+        url.searchParams.get("mode"),
+        url.searchParams.get("play"),
+      );
       return true;
     }
     if (request.method === "GET" && pathname === "/api/thumbs") {
-      const file = await thumbnailFile(
-        sectionParam(url.searchParams.get("section")),
-        requiredQuery(url, "path"),
-        url.searchParams.get("kind") || "poster",
-        Number(url.searchParams.get("index") || 0),
-      );
-      await sendStatic(request, response, file);
+      if (url.searchParams.get("trash") === "1") {
+        const thumb = await trashThumbFile(requiredQuery(url, "mount"), requiredQuery(url, "relative"));
+        await sendStatic(request, response, thumb.file, thumb.contentType);
+      } else {
+        const file = await thumbnailFile(
+          sectionParam(url.searchParams.get("section")),
+          requiredQuery(url, "path"),
+          url.searchParams.get("kind") || "poster",
+          Number(url.searchParams.get("index") || 0),
+        );
+        await sendStatic(request, response, file);
+      }
       return true;
     }
     if (request.method === "GET" && pathname === "/api/immich-thumb") {
@@ -177,10 +191,15 @@ async function proxyImmichThumb(request: IncomingMessage, response: ServerRespon
   }
 }
 
-async function sendStatic(request: IncomingMessage, response: ServerResponse, file: string): Promise<void> {
+async function sendStatic(
+  request: IncomingMessage,
+  response: ServerResponse,
+  file: string,
+  contentType = "image/jpeg",
+): Promise<void> {
   const info = await stat(file);
   response.writeHead(200, {
-    "Content-Type": "image/jpeg",
+    "Content-Type": contentType,
     "Content-Length": info.size,
     "Cache-Control": "private, max-age=86400",
     "X-Content-Type-Options": "nosniff",

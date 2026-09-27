@@ -41,6 +41,12 @@ Project git remote (Cursor Origin):
 
 Authenticate with `origin auth login` before `git clone` / `git pull`.
 
+## Later: cached remux for playback
+
+Keep live streaming for now. The measured stall is fragmented MP4 over a live ffmpeg pipe (`frag_keyframe`): the browser waits for a full GOP before the first frame, every open and every filmstrip seek restarts ffmpeg, and there is no `Content-Length` so seeking stays custom.
+
+When we revisit speed, pre-remux browser-safe codecs in a non-MP4 container (for example H.264+AAC MKV) once at scan finish: `ffmpeg -i in.mkv -c copy -movflags +faststart` into `dataDir/media/<cacheKey>.mp4`, then serve that file with byte ranges like direct playback. Cost is disk about the size of the source, once per file. True transcodes (HEVC and similar) stay on demand, or get the same cache at a capped resolution if we want that too.
+
 ## Agent conventions
 
 - Do not modify files under `upstream/`.
