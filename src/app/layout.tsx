@@ -8,7 +8,7 @@ const display = Fraunces({ subsets: ["latin"], variable: "--font-display" });
 
 export const metadata: Metadata = {
   title: "VDF",
-  description: "Find duplicate videos in a server folder or an Immich library.",
+  description: "Find duplicate videos in local files or an Immich library.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

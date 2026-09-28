@@ -1,6 +1,6 @@
 # VDF web
 
-A small web app for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). It scans a server folder or a mounted Immich library, shows the duplicate groups, and lets you compare them. Server deletes move files into `.vdf-trash/` on that same mount. Immich stack and trash go through the Immich API, so the library mount stays read-only.
+A small web app for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). It scans local files or a mounted Immich library, shows the duplicate groups, and lets you compare them. Files deletes move items into `.vdf-trash/` on that same mount. Immich stack and trash go through the Immich API, so the library mount stays read-only.
 
 Video Duplicate Finder stays an unmodified git submodule at `upstream/`, pinned to the release tag **v4.1.1** (commit `21ec967`). It is not pinned to `master` or to the moving `4.1.x` tag. The app runs `vdf-cli scan-and-compare --format json --output <file>` and does not patch upstream. Upstream is AGPLv3.
 
@@ -22,7 +22,7 @@ Edit `.env`:
 
 - `APP_PASSWORD` is the single password for the UI. It is not baked into the image.
 - `MEDIA_PATH` is the host folder of videos you want to scan. The container mounts it read-write at `/media`. Trash is a rename into `/media/.vdf-trash/`, so it does not fill the data volume.
-- `IMMICH_PATH` must be the same host path as `UPLOAD_LOCATION` in the Immich `.env` (a common default is `/data/upload`). Immich mounts that folder at `/data`; this app mounts it read-only at `/immich` and maps `originalPath` `/data/...` to `/immich/...`. Originals are in `library/<storageLabel>/` inside that folder. The admin user's folder is `admin`, not their display name. The older `upload/<user id>/` tree is scanned only when `library/` has no folder for that user.
+- `IMMICH_PATH` must be the same host path as `UPLOAD_LOCATION` in the Immich `.env`. Immich mounts that folder at `/data`; this app maps `originalPath` `/data/...` onto it. Originals are in `library/<storageLabel>/`. The admin user's folder is `admin`, not their display name. If Immich bind-mounts that folder from somewhere else (`/storage/kevin/2_memories:/data/library/admin`), set `IMMICH_BINDS=/data/library/admin=/host/path` so the scan reads the real folder.
 - External libraries: add the same `host:container` volume lines as in Immich. After you connect with an API key, scan roots are read from Immich (`GET /api/libraries` → `importPaths`), plus `/immich` for uploads. Optional `IMMICH_SCAN_ROOTS` in `.env` is only a fallback if the key cannot list libraries.
 - `TRUSTED_PROXY_CIDR` is optional. Set it to the reverse proxy's address range if TLS ends at the proxy and you want the session cookie marked Secure when `X-Forwarded-Proto` is `https`. Leave it empty on a plain LAN. The header is ignored from any other address.
 

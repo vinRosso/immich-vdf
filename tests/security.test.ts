@@ -139,6 +139,9 @@ test("CLI and ffmpeg arguments keep the path out of the shell and the filter", (
   assert.equal(poster[poster.indexOf("-vf") + 1], "scale=480:-2");
   assert.equal(poster.at(-1), "/data/thumbs/poster.jpg");
   const transcode = transcodeArgs("/media/file.mkv", 12, "transcode");
+  assert.equal(transcode[transcode.indexOf("-vf") + 1], "scale=1280:720:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2");
+  const preview = transcodeArgs("/media/file.mkv", 0, "transcode", undefined, 240);
+  assert.equal(preview[preview.indexOf("-vf") + 1], "scale=426:240:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2");
   assert.equal(transcode.includes("pipe:1"), true);
   assert.equal(transcode[transcode.indexOf("-i") + 1], "/media/file.mkv");
   assert.equal(transcode[transcode.indexOf("-frag_duration") + 1], "500000");

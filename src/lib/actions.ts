@@ -2,10 +2,19 @@ import { baseName } from "./format";
 import { AppError } from "./errors";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { assetsForOriginalPaths } from "./immich-asset-index";
+import { endRejoin, reportRejoin, tryBeginRejoin } from "./immich-rejoin-progress";
 import { attachAssets, originalPathsForGroups } from "./immich-join";
 import { resolveImmichScanRoots } from "./immich-mounts";
 import { resolveImmichPathMap } from "./immich-path-map";
-import { fetchImmichUser, pingImmich, stackAssets, trashAssets, type ImmichUser } from "./immich";
+import {
+  addAssetsToAlbum,
+  fetchImmichUser,
+  pingImmich,
+  removeAssetsFromAlbum,
+  stackAssets,
+  trashAssets,
+  type ImmichUser,
+} from "./immich";
 import { pickPrimaryIndex } from "./primary";
 import { resolveInside } from "./path-jail";
 import { loadConfig } from "./config";
@@ -20,6 +29,7 @@ import type {
   StoredGroup,
   StoredItem,
   StoredResults,
+  UnmatchedFile,
 } from "./types";
 
 export async function resultsView(section: SectionId): Promise<ResultsResponse> {
@@ -141,6 +151,10 @@ export async function stackImmichGroup(groupId: string, primaryId: string): Prom
   const ordered = [primaryId, ...ids.filter((id) => id !== primaryId)];
   if (ordered.length < 2) throw new AppError("Stacking needs at least two matched assets");
   await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, ordered);
+  await saveResults("immich", {
+    ...results,
+    groups: results.groups.filter((item) => item.groupId !== groupId),
+  });
 }
 
 export async function trashImmichGroup(groupId: string, keepId: string): Promise<number> {
@@ -151,6 +165,14 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
   const ids = matchedIds(group);
   if (!ids.includes(keepId)) throw new AppError("The kept file is not a matched Immich asset");
   return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, ids.filter((id) => id !== keepId));
+}
+
+export async function mutateImmichAlbumAsset(albumId: string, assetId: string, action: "add" | "remove"): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
+  if (action === "add") await addAssetsToAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
+  else await removeAssetsFromAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
 }
 
 export async function trashImmichItems(groupId: string, victimIds: string[]): Promise<number> {
@@ -166,21 +188,111 @@ export async function trashImmichItems(groupId: string, victimIds: string[]): Pr
   return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, unique);
 }
 
-export async function rejoinImmich(): Promise<number> {
+export async function unmatchedImmichReport(): Promise<{
+  finishedAt: string | null;
+  pathMap: { from: string; to: string }[];
+  items: UnmatchedFile[];
+}> {
   const settings = await loadSettings();
-  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
-  const results = await requireResults("immich");
-  const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
-  const maps = await resolveImmichPathMap(creds);
-  const assets = await assetsForOriginalPaths(
-    settings.immich.baseUrl,
-    settings.immich.apiKey,
-    originalPathsForGroups(results.groups, maps),
-    settings.immich.scan.includeImages,
-  );
-  const groups = attachAssets(results.groups, assets, maps);
-  await saveResults("immich", { ...results, warning: null, groups });
-  return groups.reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
+  const view = await resultsView("immich");
+  let pathMap = settings.immich.pathMap;
+  try {
+    const creds =
+      settings.immich.baseUrl && settings.immich.apiKey
+        ? { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey }
+        : undefined;
+    pathMap = await resolveImmichPathMap(creds);
+  } catch {
+    // Keep the map saved with settings when Immich cannot be reached.
+  }
+  const items: UnmatchedFile[] = [];
+  for (const group of view.groups) {
+    for (const item of group.items) {
+      if (item.matched) continue;
+      items.push({
+        name: item.name,
+        path: item.path,
+        originalPath: item.originalPath,
+        reason: item.originalPath ? "no-asset" : "no-map",
+        groupId: group.groupId,
+        isImage: item.isImage,
+      });
+    }
+  }
+  items.sort((a, b) => a.path.localeCompare(b.path));
+  return { finishedAt: view.finishedAt, pathMap, items };
+}
+
+export async function rejoinImmich(): Promise<number> {
+  if (!tryBeginRejoin()) throw new AppError("Matching is already running", 409);
+  try {
+    const settings = await loadSettings();
+    requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+    const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
+    reportRejoin({ percent: 2, label: "Loading results", detail: "Reading saved Immich scan from disk…" });
+    const results = await requireResults("immich");
+    const itemCount = results.groups.reduce((sum, group) => sum + group.items.length, 0);
+    reportRejoin({
+      percent: 6,
+      label: "Loading results",
+      detail: `Loaded ${results.groups.length} groups (${itemCount.toLocaleString()} files)`,
+    });
+    let maps = settings.immich.pathMap;
+    if (maps.length === 0) {
+      reportRejoin({ percent: 8, label: "Path map", detail: "Asking Immich for library paths (can be slow on network mounts)…" });
+      maps = await resolveImmichPathMap(creds);
+    } else {
+      reportRejoin({ percent: 9, label: "Path map", detail: "Using path map from settings" });
+    }
+    const paths = originalPathsForGroups(results.groups, maps);
+    reportRejoin({
+      percent: 11,
+      label: "Asset index",
+      detail: "Opening local Immich path cache…",
+    });
+    const assets = await assetsForOriginalPaths(
+      settings.immich.baseUrl,
+      settings.immich.apiKey,
+      paths,
+      settings.immich.scan.includeImages,
+      {
+        onIndex: ({ pathCount, missing, searchNames }) => {
+          reportRejoin({
+            percent: 12,
+            label: "Matching Immich library",
+            detail:
+              missing === 0
+                ? `All ${pathCount.toLocaleString()} paths already in the local cache`
+                : `${missing.toLocaleString()} paths to resolve (${searchNames.toLocaleString()} Immich name lookups)`,
+            indeterminate: missing > 0 && searchNames === 0,
+          });
+        },
+        onSearch: (done, total, fileName) => {
+          const slice = total > 0 ? done / total : 1;
+          reportRejoin({
+            percent: Math.round(12 + slice * 78),
+            label: "Matching Immich library",
+            detail: total > 0 ? `Searching by file name (${done}/${total}): ${fileName}` : `Searching: ${fileName}`,
+          });
+        },
+        onLibraryFallback: () => {
+          reportRejoin({
+            percent: 45,
+            label: "Matching Immich library",
+            detail: "Name search unavailable — reading the full library…",
+            indeterminate: true,
+          });
+        },
+      },
+    );
+    reportRejoin({ percent: 92, label: "Saving", detail: "Updating linked assets in scan results…", indeterminate: false });
+    const groups = attachAssets(results.groups, assets, maps);
+    await saveResults("immich", { ...results, warning: null, groups });
+    reportRejoin({ percent: 100, label: "Done", detail: "Match finished" });
+    return groups.reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
+  } finally {
+    endRejoin();
+  }
 }
 
 export type ImmichConnectionInfo = { baseUrl: string; user: ImmichUser };

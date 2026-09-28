@@ -1,12 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { HomeGroupListSkeleton } from "@/components/skeletons";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatClock } from "@/lib/format";
+import { sectionLabel } from "@/lib/section-label";
 import type { ResultsResponse, SectionId } from "@/lib/types";
 
 const LATEST = 6;
@@ -40,11 +41,11 @@ export function HomeScreen() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <h1 className="font-heading text-4xl">Home</h1>
         <div className="flex gap-2">
-          <Button asChild>
-            <Link href="/server">Server</Link>
-          </Button>
           <Button asChild variant="secondary">
-            <Link href="/immich">Immich</Link>
+            <a href="/immich">{sectionLabel("immich")}</a>
+          </Button>
+          <Button asChild>
+            <a href="/server">{sectionLabel("server")}</a>
           </Button>
         </div>
       </div>
@@ -58,12 +59,12 @@ export function HomeScreen() {
 }
 
 function LatestGroups({ section, results }: { section: SectionId; results: ResultsResponse | null }) {
-  const title = section === "server" ? "Server" : "Immich";
+  const title = sectionLabel(section);
   const groups = results?.groups.slice(0, LATEST) ?? [];
   return (
     <section className="space-y-3">
       <h2 className="font-heading text-2xl">{title}</h2>
-      {!results ? <p className="text-sm text-muted-foreground">Loading groups…</p> : null}
+      {!results ? <HomeGroupListSkeleton /> : null}
       {results && !results.scanned ? <p className="text-sm text-muted-foreground">No scan yet.</p> : null}
       {results?.scanned && groups.length === 0 ? <p className="text-sm text-muted-foreground">No groups in the latest scan.</p> : null}
       {groups.map((group) => (

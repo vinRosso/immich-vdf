@@ -1,17 +1,22 @@
 import { spawnSync } from "node:child_process";
-import { REQUIRED_CLI_HELP } from "../src/lib/cli-args";
+import { REQUIRED_CLI_COMPARE_HELP, REQUIRED_CLI_SCAN_HELP } from "../src/lib/cli-args";
 
 const cli = process.env.VDF_CLI || "vdf-cli";
 const command = spawnSync(cli, ["--help"], { encoding: "utf8" });
-const sub = spawnSync(cli, ["scan-and-compare", "--help"], { encoding: "utf8" });
-const text = `${command.stdout ?? ""}\n${command.stderr ?? ""}\n${sub.stdout ?? ""}\n${sub.stderr ?? ""}`;
-if (command.error || sub.error) {
-  console.error(command.error?.message || sub.error?.message || `could not run ${cli}`);
+const scan = spawnSync(cli, ["scan", "--help"], { encoding: "utf8" });
+const compare = spawnSync(cli, ["compare", "--help"], { encoding: "utf8" });
+const rootText = `${command.stdout ?? ""}\n${command.stderr ?? ""}`;
+const scanText = `${scan.stdout ?? ""}\n${scan.stderr ?? ""}\n${rootText}`;
+const compareText = `${compare.stdout ?? ""}\n${compare.stderr ?? ""}\n${rootText}`;
+if (command.error || scan.error || compare.error) {
+  console.error(command.error?.message || scan.error?.message || compare.error?.message || `could not run ${cli}`);
   process.exit(1);
 }
-const missing = REQUIRED_CLI_HELP.filter((flag) => !text.includes(flag));
-if (missing.length > 0 || command.status !== 0) {
-  console.error(`vdf-cli help is missing: ${missing.join(", ") || `exit ${command.status}`}`);
+const missingScan = REQUIRED_CLI_SCAN_HELP.filter((flag) => !scanText.includes(flag));
+const missingCompare = REQUIRED_CLI_COMPARE_HELP.filter((flag) => !compareText.includes(flag));
+const missing = [...missingScan, ...missingCompare];
+if (missing.length > 0 || command.status !== 0 || scan.status !== 0 || compare.status !== 0) {
+  console.error(`vdf-cli help is missing: ${missing.join(", ") || `exit codes ${command.status}/${scan.status}/${compare.status}`}`);
   process.exit(1);
 }
-console.log(`${cli} help includes the flags this app passes`);
+console.log(`${cli} scan/compare help includes the flags this app passes`);

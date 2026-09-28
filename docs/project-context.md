@@ -6,7 +6,7 @@ This file mirrors the Cursor **Project** context so a local checkout on Windows 
 
 Web UI for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder) with two modes:
 
-1. **Server** — scan media on the host, compare duplicates, stream previews, move losers to `.vdf-trash/`.
+1. **Files** — scan media on the host, compare duplicates, stream previews, move losers to `.vdf-trash/`.
 2. **Immich** — scan a read-only library mount, map paths to assets via API key, stack or trash duplicates through Immich.
 
 Deploy with Docker on a home server. Pull upstream VDF via the `upstream/` submodule and `scripts/update-upstream.sh` (no patches inside `upstream/`).

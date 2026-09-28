@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { realResultPath } from "../lib/actions";
 import { AppError } from "../lib/errors";
-import { transcodeArgs } from "../lib/ffmpeg-args";
+import { TRANSCODE_FULL_HEIGHT, TRANSCODE_START_HEIGHT, transcodeArgs } from "../lib/ffmpeg-args";
 import { enqueueFfmpeg } from "../lib/ffmpeg-pool";
 import { playbackMode } from "../lib/playback";
 import { claimPlayback } from "../lib/playback-sessions";
@@ -23,6 +23,7 @@ export async function streamMedia(
   startSeconds: number | null,
   requestedMode: string | null,
   playId: string | null,
+  maxHeight: number | null = null,
 ): Promise<void> {
   const real = await realResultPath(section, filePath);
   const session = claimPlayback(playId);
@@ -31,7 +32,7 @@ export async function streamMedia(
   };
   response.on("close", onDisconnect);
   try {
-    await streamClaimedMedia(request, response, section, real, filePath, startSeconds, requestedMode, session.signal);
+    await streamClaimedMedia(request, response, section, real, filePath, startSeconds, requestedMode, session.signal, maxHeight);
   } finally {
     response.off("close", onDisconnect);
     session.release();
@@ -47,6 +48,7 @@ async function streamClaimedMedia(
   startSeconds: number | null,
   requestedMode: string | null,
   signal: AbortSignal,
+  maxHeight: number | null,
 ): Promise<void> {
   const results = await loadResults(section);
   const item = results?.groups.flatMap((group) => group.items).find((entry) => entry.path === real || entry.path === filePath);
@@ -56,13 +58,22 @@ async function streamClaimedMedia(
     sendFile(request, response, real, info.size, contentType(real));
     return;
   }
+  const offset = startSeconds && Number.isFinite(startSeconds) ? Math.max(0, Math.min(startSeconds, 24 * 60 * 60)) : 0;
   let mode: "direct" | "remux" | "transcode" =
     requestedMode === "direct" || requestedMode === "remux" || requestedMode === "transcode" ? requestedMode : "transcode";
-  if (requestedMode !== "direct" && requestedMode !== "remux" && requestedMode !== "transcode") {
-    try {
-      mode = playbackMode(await probeFile(real));
-    } catch {
+  let clipSeconds: number | undefined;
+  try {
+    const probe = await probeFile(real);
+    if (requestedMode !== "direct" && requestedMode !== "remux" && requestedMode !== "transcode") {
+      mode = playbackMode(probe);
+    }
+    clipSeconds = Math.max(0.1, probe.duration - offset);
+  } catch {
+    if (requestedMode !== "direct" && requestedMode !== "remux" && requestedMode !== "transcode") {
       mode = "transcode";
+    }
+    if (item && item.durationSeconds > 0) {
+      clipSeconds = Math.max(0.1, item.durationSeconds - offset);
     }
   }
   if (signal.aborted || response.destroyed || response.writableEnded) return;
@@ -71,7 +82,6 @@ async function streamClaimedMedia(
     return;
   }
   const settings = await loadSettings();
-  const offset = startSeconds && Number.isFinite(startSeconds) ? Math.max(0, Math.min(startSeconds, 24 * 60 * 60)) : 0;
   if (signal.aborted || response.destroyed || response.writableEnded) return;
   response.writeHead(200, {
     "Content-Type": "video/mp4",
@@ -79,10 +89,16 @@ async function streamClaimedMedia(
     "X-Playback-Mode": mode,
     "X-Content-Type-Options": "nosniff",
   });
-  await enqueueFfmpeg(settings.server.ffmpegConcurrency, () => pipeFfmpeg(response, transcodeArgs(real, offset, mode), signal), {
+  const height = mode === "transcode" ? playbackHeight(maxHeight) : TRANSCODE_FULL_HEIGHT;
+  await enqueueFfmpeg(settings.server.ffmpegConcurrency, () => pipeFfmpeg(response, transcodeArgs(real, offset, mode, clipSeconds, height), signal), {
     priority: "playback",
     signal,
   });
+}
+
+function playbackHeight(requested: number | null): number {
+  if (requested === TRANSCODE_START_HEIGHT) return TRANSCODE_START_HEIGHT;
+  return TRANSCODE_FULL_HEIGHT;
 }
 
 function pipeFfmpeg(response: ServerResponse, args: string[], signal: AbortSignal): Promise<void> {
@@ -152,8 +168,7 @@ function pipeRange(request: IncomingMessage, response: ServerResponse, file: str
 }
 
 export async function thumbnailFile(section: SectionId, filePath: string, kind: string, index: number): Promise<string> {
-  if (section !== "server") throw new AppError("Immich thumbnails come from Immich", 404);
-  const real = await realResultPath("server", filePath);
+  const real = await realResultPath(section, filePath);
   if (kind === "poster") return ensurePoster(real);
   if (kind === "strip") return ensureStrip(real, index);
   throw new AppError("Unknown thumbnail");

@@ -67,14 +67,20 @@ export function ScanLog({ lines, running }: { lines: string[]; running: boolean 
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-muted/80">
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-          style={{ width: `${progress.percent}%` }}
-        />
+        {progress.indeterminate ? (
+          <div className="relative h-full w-full overflow-hidden rounded-full bg-primary/25">
+            <div className="absolute inset-y-0 w-1/3 animate-[scan-indeterminate_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
+          </div>
+        ) : (
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+            style={{ width: `${progress.percent}%` }}
+          />
+        )}
       </div>
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <span>{progress.detail ?? "Waiting for vdf-cli…"}</span>
-        <span className="tabular-nums">{progress.percent}%</span>
+        <span className="tabular-nums">{progress.indeterminate ? "…" : `${progress.percent}%`}</span>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { assertHttpUrl, safeFetch } from "./urls";
 
 export type ImmichAsset = { id: string; originalPath: string };
+export type ImmichAlbum = { id: string; name: string };
 
 export function immichRoot(baseUrl: string): string {
   const url = assertHttpUrl(baseUrl.trim());
@@ -174,6 +175,66 @@ export async function trashAssets(baseUrl: string, apiKey: string, ids: string[]
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Immich trash failed (${response.status})`);
+}
+
+export function parseAlbumList(body: unknown): ImmichAlbum[] {
+  if (!Array.isArray(body)) return [];
+  const albums: ImmichAlbum[] = [];
+  for (const entry of body) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as { id?: unknown; albumName?: unknown; name?: unknown };
+    if (typeof record.id !== "string") continue;
+    const name =
+      typeof record.albumName === "string" && record.albumName.trim()
+        ? record.albumName.trim()
+        : typeof record.name === "string" && record.name.trim()
+          ? record.name.trim()
+          : "";
+    if (name) albums.push({ id: record.id, name });
+  }
+  return albums;
+}
+
+/** Albums that contain this asset (user-visible via API key). */
+function assertImmichId(id: string, label: string): void {
+  if (!/^[A-Za-z0-9-]{8,80}$/.test(id)) throw new Error(`Unknown ${label}`);
+}
+
+export async function addAssetsToAlbum(baseUrl: string, apiKey: string, albumId: string, assetIds: string[]): Promise<void> {
+  assertImmichId(albumId, "album");
+  for (const assetId of assetIds) assertImmichId(assetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
+    method: "PUT",
+    headers: headers(apiKey, true),
+    body: JSON.stringify({ ids: assetIds }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Immich add to album failed (${response.status})`);
+}
+
+export async function removeAssetsFromAlbum(baseUrl: string, apiKey: string, albumId: string, assetIds: string[]): Promise<void> {
+  assertImmichId(albumId, "album");
+  for (const assetId of assetIds) assertImmichId(assetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
+    method: "DELETE",
+    headers: headers(apiKey, true),
+    body: JSON.stringify({ ids: assetIds }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Immich remove from album failed (${response.status})`);
+}
+
+export async function listAlbumsForAsset(baseUrl: string, apiKey: string, assetId: string): Promise<ImmichAlbum[]> {
+  assertImmichId(assetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums?assetId=${encodeURIComponent(assetId)}`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Immich rejected the API key for albums");
+  }
+  if (!response.ok) throw new Error(`Immich albums failed (${response.status})`);
+  return parseAlbumList(await response.json());
 }
 
 export async function openImmichThumbnail(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {

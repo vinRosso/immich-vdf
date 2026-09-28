@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,21 +41,23 @@ export function LoginForm() {
       <p className="mt-3 text-sm text-muted-foreground">
         This app can read every mounted file and trash an Immich library. The password is <span className="text-foreground">APP_PASSWORD</span>, kept out of the image and out of the browser after this form.
       </p>
-      <form onSubmit={(event) => void submit(event)} className="mt-8 space-y-4">
+      <form onSubmit={(event) => void submit(event)} className="mt-8 space-y-4" aria-busy={pending}>
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
+          {pending ? <Skeleton className="h-8 w-full rounded-lg" /> : (
+            <Input
+              id="password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          )}
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <Button type="submit" disabled={pending} className="w-full">
-          {pending ? "Checking…" : "Enter the library"}
+          {pending ? <Skeleton className="mx-auto h-4 w-28 bg-primary-foreground/30" /> : "Enter the library"}
         </Button>
       </form>
     </main>

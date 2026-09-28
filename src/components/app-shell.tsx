@@ -1,19 +1,20 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "cn";
 import { api } from "@/components/api";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { TRASH_SAVED_EVENT } from "@/lib/trash-events";
+import { sectionLabel } from "@/lib/section-label";
 import type { RuntimeInfo, SectionId } from "@/lib/types";
 
 const links = [
   { href: "/", label: "Home" },
-  { href: "/server", label: "Server" },
-  { href: "/immich", label: "Immich" },
+  { href: "/immich", label: sectionLabel("immich") },
+  { href: "/server", label: sectionLabel("server") },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -92,9 +93,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="min-w-0">
             <p className="text-[11px] tracking-[0.22em] text-primary uppercase">Video Duplicate Finder</p>
             <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
-              <Link href="/" className="font-heading text-3xl leading-none">
+              <a href="/" className="font-heading text-3xl leading-none">
                 VDF
-              </Link>
+              </a>
               {runtime && !runtime.cliAvailable ? (
                 <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
               ) : null}
@@ -102,18 +103,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {trashSavedBytes !== null ? (
-              <Link
+            {trashSavedBytes === null ? (
+              <Skeleton className="h-8 w-[5.5rem] rounded-full" aria-label="Loading saved space" />
+            ) : (
+              <a
                 href="/trash"
                 className="rounded-full px-3 py-1.5 text-sm text-muted-foreground tabular-nums hover:bg-muted hover:text-foreground"
                 title="Disk space freed after permanently emptying .vdf-trash"
               >
                 {formatBytes(trashSavedBytes)} saved
-              </Link>
-            ) : null}
+              </a>
+            )}
             <nav className="flex items-center gap-0.5 rounded-full bg-muted p-1">
               {links.map((link) => (
-                <Link
+                <a
                   key={link.href}
                   href={link.href}
                   className={cn(
@@ -124,7 +127,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   )}
                 >
                   {link.label}
-                </Link>
+                </a>
               ))}
             </nav>
             <button type="button" onClick={() => void logout()} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -141,7 +144,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 function navActive(pathname: string, href: string, ignoredSection: SectionId | null, trashPage: boolean): boolean {
   if (href === "/") return pathname === "/";
   if (href === "/server") return pathname === "/server" || ignoredSection === "server" || trashPage;
-  if (href === "/immich") return pathname === "/immich" || ignoredSection === "immich";
+  if (href === "/immich") return pathname === "/immich" || pathname.startsWith("/immich/") || ignoredSection === "immich";
   return pathname === href;
 }
 

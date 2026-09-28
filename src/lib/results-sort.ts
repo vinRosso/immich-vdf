@@ -6,7 +6,9 @@ export type ResultsGroupSortId =
   | "total-size-desc"
   | "wasted-desc"
   | "largest-desc"
-  | "duration-desc";
+  | "duration-desc"
+  | "time-desc"
+  | "time-asc";
 
 export const DEFAULT_RESULTS_GROUP_SORT: ResultsGroupSortId = "similarity-desc";
 
@@ -19,9 +21,11 @@ export const RESULTS_GROUP_SORT_OPTIONS: { id: ResultsGroupSortId; label: string
   { id: "wasted-desc", label: "Wasted space, most first" },
   { id: "largest-desc", label: "Largest file, biggest first" },
   { id: "duration-desc", label: "Duration, longest first" },
+  { id: "time-desc", label: "Date, newest first" },
+  { id: "time-asc", label: "Date, oldest first" },
 ];
 
-type SortableItem = { similarity: number; sizeBytes: number; durationSeconds: number };
+type SortableItem = { similarity: number; sizeBytes: number; durationSeconds: number; dateCreatedMs: number };
 type GroupLike = { items: SortableItem[] };
 
 function maxSimilarity(group: GroupLike): number {
@@ -46,6 +50,10 @@ function maxDuration(group: GroupLike): number {
   return group.items.reduce((max, item) => Math.max(max, item.durationSeconds), 0);
 }
 
+function newestInGroup(group: GroupLike): number {
+  return group.items.reduce((max, item) => Math.max(max, item.dateCreatedMs || 0), 0);
+}
+
 export function sortResultGroups<T extends GroupLike>(groups: T[], sortId: ResultsGroupSortId): T[] {
   const score = (group: T): number => {
     switch (sortId) {
@@ -63,6 +71,9 @@ export function sortResultGroups<T extends GroupLike>(groups: T[], sortId: Resul
         return largestFile(group);
       case "duration-desc":
         return maxDuration(group);
+      case "time-desc":
+      case "time-asc":
+        return newestInGroup(group);
       default:
         return 0;
     }
@@ -73,7 +84,8 @@ export function sortResultGroups<T extends GroupLike>(groups: T[], sortId: Resul
     sortId === "total-size-desc" ||
     sortId === "wasted-desc" ||
     sortId === "largest-desc" ||
-    sortId === "duration-desc";
+    sortId === "duration-desc" ||
+    sortId === "time-desc";
   return [...groups].sort((a, b) => {
     const delta = score(b) - score(a);
     return descending ? delta : -delta;

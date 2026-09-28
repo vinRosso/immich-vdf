@@ -29,9 +29,9 @@ One Compose service, built from a multi-stage [Dockerfile](../Dockerfile):
 
 [docker-compose.yml](../docker-compose.yml) publishes an uncommon host port, sets `APP_PASSWORD`, and mounts:
 
-- Server media, read-write. Deletes move files into a `.vdf-trash/` folder at the root of that same mount, so it is a rename, not a copy, and the data volume does not fill up.
+- Files media mount, read-write. Deletes move files into a `.vdf-trash/` folder at the root of that same mount, so it is a rename, not a copy, and the data volume does not fill up.
 - Immich library, read-only, plus a path map from Immich `originalPath` (often `/usr/src/app/upload` or an external-library path) to that mount.
-- A data volume for settings, results, thumbnails, and two separate VDF scan databases, one per section, so rescans stay fast and Server and Immich do not share hashes. The app creates `/data/db/server` and `/data/db/immich` and passes `--db` to each.
+- A data volume for settings, results, thumbnails, and two separate VDF scan databases, one per section, so rescans stay fast and Files and Immich do not share hashes. The app creates `/data/db/server` and `/data/db/immich` and passes `--db` to each.
 
 ## App
 
@@ -39,11 +39,11 @@ Next.js, TypeScript, Tailwind, shadcn/ui, started from a small custom Node serve
 
 One scan at a time. The CLI log streams to the page. JSON is read from `--output`. The latest result set for each section is stored on the data volume.
 
-### Server
+### Files
 
 Include and exclude directories, rejected unless they sit inside the mounted roots. Threshold, percent, parallelism, images, pHash, partial-clip, and AI flags are passed through to the CLI.
 
-When a scan finishes, ffmpeg writes JPEGs for every file in the results: one poster at about 10% of the duration, plus a short filmstrip for the viewer. Thumbnail concurrency is a Server setting; the UI suggests half the CPU cores, clamped between 1 and 4.
+When a scan finishes, ffmpeg writes JPEGs for every file in the results: one poster at about 10% of the duration, plus a short filmstrip for the viewer. Thumbnail concurrency is a Files setting; the UI suggests half the CPU cores, clamped between 1 and 4.
 
 ### Immich
 
@@ -65,7 +65,7 @@ Per-section daily or weekly scans only (no auto stack/delete). Optional webhook 
 
 ### Ignore list and trash
 
-Ignore by whole group member set. Server trash is `.vdf-trash/` on the media mount.
+Ignore by whole group member set. Files trash is `.vdf-trash/` on the media mount.
 
 ### Security
 

@@ -1,13 +1,14 @@
 "use client";
 
-import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
+import { TrashListSkeleton } from "@/components/skeletons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { baseName, formatBytes, mountMediaPath } from "@/lib/format";
+import { sectionLabel } from "@/lib/section-label";
 import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { TrashEntry } from "@/lib/types";
 
@@ -115,13 +116,11 @@ export function TrashScreen() {
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Link
-              href="/server"
-              className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              aria-label="Back to Server results"
-            >
-              <ArrowLeft className="size-5" />
-            </Link>
+            <Button asChild variant="ghost" size="icon" className="size-9 shrink-0 rounded-full">
+              <a href="/server" aria-label={`Back to ${sectionLabel("server")} results`}>
+                <ArrowLeft className="size-5" />
+              </a>
+            </Button>
             <h1 className="font-heading text-4xl">Trash</h1>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
@@ -149,10 +148,10 @@ export function TrashScreen() {
           </div>
         </div>
         <p className="mt-2 shrink-0 text-sm whitespace-nowrap text-muted-foreground">
-          Files moved out of a Server scan land in .vdf-trash on the same mount. Emptying trash deletes them for good.
+          When you trash duplicates from {sectionLabel("server")}, they land in .vdf-trash on the same mount. Emptying trash deletes them for good.
         </p>
         {error ? <p className="mt-2 shrink-0 text-sm text-destructive">{error}</p> : null}
-        {!entries ? <p className="mt-4 text-sm text-muted-foreground">Loading…</p> : null}
+        {!entries ? <TrashListSkeleton /> : null}
         {entries && entries.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">Nothing is in .vdf-trash.</p> : null}
         {hasFiles ? (
           <>

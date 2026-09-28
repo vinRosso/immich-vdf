@@ -1,4 +1,15 @@
+import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { loadConfig } from "./config";
+import { fetchImmichUser } from "./immich";
+import {
+  mapImmichImportPathToHost,
+  resolveImmichScanRoots,
+  rewriteHostPathWithBinds,
+  type ImmichCredentials,
+} from "./immich-mounts";
+import { resolveInside } from "./path-jail";
+import type { ScanSettings } from "./types";
 
 /** Folders Immich generates next to originals under UPLOAD_LOCATION. */
 export const IMMICH_GENERATED_DIRS = ["thumbs", "encoded-video", "profile", "backups"] as const;
@@ -79,5 +90,87 @@ export function planImmichScanPaths(options: {
       return true;
     }),
     excludes,
+  };
+}
+
+/** Drop include folders that are not under the current Immich mount (e.g. old dev-immich paths). */
+export async function filterScanIncludesWithinRoots(includes: string[], roots: string[]): Promise<string[]> {
+  const kept: string[] = [];
+  for (const folder of includes) {
+    try {
+      await resolveInside(roots, folder);
+      kept.push(folder);
+    } catch {
+      // Stale path from a previous mount or local dev folder.
+    }
+  }
+  return kept;
+}
+
+async function directoryNames(dir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+/** Host scan roots plus include/exclude folders before path-jail resolution. */
+export async function immichScanFolderPlan(
+  scanSettings: ScanSettings,
+  credentials?: ImmichCredentials,
+): Promise<{ roots: string[]; includeSources: string[]; extraExcludes: string[] }> {
+  const config = loadConfig();
+  const immichRoots = await resolveImmichScanRoots(credentials);
+  const configuredIncludes = await filterScanIncludesWithinRoots(scanSettings.includes, immichRoots);
+  let uploadReal = config.immichLibrary;
+  try {
+    uploadReal = await realpath(config.immichLibrary);
+  } catch {
+    // Mount may be missing; keep the configured path.
+  }
+  let uploadChildren: string[] = [];
+  try {
+    const entries = await readdir(config.immichLibrary, { withFileTypes: true });
+    uploadChildren = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    uploadChildren = [];
+  }
+  const libraryChildren = await directoryNames(path.join(config.immichLibrary, "library"));
+  const legacyUploadChildren = await directoryNames(path.join(config.immichLibrary, "upload"));
+  let storageLabel: string | null = null;
+  let userId: string | null = null;
+  if (credentials?.baseUrl && credentials?.apiKey) {
+    try {
+      const user = await fetchImmichUser(credentials.baseUrl, credentials.apiKey);
+      storageLabel = user.storageLabel;
+      userId = user.id;
+    } catch {
+      // Scan library/ without a user folder when Immich is unreachable.
+    }
+  }
+  const planned = planImmichScanPaths({
+    uploadMount: config.immichLibrary,
+    uploadMountAliases: [uploadReal],
+    scanRoots: immichRoots,
+    configuredIncludes,
+    uploadChildren,
+    libraryChildren,
+    legacyUploadChildren,
+    storageLabel,
+    userId,
+  });
+  const remap = (folder: string) =>
+    rewriteHostPathWithBinds(
+      mapImmichImportPathToHost(folder, config.immichLibrary, uploadChildren, config) ?? folder,
+      config.immichLibrary,
+      uploadChildren,
+      config.immichBinds,
+    );
+  return {
+    roots: immichRoots,
+    includeSources: planned.includes.map(remap),
+    extraExcludes: planned.excludes.map(remap),
   };
 }

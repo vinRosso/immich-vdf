@@ -4,10 +4,32 @@ export type ScanProgressInfo = {
   percent: number;
   label: string;
   detail: string | null;
+  /** CLI is done; server is saving results or matching Immich. */
+  indeterminate?: boolean;
 };
+
+const POST_COMPARE = [
+  { test: /reusing last compare/i, label: "Reusing last compare", detail: "Library unchanged…" },
+  { test: /Matching Immich library/i, label: "Matching Immich assets", detail: "Linking files to the library…" },
+  { test: /Processing results/i, label: "Processing results", detail: "Reading file metadata…" },
+  { test: /Finishing up/i, label: "Finishing up", detail: "Preparing your results…" },
+] as const;
+
+function postComparePhase(lines: string[]): ScanProgressInfo | null {
+  for (const phase of POST_COMPARE) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (phase.test.test(lines[i])) {
+        return { percent: 100, label: phase.label, detail: phase.detail, indeterminate: true };
+      }
+    }
+  }
+  return null;
+}
 
 /** Parse vdf-cli stderr progress lines into UI state. */
 export function parseScanProgress(lines: string[]): ScanProgressInfo {
+  const postCompare = postComparePhase(lines);
+  if (postCompare) return postCompare;
   let percent = 0;
   let current = 0;
   let max = 0;
@@ -41,5 +63,14 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
   else if (max > 0) label = "Hashing files";
 
   const detail = max > 0 ? `${current} of ${max}` : null;
-  return { percent: Math.min(100, Math.max(0, percent)), label, detail };
+  const clamped = Math.min(100, Math.max(0, percent));
+  if (comparing && clamped >= 100) {
+    return {
+      percent: 100,
+      label: "Finishing comparison",
+      detail: "Waiting for vdf-cli to exit…",
+      indeterminate: true,
+    };
+  }
+  return { percent: clamped, label, detail };
 }

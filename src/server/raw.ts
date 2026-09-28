@@ -61,6 +61,7 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
         start === null ? null : Number(start),
         url.searchParams.get("mode"),
         url.searchParams.get("play"),
+        Number(url.searchParams.get("h")),
       );
       return true;
     }

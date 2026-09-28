@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { assetsFromCache } from "../src/lib/immich-asset-index";
+import { assetSearchNames, assetsFromCache } from "../src/lib/immich-asset-index";
 import { attachAssets, cliPathToOriginal, originalPathToCli, originalPathsForGroups } from "../src/lib/immich-join";
 
 const maps = [
@@ -89,5 +89,42 @@ describe("immich path join", () => {
     assert.deepEqual(paths, ["/data/clip.mkv"]);
     const matched = assetsFromCache({ byPath: { "/data/clip.mkv": "a1" } }, paths);
     assert.equal(matched[0]?.id, "a1");
+  });
+});
+
+describe("asset search names", () => {
+  it("follows Immich storage-template collision names", () => {
+    assert.deepEqual(assetSearchNames("/data/library/admin/2016/trip/IMG_0007+1.jpg"), [
+      "IMG_0007+1.jpg",
+      "IMG_0007+1.jpeg",
+      "IMG_0007+1.jpe",
+      "IMG_0007.jpg",
+      "IMG_0007.jpeg",
+      "IMG_0007.jpe",
+    ]);
+    assert.deepEqual(assetSearchNames("/data/library/admin/2016/trip/IMG_0007+12.tiff"), [
+      "IMG_0007+12.tiff",
+      "IMG_0007+12.tif",
+      "IMG_0007.tiff",
+      "IMG_0007.tif",
+    ]);
+    assert.deepEqual(assetSearchNames("/data/library/admin/clip+2.mpg"), [
+      "clip+2.mpg",
+      "clip+2.mpeg",
+      "clip+2.mpe",
+      "clip.mpg",
+      "clip.mpeg",
+      "clip.mpe",
+    ]);
+  });
+
+  it("leaves names that are not an Immich collision suffix unchanged, aside from extension aliases", () => {
+    assert.deepEqual(assetSearchNames("/data/library/admin/IMG_0007.jpg"), ["IMG_0007.jpg", "IMG_0007.jpeg", "IMG_0007.jpe"]);
+    assert.deepEqual(assetSearchNames("/data/library/admin/my+file.mov"), ["my+file.mov"]);
+    assert.deepEqual(assetSearchNames("/data/library/admin/photo+1-edit.jpg"), [
+      "photo+1-edit.jpg",
+      "photo+1-edit.jpeg",
+      "photo+1-edit.jpe",
+    ]);
   });
 });

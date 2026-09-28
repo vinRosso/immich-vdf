@@ -105,6 +105,10 @@ export type StoredResults = {
   error: string | null;
   warning: string | null;
   groups: StoredGroup[];
+  /** Combined inventory + matching-settings fingerprint from the last full compare. */
+  compareFingerprint?: string | null;
+  compareInventoryFingerprint?: string | null;
+  compareSettingsFingerprint?: string | null;
 };
 
 export type IgnoredEntry = {
@@ -160,6 +164,15 @@ export type ClientItem = {
 export type ClientGroup = {
   groupId: string;
   items: ClientItem[];
+};
+
+export type UnmatchedFile = {
+  name: string;
+  path: string;
+  originalPath: string | null;
+  reason: "no-map" | "no-asset";
+  groupId: string;
+  isImage: boolean;
 };
 
 export type ResultsResponse = {

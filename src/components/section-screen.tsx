@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
@@ -8,6 +8,12 @@ import { FolderPicker, Hint } from "@/components/folder-picker";
 import { ScanProfilePicker } from "@/components/scan-profile-picker";
 import { ScanLog, useScanFeed } from "@/components/scan-log";
 import { ResultGroupCard } from "@/components/group-result-card";
+import {
+  GroupCardGridSkeleton,
+  ImmichConnectionSkeleton,
+  ResultsToolbarSkeleton,
+  SectionSettingsSkeleton,
+} from "@/components/skeletons";
 import { Viewer } from "@/components/viewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes, formatClock, formatLatestOkRun } from "@/lib/format";
+import { sectionLabel } from "@/lib/section-label";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
   DEFAULT_RESULTS_GROUP_SORT,
@@ -73,6 +80,7 @@ type Draft = {
 };
 
 export function SectionScreen({ section }: { section: SectionId }) {
+  const router = useRouter();
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -112,6 +120,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
     } else {
       setTrash([]);
     }
+    return nextResults;
   }, [section]);
 
   const feed = useScanFeed(() => {
@@ -132,6 +141,12 @@ export function SectionScreen({ section }: { section: SectionId }) {
       cancelled = true;
     };
   }, [reload]);
+
+  useEffect(() => {
+    if (section === "immich" && results && results.unmatched > 0) {
+      router.prefetch("/immich/unmatched");
+    }
+  }, [section, results?.unmatched, router]);
 
   function settingsUpdateBody() {
     if (!draft) return null;
@@ -226,19 +241,19 @@ export function SectionScreen({ section }: { section: SectionId }) {
       <div className="space-y-4">
         <div className="flex items-end justify-between gap-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-end gap-x-4 gap-y-2">
-            <h1 className="font-heading text-4xl">{section === "server" ? "Server" : "Immich"}</h1>
+            <h1 className="font-heading text-4xl">{sectionLabel(section)}</h1>
             {draft ? (
               <ScanProfilePicker scan={draft.scan} onChange={(scan) => setDraft({ ...draft, scan })} />
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Link href={`/ignored?section=${section}`} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+            <a href={`/ignored?section=${section}`} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
               Ignored
-            </Link>
+            </a>
             {section === "server" ? (
-              <Link href="/trash" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+              <a href="/trash" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
                 Trash{trash.length > 0 ? ` ${trash.length}` : ""}
-              </Link>
+              </a>
             ) : null}
           </div>
         </div>
@@ -368,7 +383,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                 </div>
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">Loading settings…</p>
+              <SectionSettingsSkeleton />
             )}
         </div>
       <div className="space-y-4">
@@ -376,7 +391,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {notice ? <p className="text-sm text-primary">{notice}</p> : null}
           <ScanLog lines={feed.section === section ? feed.lines : []} running={runningHere} />
-          <Results section={section} results={results} loading={loading} onChanged={() => void reload()} />
+          <Results section={section} results={results} loading={loading} onReload={reload} />
         </section>
       </div>
       </div>
@@ -388,12 +403,12 @@ function Results({
   section,
   results,
   loading,
-  onChanged,
+  onReload,
 }: {
   section: SectionId;
   results: ResultsResponse | null;
   loading: boolean;
-  onChanged: () => void;
+  onReload: () => Promise<ResultsResponse>;
 }) {
   const [sortId, setSortId] = useState<ResultsGroupSortId>(DEFAULT_RESULTS_GROUP_SORT);
   const [cardSize, setCardSize] = useState(DEFAULT_RESULTS_CARD_SIZE);
@@ -422,10 +437,42 @@ function Results({
   const openIndex = openGroupId === null ? -1 : sortedGroups.findIndex((group) => group.groupId === openGroupId);
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
+  async function openGroupAfterRefresh(advance: boolean, fromIndex: number) {
+    const data = await onReload();
+    if (!advance || fromIndex < 0) return;
+    const groups = data.groups ? sortResultGroups(data.groups, sortId) : [];
+    const next = groups[fromIndex] ?? groups[fromIndex - 1];
+    setOpenGroupId(next?.groupId ?? null);
+  }
+
   async function archiveGroup(groupId: string) {
+    const fromIndex = openGroupId === groupId ? openIndex : -1;
     await api("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
-    if (openGroupId === groupId) setOpenGroupId(null);
-    onChanged();
+    await openGroupAfterRefresh(fromIndex >= 0, fromIndex);
+  }
+
+  async function stackAllGroups(keepSmallest: boolean) {
+    if (sortedGroups.length === 0) return;
+    const label = keepSmallest ? "the smallest file on top" : "the best-quality file on top";
+    if (!window.confirm(`Stack all ${sortedGroups.length} visible groups in Immich, with ${label}?`)) return;
+    setBulkBusy(true);
+    try {
+      for (const group of sortedGroups) {
+        const index = keepSmallest ? pickSmallestIndex(group.items) : pickPrimaryIndex(group.items);
+        const primary = group.items[index >= 0 ? index : 0];
+        if (!primary?.assetId) continue;
+        await api("/api/immich/stack", {
+          method: "POST",
+          body: JSON.stringify({ groupId: group.groupId, primaryId: primary.assetId }),
+        });
+      }
+      setOpenGroupId(null);
+      await onReload();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Bulk stack failed");
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   async function trashAllGroups(keepSmallest: boolean) {
@@ -450,7 +497,7 @@ function Results({
         }
       }
       setOpenGroupId(null);
-      onChanged();
+      await onReload();
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Bulk trash failed");
     } finally {
@@ -458,7 +505,14 @@ function Results({
     }
   }
 
-  if (loading || !results) return <p className="text-sm text-muted-foreground">Loading results…</p>;
+  if (loading || !results) {
+    return (
+      <div className="space-y-3">
+        <ResultsToolbarSkeleton />
+        <GroupCardGridSkeleton count={12} cardSize={cardSize} />
+      </div>
+    );
+  }
   if (!results.scanned) {
     return (
       <Card className="border border-dashed border-border bg-transparent shadow-none ring-0">
@@ -480,7 +534,13 @@ function Results({
           {results.error ? <Badge variant="destructive">Failed</Badge> : null}
           {results.warning ? <Badge variant="secondary">{results.warning}</Badge> : null}
           {results.hiddenIgnored > 0 ? <Badge variant="outline">{results.hiddenIgnored} ignored</Badge> : null}
-          {section === "immich" && results.unmatched > 0 ? <Badge variant="destructive">{results.unmatched} unmatched</Badge> : null}
+          {section === "immich" && results.unmatched > 0 ? (
+            <Badge asChild variant="destructive" className="relative z-10 cursor-pointer hover:bg-destructive/80">
+              <a href="/immich/unmatched" title="Open unmatched files and how to match them">
+                {results.unmatched} unmatched
+              </a>
+            </Badge>
+          ) : null}
           <span className="text-muted-foreground">
             {results.groups.length} {results.groups.length === 1 ? "group" : "groups"}
           </span>
@@ -529,27 +589,52 @@ function Results({
             {bulkBusy ? (
               <span className="flex items-center gap-1.5 text-muted-foreground" aria-live="polite">
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                Trashing…
+                {section === "immich" ? "Stacking…" : "Trashing…"}
               </span>
             ) : null}
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={bulkBusy || sortedGroups.length === 0}
-              onClick={() => void trashAllGroups(false)}
-            >
-              Keep best, trash rest
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={bulkBusy || sortedGroups.length === 0}
-              onClick={() => void trashAllGroups(true)}
-            >
-              Keep smallest, trash rest
-            </Button>
+            {section === "immich" ? (
+              <>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={bulkBusy || sortedGroups.length === 0}
+                  onClick={() => void stackAllGroups(false)}
+                >
+                  Stack best
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={bulkBusy || sortedGroups.length === 0}
+                  onClick={() => void stackAllGroups(true)}
+                >
+                  Stack smallest
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={bulkBusy || sortedGroups.length === 0}
+                  onClick={() => void trashAllGroups(false)}
+                >
+                  Keep best, trash rest
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={bulkBusy || sortedGroups.length === 0}
+                  onClick={() => void trashAllGroups(true)}
+                >
+                  Keep smallest, trash rest
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -599,7 +684,7 @@ function Results({
           if (next) setOpenGroupId(next.groupId);
         }}
         onClose={() => setOpenGroupId(null)}
-        onChanged={onChanged}
+        onActionDone={(advance) => openGroupAfterRefresh(advance, openIndex)}
       />
     </div>
   );
@@ -752,10 +837,7 @@ function ImmichConnectionFields({
   return (
     <div className="min-w-0 flex-1 space-y-1.5">
       {statusLoading ? (
-        <div className="flex h-7 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />
-          Checking connection…
-        </div>
+        <ImmichConnectionSkeleton />
       ) : connected ? (
         <div className="flex h-7 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0 text-xs text-muted-foreground">
           <CheckCircle2 className="size-3.5 shrink-0 text-primary" aria-label="Connected" />

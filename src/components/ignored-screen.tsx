@@ -1,21 +1,23 @@
 "use client";
 
-import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { RestoreGroupButton, ResultGroupCard } from "@/components/group-result-card";
+import { GroupCardGridSkeleton } from "@/components/skeletons";
 import { Viewer } from "@/components/viewer";
+import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DEFAULT_RESULTS_CARD_SIZE, resultsCardGridClass } from "@/lib/results-sort";
+import { sectionLabel } from "@/lib/section-label";
 import type { ClientGroup, IgnoredGroupCard, SectionId } from "@/lib/types";
 
 export function IgnoredScreen({ section }: { section: SectionId }) {
   const [cards, setCards] = useState<IgnoredGroupCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
-  const title = section === "server" ? "Server" : "Immich";
+  const title = sectionLabel(section);
   const resultsHref = `/${section}`;
 
   const groupsWithData = useMemo(
@@ -30,6 +32,15 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
   async function load() {
     const listed = await api<IgnoredGroupCard[]>(`/api/ignore?section=${section}`);
     setCards(listed);
+    return listed;
+  }
+
+  async function openGroupAfterRefresh(advance: boolean, fromIndex: number) {
+    const listed = await load();
+    if (!advance || fromIndex < 0) return;
+    const withData = listed.filter((card): card is IgnoredGroupCard & { group: ClientGroup } => card.group !== null);
+    const next = withData[fromIndex] ?? withData[fromIndex - 1];
+    setOpenGroupId(next?.group.groupId ?? null);
   }
 
   useEffect(() => {
@@ -39,11 +50,12 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
   async function restore(key: string) {
     setError(null);
     try {
+      const fromIndex =
+        openGroupId && cards?.some((card) => card.entry.key === key && card.group?.groupId === openGroupId)
+          ? openIndex
+          : -1;
       await api("/api/ignore", { method: "DELETE", body: JSON.stringify({ section, key }) });
-      if (openGroupId && cards?.some((card) => card.entry.key === key && card.group?.groupId === openGroupId)) {
-        setOpenGroupId(null);
-      }
-      await load();
+      await openGroupAfterRefresh(fromIndex >= 0, fromIndex);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not restore");
     }
@@ -52,20 +64,22 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
   return (
     <AppShell>
       <div className="flex items-center gap-3">
-        <Link
-          href={resultsHref}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-          aria-label={`Back to ${title} results`}
-        >
-          <ArrowLeft className="size-5" />
-        </Link>
+        <Button asChild variant="ghost" size="icon" className="size-9 shrink-0 rounded-full">
+          <a href={resultsHref} aria-label={`Back to ${title} results`}>
+            <ArrowLeft className="size-5" />
+          </a>
+        </Button>
         <h1 className="font-heading text-4xl">{title} ignored</h1>
       </div>
       <p className="mt-2 text-sm whitespace-nowrap text-muted-foreground">
         {title} groups stay hidden while they have the same files. If a later scan adds a file, the group shows up again.
       </p>
       {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
-      {!cards ? <p className="mt-6 text-sm text-muted-foreground">Loading ignored groups…</p> : null}
+      {!cards ? (
+        <div className="mt-6">
+          <GroupCardGridSkeleton count={6} />
+        </div>
+      ) : null}
       {cards && cards.length === 0 ? (
         <Card className="mt-6">
           <CardHeader>
@@ -111,7 +125,7 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
           if (next) setOpenGroupId(next.group.groupId);
         }}
         onClose={() => setOpenGroupId(null)}
-        onChanged={() => void load()}
+        onActionDone={(advance) => openGroupAfterRefresh(advance, openIndex)}
         ignoredKey={openIgnoreKey}
       />
     </AppShell>

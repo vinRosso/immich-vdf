@@ -149,3 +149,12 @@
     color: var(--popover-foreground);
   }
 }
+
+@keyframes scan-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}

@@ -1,5 +1,6 @@
 import { loadConfig } from "./config";
 import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
+import { immichScanFolderPlan } from "./immich-scan-scope";
 import { AppError } from "./errors";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { resolveInside } from "./path-jail";
@@ -71,13 +72,25 @@ function mergeSchedule(current: ScheduleSettings, patch: Partial<ScheduleSetting
 
 async function jailScan(section: SectionId, scan: ScanSettings, immichCreds?: ImmichCredentials): Promise<void> {
   const config = loadConfig();
-  const immichRoots = section === "immich" ? await resolveImmichScanRoots(immichCreds) : [];
-  const roots = section === "server" ? config.mediaRoots : immichRoots;
-  const includeSources = section === "immich" && scan.includes.length === 0 ? immichRoots : scan.includes;
+  let roots = section === "server" ? config.mediaRoots : [];
+  let includeSources = scan.includes;
+  let extraExcludes: string[] = [];
+  if (section === "immich") {
+    const planned = await immichScanFolderPlan(scan, immichCreds);
+    roots = planned.roots;
+    includeSources = planned.includeSources;
+    extraExcludes = planned.extraExcludes;
+  }
   const includes: string[] = [];
   for (const folder of includeSources) includes.push(await resolveInside(roots, folder));
   const excludes: string[] = [];
-  for (const folder of scan.excludes) excludes.push(await resolveInside(roots, folder));
+  for (const folder of [...scan.excludes, ...extraExcludes]) {
+    try {
+      excludes.push(await resolveInside(roots, folder));
+    } catch {
+      // Skip excludes that are not on the mount.
+    }
+  }
   scan.includes = includes;
   scan.excludes = excludes;
 }

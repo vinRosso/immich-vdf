@@ -22,3 +22,36 @@ test("parseScanProgress detects comparing stage", () => {
   assert.equal(info.percent, 2);
   assert.equal(info.label, "Comparing duplicates");
 });
+
+test("parseScanProgress shows reuse phase after skipped compare", () => {
+  const reuse = parseScanProgress([
+    "[scan] Library unchanged, reusing last compare.",
+    "[scan] Finishing up…",
+  ]);
+  assert.equal(reuse.label, "Reusing last compare");
+  assert.equal(reuse.indeterminate, true);
+});
+
+test("parseScanProgress shows post-compare phases", () => {
+  const stuck = parseScanProgress([
+    "[ 100%] 34654/34654 ETA 0m00s file.jpg  (comparing duplicates)",
+    "Comparison complete",
+  ]);
+  assert.equal(stuck.indeterminate, true);
+  assert.equal(stuck.label, "Finishing comparison");
+
+  const saving = parseScanProgress([
+    "[ 100%] 10/10 ETA 0m00s file.jpg  (comparing duplicates)",
+    "[scan] Finishing up…",
+    "[scan] Processing results…",
+  ]);
+  assert.equal(saving.label, "Processing results");
+  assert.equal(saving.indeterminate, true);
+
+  const immich = parseScanProgress([
+    "[scan] Finishing up…",
+    "[scan] Processing results…",
+    "[scan] Matching Immich library…",
+  ]);
+  assert.equal(immich.label, "Matching Immich assets");
+});

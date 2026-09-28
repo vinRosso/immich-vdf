@@ -38,6 +38,15 @@ export function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
+export function formatMediaDate(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = date.toLocaleDateString("en-GB", { month: "short" });
+  return `${day} ${month} ${date.getFullYear()}`;
+}
+
 export function formatClock(iso: string | null): string {
   if (!iso) return "Never";
   const date = new Date(iso);

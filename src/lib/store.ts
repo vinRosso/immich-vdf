@@ -3,6 +3,7 @@ import { loadConfig, suggestFfmpegConcurrency } from "./config";
 import { exclusive, readJson, writeJson } from "./json-file";
 import { defaultScan } from "./scan-defaults";
 import type { IgnoredEntry, RunRecord, RunsFile, SectionId, Settings, StoredResults } from "./types";
+import type { InventoryEntry } from "./scan-inventory";
 
 export { defaultScan } from "./scan-defaults";
 
@@ -178,6 +179,20 @@ export async function patchRun(section: SectionId, patch: Partial<RunRecord>): P
 
 export function sectionDbDir(section: SectionId): string {
   return path.join(loadConfig().dataDir, "db", section);
+}
+
+type StoredInventoryFile = { entries: InventoryEntry[] };
+
+function inventoryPath(section: SectionId): string {
+  return path.join(loadConfig().dataDir, "inventory", `${section}.json`);
+}
+
+export function loadStoredInventory(section: SectionId): Promise<InventoryEntry[] | null> {
+  return readJson<StoredInventoryFile | null>(inventoryPath(section), null).then((file) => file?.entries ?? null);
+}
+
+export function saveStoredInventory(section: SectionId, entries: InventoryEntry[]): Promise<void> {
+  return exclusive(() => writeJson(inventoryPath(section), { entries }));
 }
 
 export function secretValues(settings: Settings): string[] {
