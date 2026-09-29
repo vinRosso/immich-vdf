@@ -20,6 +20,7 @@ import {
   sessionSecret,
 } from "../lib/session";
 import { loadResults, loadSettings, secretValues } from "../lib/store";
+import { ThumbnailCancelled } from "../lib/thumbs";
 import { HttpUrlError } from "../lib/urls";
 import { trashThumbFile } from "../lib/trash";
 import { sectionParam, streamMedia, thumbnailFile } from "./media";
@@ -75,6 +76,10 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
           requiredQuery(url, "path"),
           url.searchParams.get("kind") || "poster",
           Number(url.searchParams.get("index") || 0),
+          {
+            priority: url.searchParams.get("priority") === "viewer" ? "viewer" : "thumbnail",
+            signal: clientAbortSignal(request, response),
+          },
         );
         await sendStatic(request, response, file);
       }
@@ -85,8 +90,8 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       return true;
     }
   } catch (error) {
-    if (response.headersSent) {
-      response.end();
+    if (response.headersSent || error instanceof ThumbnailCancelled) {
+      if (!response.writableEnded) response.end();
       return true;
     }
     const known = error instanceof AppError || error instanceof PathJailError || error instanceof HttpUrlError;
@@ -159,6 +164,16 @@ function events(request: IncomingMessage, response: ServerResponse): void {
     clearInterval(timer);
     unsubscribe();
   });
+}
+
+function clientAbortSignal(request: IncomingMessage, response: ServerResponse): AbortSignal {
+  const controller = new AbortController();
+  const stop = () => {
+    if (!response.writableFinished) controller.abort();
+  };
+  request.on("aborted", stop);
+  response.on("close", stop);
+  return controller.signal;
 }
 
 async function proxyImmichThumb(request: IncomingMessage, response: ServerResponse, assetId: string): Promise<void> {

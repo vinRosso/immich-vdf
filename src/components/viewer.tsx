@@ -356,6 +356,9 @@ export function Viewer({
             ) : null}
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <div className="relative flex min-h-8 flex-wrap items-center gap-2">
+              <span className="relative z-10 shrink-0 text-sm tabular-nums text-muted-foreground">
+                {selected.size > 0 ? `${selected.size} of ${group.items.length} selected` : `${group.items.length} items`}
+              </span>
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="pointer-events-auto flex flex-wrap justify-center gap-2">
                   {immich ? (

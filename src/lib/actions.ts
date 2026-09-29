@@ -16,6 +16,7 @@ import {
   type ImmichUser,
 } from "./immich";
 import { pickPrimaryIndex } from "./primary";
+import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
 import { resolveInside } from "./path-jail";
 import { loadConfig } from "./config";
 import { loadIgnored, loadResults, loadSettings, saveIgnored, saveResults } from "./store";
@@ -112,6 +113,7 @@ export async function ignoreGroup(section: SectionId, groupId: string): Promise<
     labels: group.items.map((item) => baseName(item.path)),
   });
   await saveIgnored(section, entries);
+  await cancelThumbJobs(section, group.items.map((item) => item.path));
 }
 
 export async function restoreIgnored(section: SectionId, key: string): Promise<void> {
@@ -371,6 +373,7 @@ function requireImmich(baseUrl: string, apiKey: string): void {
 
 async function commitServerTrash(results: StoredResults, victims: string[]): Promise<number> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
+  cancelThumbWork(victims);
   const moved = await moveToTrash(victims);
   await saveResults("server", dropItems(results, (item) => victims.includes(item.path)));
   return moved;
@@ -378,6 +381,11 @@ async function commitServerTrash(results: StoredResults, victims: string[]): Pro
 
 async function commitImmichTrash(baseUrl: string, apiKey: string, results: StoredResults, victims: string[]): Promise<number> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
+  const victimPaths = results.groups
+    .flatMap((group) => group.items)
+    .filter((item) => item.assetId && victims.includes(item.assetId))
+    .map((item) => item.path);
+  await cancelThumbJobs("immich", victimPaths);
   await trashAssets(baseUrl, apiKey, victims);
   await saveResults("immich", dropItems(results, (item) => item.assetId !== null && victims.includes(item.assetId)));
   return victims.length;

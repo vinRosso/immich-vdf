@@ -12,7 +12,8 @@ import { claimPlayback } from "../lib/playback-sessions";
 import { ffmpegBin, probeFile } from "../lib/probe";
 import { parseByteRange } from "../lib/range";
 import { loadResults, loadSettings } from "../lib/store";
-import { ensurePoster, ensureStrip } from "../lib/thumbs";
+import { thumbRequestSignal } from "../lib/thumb-sessions";
+import { ensurePoster, ensureStrip, sectionParallelism } from "../lib/thumbs";
 import type { SectionId } from "../lib/types";
 
 export async function streamMedia(
@@ -167,11 +168,24 @@ function pipeRange(request: IncomingMessage, response: ServerResponse, file: str
   response.on("close", stop);
 }
 
-export async function thumbnailFile(section: SectionId, filePath: string, kind: string, index: number): Promise<string> {
+export async function thumbnailFile(
+  section: SectionId,
+  filePath: string,
+  kind: string,
+  index: number,
+  options?: { priority?: "viewer" | "thumbnail"; signal?: AbortSignal },
+): Promise<string> {
   const real = await realResultPath(section, filePath);
-  if (kind === "poster") return ensurePoster(real);
-  if (kind === "strip") return ensureStrip(real, index);
-  throw new AppError("Unknown thumbnail");
+  const parallelism = await sectionParallelism(section);
+  const session = thumbRequestSignal(real, options?.signal);
+  try {
+    const render = { ...options, signal: session.signal };
+    if (kind === "poster") return await ensurePoster(real, parallelism, render);
+    if (kind === "strip") return await ensureStrip(real, index, parallelism, render);
+    throw new AppError("Unknown thumbnail");
+  } finally {
+    session.release();
+  }
 }
 
 export function sectionParam(value: string | null): SectionId {

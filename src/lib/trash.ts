@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config";
 import { AppError } from "./errors";
 import { addTrashFreed, clearTrashAdded, forgetTrashAdded, loadTrashAdded, loadTrashStats, rememberTrashAdded, rememberTrashAddedMany, trashAddedKey } from "./store";
-import { ensurePoster } from "./thumbs";
+import { ensurePoster, sectionParallelism } from "./thumbs";
 import { containingRoot, isInside, PathJailError, resolveInside } from "./path-jail";
 import type { TrashEntry } from "./types";
 
@@ -119,7 +119,7 @@ export async function trashThumbFile(mount: string, relative: string): Promise<{
   const ext = path.extname(file).toLowerCase();
   const imageType = TRASH_MEDIA_TYPES[ext];
   if (imageType?.startsWith("image/")) return { file, contentType: imageType };
-  const poster = await ensurePoster(file);
+  const poster = await ensurePoster(file, await sectionParallelism("server"));
   return { file: poster, contentType: "image/jpeg" };
 }
 
