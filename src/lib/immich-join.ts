@@ -1,3 +1,4 @@
+import type { ImmichAsset } from "./immich";
 import type { PathMapEntry, StoredGroup, StoredItem } from "./types";
 
 function slash(value: string): string {
@@ -44,20 +45,14 @@ export function originalPathToCli(originalPath: string, maps: PathMapEntry[]): s
   return null;
 }
 
-export function matchAsset(
-  originalPath: string | null,
-  assets: { id: string; originalPath: string }[],
-): { id: string; originalPath: string } | null {
+export function matchAsset(originalPath: string | null, assets: ImmichAsset[]): ImmichAsset | null {
   if (!originalPath) return null;
   const want = slash(originalPath);
   return assets.find((asset) => slash(asset.originalPath) === want) ?? null;
 }
 
-function buildCliIndex(
-  assets: { id: string; originalPath: string }[],
-  maps: PathMapEntry[],
-): Map<string, { id: string; originalPath: string }> {
-  const index = new Map<string, { id: string; originalPath: string }>();
+function buildCliIndex(assets: ImmichAsset[], maps: PathMapEntry[]): Map<string, ImmichAsset> {
+  const index = new Map<string, ImmichAsset>();
   for (const asset of assets) {
     const original = normalizePath(asset.originalPath);
     index.set(original, asset);
@@ -83,11 +78,7 @@ export function originalPathsForGroups(groups: StoredGroup[], maps: PathMapEntry
   return paths;
 }
 
-export function attachAssets(
-  groups: StoredGroup[],
-  assets: { id: string; originalPath: string }[],
-  maps: PathMapEntry[],
-): StoredGroup[] {
+export function attachAssets(groups: StoredGroup[], assets: ImmichAsset[], maps: PathMapEntry[]): StoredGroup[] {
   const byCliPath = buildCliIndex(assets, maps);
   return groups.map((group) => ({
     ...group,
@@ -95,10 +86,39 @@ export function attachAssets(
   }));
 }
 
+function itemInImmichTrash(
+  item: StoredItem,
+  trashedIds: ReadonlySet<string>,
+  trashedPaths: ReadonlySet<string>,
+  maps: PathMapEntry[],
+): boolean {
+  if (item.assetId && trashedIds.has(item.assetId)) return true;
+  const candidates = [item.originalPath, cliPathToOriginal(item.path, maps), item.path].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+  return candidates.some((value) => trashedPaths.has(normalizePath(value)));
+}
+
+/** Remove items linked to Immich-trashed assets; drop groups that no longer have duplicates. */
+export function dropImmichTrashedFromGroups(
+  groups: StoredGroup[],
+  trashedIds: ReadonlySet<string>,
+  maps: PathMapEntry[] = [],
+  trashedPaths: ReadonlySet<string> = new Set(),
+): StoredGroup[] {
+  if (trashedIds.size === 0 && trashedPaths.size === 0) return groups;
+  const kept: StoredGroup[] = [];
+  for (const group of groups) {
+    const items = group.items.filter((item) => !itemInImmichTrash(item, trashedIds, trashedPaths, maps));
+    if (items.length >= 2) kept.push({ ...group, items });
+  }
+  return kept;
+}
+
 function decorate(
   item: StoredItem,
-  byCliPath: Map<string, { id: string; originalPath: string }>,
-  assets: { id: string; originalPath: string }[],
+  byCliPath: Map<string, ImmichAsset>,
+  assets: ImmichAsset[],
   maps: PathMapEntry[],
 ): StoredItem {
   const cliKey = normalizePath(item.path);
@@ -109,5 +129,7 @@ function decorate(
     ...item,
     originalPath,
     assetId: asset?.id ?? null,
+    stackId: asset?.stackId ?? null,
+    stackPrimary: Boolean(asset?.stackPrimary),
   };
 }

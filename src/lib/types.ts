@@ -14,6 +14,8 @@ export type ScanSettings = {
   compareHorizontallyFlipped: boolean;
   ignoreBlackPixels: boolean;
   ignoreWhitePixels: boolean;
+  /** 0 compares the whole library. Otherwise the capture-time window length in days. */
+  timeWindowDays: number;
 };
 
 export type ScheduleSettings = {
@@ -31,7 +33,6 @@ export type PathMapEntry = {
 export type Settings = {
   server: {
     scan: ScanSettings;
-    ffmpegConcurrency: number;
     schedule: ScheduleSettings;
   };
   immich: {
@@ -59,7 +60,6 @@ export type PublicSettings = {
 export type SettingsUpdate = {
   server?: {
     scan?: Partial<ScanSettings>;
-    ffmpegConcurrency?: number;
     schedule?: Partial<ScheduleSettings>;
   };
   immich?: {
@@ -93,6 +93,9 @@ export type StoredItem = {
   fps: number;
   assetId: string | null;
   originalPath: string | null;
+  /** Immich stack this asset already belongs to. Missing on scans from before stacks were recorded. */
+  stackId?: string | null;
+  stackPrimary?: boolean;
 };
 
 export type StoredGroup = {
@@ -102,6 +105,8 @@ export type StoredGroup = {
 
 export type StoredResults = {
   finishedAt: string;
+  /** Wall-clock milliseconds from scan start to finish. Missing on scans from before this was recorded. */
+  durationMs?: number | null;
   error: string | null;
   warning: string | null;
   groups: StoredGroup[];
@@ -109,6 +114,8 @@ export type StoredResults = {
   compareFingerprint?: string | null;
   compareInventoryFingerprint?: string | null;
   compareSettingsFingerprint?: string | null;
+  /** Window used for the last compare. 0 is the whole library. */
+  compareTimeWindowDays?: number | null;
 };
 
 export type IgnoredEntry = {
@@ -157,6 +164,8 @@ export type ClientItem = {
   fps: number;
   assetId: string | null;
   originalPath: string | null;
+  stackId: string | null;
+  stackPrimary: boolean;
   matched: boolean;
   isPrimary: boolean;
 };
@@ -179,6 +188,7 @@ export type ResultsResponse = {
   section: SectionId;
   scanned: boolean;
   finishedAt: string | null;
+  durationMs: number | null;
   error: string | null;
   warning: string | null;
   hiddenIgnored: number;
@@ -188,7 +198,7 @@ export type ResultsResponse = {
 
 export type RuntimeInfo = {
   cpuCount: number;
-  suggestedFfmpegConcurrency: number;
+  maxParallelism: number;
   suggestedParallelism: number;
   mediaRoots: string[];
   immichLibrary: string;
@@ -196,8 +206,6 @@ export type RuntimeInfo = {
   cliAvailable: boolean;
   cliPath: string;
   cliVersion: string | null;
-  latestVersion: string | null;
-  updateAvailable: boolean;
   serverTimeZone: string;
 };
 

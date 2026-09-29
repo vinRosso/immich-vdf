@@ -1,5 +1,6 @@
-import { compareRelease, latestStableVersion, readCliVersion } from "./cli-release";
-import { cliAvailable, loadConfig, resolveVdfCli, suggestFfmpegConcurrency, suggestScanParallelism } from "./config";
+import { readCliVersion } from "./cli-release";
+import { cliAvailable, loadConfig, resolveVdfCli } from "./config";
+import { maxScanParallelism, suggestScanParallelism } from "./scan-parallelism";
 import { resolveImmichScanRoots } from "./immich-mounts";
 import { resolveImmichPathMapSync } from "./immich-path-map";
 import { nextOccurrence } from "./schedule";
@@ -11,14 +12,13 @@ export async function runtimeInfo(): Promise<RuntimeInfo> {
   const settings = await loadSettings();
   const cliPath = resolveVdfCli(config);
   const available = cliAvailable(cliPath);
-  const [cliVersion, latestVersion, immichScanRoots] = await Promise.all([
+  const [cliVersion, immichScanRoots] = await Promise.all([
     available ? readCliVersion(cliPath) : Promise.resolve(null),
-    latestStableVersion().catch(() => null),
     resolveImmichScanRoots({ baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey }),
   ]);
   return {
     cpuCount: config.cpuCount,
-    suggestedFfmpegConcurrency: suggestFfmpegConcurrency(config.cpuCount),
+    maxParallelism: maxScanParallelism(config.cpuCount),
     suggestedParallelism: suggestScanParallelism(config.cpuCount),
     mediaRoots: config.mediaRoots,
     immichLibrary: config.immichLibrary,
@@ -26,8 +26,6 @@ export async function runtimeInfo(): Promise<RuntimeInfo> {
     cliAvailable: available,
     cliPath,
     cliVersion,
-    latestVersion,
-    updateAvailable: compareRelease(cliVersion, latestVersion) === "update",
     serverTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   };
 }

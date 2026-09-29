@@ -17,7 +17,7 @@ export function ResultGroupCard({
 }) {
   const best = group.items.find((item) => item.isPrimary) ?? group.items[0];
   return (
-    <div className="group/card relative overflow-hidden rounded-xl bg-black ring-1 ring-foreground/10 transition hover:ring-primary/60">
+    <div className="group/card relative h-full overflow-hidden rounded-xl bg-black ring-1 ring-foreground/10 transition hover:ring-primary/60">
       <button type="button" onClick={onSelect} className="block w-full text-left">
         <PosterImage src={posterSrc(section, best)} />
         <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/85 to-transparent px-3 pt-10 pb-2.5 text-sm text-white">
@@ -28,6 +28,11 @@ export function ResultGroupCard({
       <span className="pointer-events-none absolute top-2 left-2 flex size-[1.875rem] items-center justify-center rounded-full bg-background/90 text-xs font-semibold tabular-nums text-foreground shadow-sm">
         {group.items.length}
       </span>
+      {group.items.some((item) => item.stackId) ? (
+        <span className="pointer-events-none absolute top-2 left-12 rounded-full bg-background/90 px-2 py-1 text-[10px] font-semibold tracking-wide text-foreground uppercase shadow-sm">
+          Stack
+        </span>
+      ) : null}
       <div className="absolute top-2 right-2" onClick={(event) => event.stopPropagation()}>
         {topRight}
       </div>
@@ -58,7 +63,7 @@ export function posterSrc(section: SectionId, item: ClientGroup["items"][number]
 }
 
 export function similarityRange(group: ClientGroup): string {
-  const values = group.items.map((item) => item.similarity);
+  const values = group.items.map((item) => item.similarity).filter((value) => Number.isFinite(value));
   const min = Math.round(Math.min(...values));
   const max = Math.round(Math.max(...values));
   if (!Number.isFinite(min) || !Number.isFinite(max)) return "—";

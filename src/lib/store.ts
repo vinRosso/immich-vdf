@@ -1,8 +1,11 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
-import { loadConfig, suggestFfmpegConcurrency } from "./config";
+import { loadConfig } from "./config";
+import { clampScanParallelism } from "./scan-parallelism";
 import { exclusive, readJson, writeJson } from "./json-file";
 import { defaultScan } from "./scan-defaults";
-import type { IgnoredEntry, RunRecord, RunsFile, SectionId, Settings, StoredResults } from "./types";
+import { membershipFromResults, type ResultsMembership } from "./results-membership";
+import type { IgnoredEntry, RunRecord, RunsFile, ScanSettings, SectionId, Settings, StoredResults } from "./types";
 import type { InventoryEntry } from "./scan-inventory";
 
 export { defaultScan } from "./scan-defaults";
@@ -28,18 +31,16 @@ export function emptyRun(): RunRecord {
 }
 
 export function defaultSettings(): Settings {
-  const cores = loadConfig().cpuCount;
   return {
     server: {
-      scan: defaultScan(),
-      ffmpegConcurrency: suggestFfmpegConcurrency(cores),
+      scan: defaultScan("server", loadConfig().cpuCount),
       schedule: defaultSchedule(),
     },
     immich: {
       baseUrl: "",
       apiKey: "",
       pathMap: [],
-      scan: defaultScan(),
+      scan: defaultScan("immich", loadConfig().cpuCount),
       schedule: defaultSchedule(),
     },
     webhookUrl: "",
@@ -120,8 +121,56 @@ export function addTrashFreed(bytes: number): Promise<TrashStats> {
   });
 }
 
+type StoredSettingsFile = {
+  server?: {
+    scan?: Partial<ScanSettings>;
+    ffmpegConcurrency?: number;
+    schedule?: Partial<Settings["server"]["schedule"]>;
+  };
+  immich?: {
+    baseUrl?: string;
+    apiKey?: string;
+    pathMap?: Settings["immich"]["pathMap"];
+    scan?: Partial<ScanSettings>;
+    schedule?: Partial<Settings["immich"]["schedule"]>;
+  };
+  webhookUrl?: string;
+};
+
+/** Drop the old thumbnail-jobs field and keep Parallel inside this machine's ceiling. */
+export function normalizeStoredSettings(raw: StoredSettingsFile | null | undefined): Settings {
+  const defaults = defaultSettings();
+  if (!raw) return defaults;
+  const cores = loadConfig().cpuCount;
+  const serverScan = normalizeScanParallelism(defaults.server.scan, raw.server?.scan, cores);
+  const legacyJobs = raw.server?.ffmpegConcurrency;
+  if (typeof legacyJobs === "number" && raw.server?.scan?.parallelism === 1) {
+    serverScan.parallelism = clampScanParallelism(legacyJobs, cores);
+  }
+  return {
+    server: {
+      scan: serverScan,
+      schedule: { ...defaults.server.schedule, ...raw.server?.schedule },
+    },
+    immich: {
+      ...defaults.immich,
+      ...raw.immich,
+      scan: normalizeScanParallelism(defaults.immich.scan, raw.immich?.scan, cores),
+      schedule: { ...defaults.immich.schedule, ...raw.immich?.schedule },
+      pathMap: raw.immich?.pathMap ?? defaults.immich.pathMap,
+    },
+    webhookUrl: typeof raw.webhookUrl === "string" ? raw.webhookUrl : defaults.webhookUrl,
+  };
+}
+
+function normalizeScanParallelism(fallback: ScanSettings, patch: Partial<ScanSettings> | undefined, cores: number): ScanSettings {
+  const scan = { ...fallback, ...patch };
+  scan.parallelism = clampScanParallelism(scan.parallelism, cores);
+  return scan;
+}
+
 export function loadSettings(): Promise<Settings> {
-  return readJson(settingsPath(), defaultSettings());
+  return readJson<StoredSettingsFile | null>(settingsPath(), null).then((raw) => normalizeStoredSettings(raw));
 }
 
 export function saveSettings(settings: Settings): Promise<void> {
@@ -141,8 +190,33 @@ export function loadResults(section: SectionId): Promise<StoredResults | null> {
   return readJson<StoredResults | null>(resultsPath(section), null);
 }
 
+type CachedMembership = ResultsMembership & { stamp: string; found: boolean };
+const membershipCache = new Map<SectionId, CachedMembership>();
+
+/** Asset ids and paths for the current results file. Rebuilt when the file changes. */
+export async function resultsMembership(section: SectionId): Promise<CachedMembership> {
+  const file = resultsPath(section);
+  let stamp = "missing";
+  try {
+    const info = await stat(file);
+    stamp = `${info.mtimeMs}:${info.size}`;
+  } catch {
+    stamp = "missing";
+  }
+  const hit = membershipCache.get(section);
+  if (hit?.stamp === stamp) return hit;
+  const found = stamp !== "missing";
+  const membership = found ? membershipFromResults(await loadResults(section)) : membershipFromResults(null);
+  const next = { stamp, found, ...membership };
+  membershipCache.set(section, next);
+  return next;
+}
+
 export function saveResults(section: SectionId, results: StoredResults): Promise<void> {
-  return exclusive(() => writeJson(resultsPath(section), results));
+  return exclusive(async () => {
+    await writeJson(resultsPath(section), results);
+    membershipCache.delete(section);
+  });
 }
 
 export function loadIgnored(section: SectionId): Promise<IgnoredEntry[]> {

@@ -1,6 +1,7 @@
 import { loadConfig } from "./config";
+import { maxScanParallelism } from "./scan-parallelism";
 import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
-import { immichScanFolderPlan } from "./immich-scan-scope";
+import { IMMICH_GENERATED_DIRS, immichScanFolderPlan } from "./immich-scan-scope";
 import { AppError } from "./errors";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { resolveInside } from "./path-jail";
@@ -12,10 +13,7 @@ import type { ScanSettings, ScheduleSettings, SectionId, Settings, SettingsUpdat
 export async function applySettingsUpdate(current: Settings, update: SettingsUpdate): Promise<Settings> {
   const next: Settings = structuredClone(current);
   if (update.server) {
-    next.server.scan = mergeScan(next.server.scan, update.server.scan);
-    if (update.server.ffmpegConcurrency !== undefined) {
-      next.server.ffmpegConcurrency = integerIn(update.server.ffmpegConcurrency, 1, 8, "FFmpeg concurrency");
-    }
+    next.server.scan = mergeScan(next.server.scan, update.server.scan, "server");
     next.server.schedule = mergeSchedule(next.server.schedule, update.server.schedule);
     await jailScan("server", next.server.scan);
   }
@@ -23,7 +21,7 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
     if (update.immich.baseUrl !== undefined) next.immich.baseUrl = cleanBaseUrl(update.immich.baseUrl);
     if (update.immich.clearApiKey) next.immich.apiKey = "";
     else if (update.immich.apiKey) next.immich.apiKey = update.immich.apiKey.trim().slice(0, 2000);
-    next.immich.scan = mergeScan(next.immich.scan, update.immich.scan);
+    next.immich.scan = mergeScan(next.immich.scan, update.immich.scan, "immich");
     next.immich.schedule = mergeSchedule(next.immich.schedule, update.immich.schedule);
     const creds: ImmichCredentials = { baseUrl: next.immich.baseUrl, apiKey: next.immich.apiKey };
     await jailScan("immich", next.immich.scan, creds);
@@ -34,15 +32,20 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
   return next;
 }
 
-function mergeScan(current: ScanSettings, patch: Partial<ScanSettings> | undefined): ScanSettings {
-  const next = { ...defaultScan(), ...current, ...patch };
+function mergeScan(
+  current: ScanSettings,
+  patch: Partial<ScanSettings> | undefined,
+  section: SectionId,
+): ScanSettings {
+  const next = { ...defaultScan(section), ...current, ...patch };
   next.threshold = integerIn(next.threshold, 0, 10, "Threshold");
   if (!Number.isFinite(next.percent) || next.percent < 0 || next.percent > 100) {
     throw new AppError("Percent must be between 0 and 100");
   }
-  next.parallelism = integerIn(next.parallelism, 1, 32, "Parallelism");
-  next.includes = stringList(next.includes.filter((entry) => entry.trim()), "Include folders");
-  next.excludes = stringList(next.excludes.filter((entry) => entry.trim()), "Exclude folders");
+  next.parallelism = integerIn(next.parallelism, 1, maxScanParallelism(loadConfig().cpuCount), "Parallelism");
+  next.includes = stringList(dedupePaths(next.includes.filter((entry) => entry.trim())), "Include folders");
+  const excludes = section === "immich" ? stripImmichGeneratedExcludes(next.excludes, loadConfig().immichLibrary) : next.excludes;
+  next.excludes = stringList(dedupePaths(excludes.filter((entry) => entry.trim())), "Exclude folders");
   next.includeImages = Boolean(next.includeImages);
   next.usePhash = Boolean(next.usePhash);
   next.partialClip = Boolean(next.partialClip);
@@ -51,6 +54,10 @@ function mergeScan(current: ScanSettings, patch: Partial<ScanSettings> | undefin
   next.compareHorizontallyFlipped = Boolean(next.compareHorizontallyFlipped);
   next.ignoreBlackPixels = Boolean(next.ignoreBlackPixels);
   next.ignoreWhitePixels = Boolean(next.ignoreWhitePixels);
+  if (!Number.isFinite(next.timeWindowDays) || next.timeWindowDays < 0) {
+    throw new AppError("Time window must be 0 (all) or at least 1 day");
+  }
+  next.timeWindowDays = next.timeWindowDays === 0 ? 0 : Math.max(1, Math.round(next.timeWindowDays));
   return next;
 }
 
@@ -84,15 +91,51 @@ async function jailScan(section: SectionId, scan: ScanSettings, immichCreds?: Im
   const includes: string[] = [];
   for (const folder of includeSources) includes.push(await resolveInside(roots, folder));
   const excludes: string[] = [];
-  for (const folder of [...scan.excludes, ...extraExcludes]) {
+  for (const folder of scan.excludes) {
     try {
       excludes.push(await resolveInside(roots, folder));
     } catch {
       // Skip excludes that are not on the mount.
     }
   }
+  for (const folder of extraExcludes) {
+    try {
+      await resolveInside(roots, folder);
+    } catch {
+      // Immich generated dirs may be absent on the mount; scan still adds them at runtime.
+    }
+  }
   scan.includes = includes;
   scan.excludes = excludes;
+}
+
+function slash(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function dedupePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of paths) {
+    const key = slash(entry).toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry.trim());
+  }
+  return out;
+}
+
+/** Drop Immich auto-excludes that were mistakenly persisted on older saves. */
+function stripImmichGeneratedExcludes(excludes: string[], libraryMount: string): string[] {
+  const mount = slash(libraryMount).toLowerCase();
+  if (!mount) return excludes;
+  return excludes.filter((entry) => {
+    const normalized = slash(entry).toLowerCase();
+    for (const name of IMMICH_GENERATED_DIRS) {
+      if (normalized === `${mount}/${name}`) return false;
+    }
+    return true;
+  });
 }
 
 function stringList(value: string[], label: string): string[] {

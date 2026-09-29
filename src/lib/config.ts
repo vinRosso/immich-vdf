@@ -2,6 +2,9 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { clampScanParallelism, maxScanParallelism, suggestScanParallelism } from "./scan-parallelism";
+
+export { clampScanParallelism, maxScanParallelism, suggestScanParallelism };
 
 export type ImmichBind = { containerPath: string; hostPath: string };
 
@@ -22,15 +25,6 @@ export type AppConfig = {
   trustedProxy: string;
   cpuCount: number;
 };
-
-export function suggestFfmpegConcurrency(cores: number): number {
-  return Math.min(4, Math.max(1, Math.floor(cores / 2)));
-}
-
-/** Hashing parallelism: leave headroom for thumbnails and the OS. */
-export function suggestScanParallelism(cores: number): number {
-  return Math.min(8, Math.max(1, Math.floor(cores / 4)));
-}
 
 export function loadConfig(): AppConfig {
   const cwd = process.cwd();

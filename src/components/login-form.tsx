@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { safeLoginNext } from "@/lib/auth-redirect";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,9 +10,27 @@ import { Label } from "@/components/ui/label";
 
 export function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const afterLogin = safeLoginNext(searchParams.get("next")) ?? "/";
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/session")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { authed?: boolean } | null) => {
+        if (cancelled || !body?.authed) return;
+        router.replace(afterLogin);
+      })
+      .catch(() => {
+        // Server not running or network error — stay on the sign-in form.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [afterLogin, router]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -25,10 +44,14 @@ export function LoginForm() {
       });
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(body.error || "Sign-in failed");
-      router.replace("/");
+      router.replace(afterLogin);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign-in failed");
+      if (err instanceof TypeError) {
+        setError("Cannot reach the app. Run npm run dev and open the URL it prints (default port 47821).");
+      } else {
+        setError(err instanceof Error ? err.message : "Sign-in failed");
+      }
     } finally {
       setPending(false);
     }

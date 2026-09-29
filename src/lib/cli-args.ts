@@ -27,6 +27,7 @@ function appendMatchFlags(args: string[], scan: ScanSettings): void {
   if (scan.partialClip) args.push("--partial-clip-detection");
   if (scan.aiMatching) args.push("--ai-matching");
   if (scan.aiPartial) args.push("--ai-partial");
+  if (scan.timeWindowDays > 0) args.push("--time-window-days", String(scan.timeWindowDays));
 }
 
 export function buildVdfScanArgs(scan: VdfScanParams): string[] {
@@ -88,6 +89,7 @@ export const REQUIRED_CLI_COMPARE_HELP = [
   "--settings",
   "--format",
   "--output",
+  "--time-window-days",
 ] as const;
 
 export const REQUIRED_CLI_HELP = [...REQUIRED_CLI_SCAN_HELP, ...REQUIRED_CLI_COMPARE_HELP] as const;

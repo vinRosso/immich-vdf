@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { api } from "@/components/api";
 import { formatDuration } from "@/lib/format";
 import { parseScanProgress } from "@/lib/scan-progress";
 import type { SectionId } from "@/lib/types";
@@ -10,26 +11,60 @@ type Snapshot = {
   section: SectionId | null;
   lines: string[];
   error: string | null;
+  startedAt: number;
 };
 
+function mergeStartedAt(next: number, running: boolean, prev: number): number {
+  if (!running) return 0;
+  if (next > 0) return next;
+  return prev > 0 ? prev : 0;
+}
+
+function applyStatus(prev: Snapshot, data: Partial<Snapshot> & Pick<Snapshot, "running">): Snapshot {
+  const running = data.running;
+  const startedAt = mergeStartedAt(data.startedAt ?? 0, running, prev.startedAt);
+  return {
+    running,
+    section: data.section !== undefined ? data.section : prev.section,
+    lines: data.lines ?? prev.lines,
+    error: data.error !== undefined ? data.error : prev.error,
+    startedAt,
+  };
+}
+
 export function useScanFeed(onDone: () => void) {
-  const [feed, setFeed] = useState<Snapshot>({ running: false, section: null, lines: [], error: null });
+  const [feed, setFeed] = useState<Snapshot>({ running: false, section: null, lines: [], error: null, startedAt: 0 });
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
 
   useEffect(() => {
+    void api<Snapshot>("/api/scan/status")
+      .then((data) => setFeed((prev) => applyStatus(prev, data)))
+      .catch(() => undefined);
+
     const source = new EventSource("/api/scan/events");
     source.addEventListener("snapshot", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as Snapshot;
-      setFeed({ running: data.running, section: data.section, lines: data.lines, error: data.error });
+      setFeed((prev) => applyStatus(prev, data));
     });
     source.addEventListener("log", (event) => {
-      const data = JSON.parse((event as MessageEvent).data) as { line: string };
-      setFeed((current) => ({ ...current, lines: [...current.lines, data.line].slice(-400) }));
+      const data = JSON.parse((event as MessageEvent).data) as { line: string; startedAt?: number };
+      setFeed((current) =>
+        applyStatus(current, {
+          running: current.running,
+          lines: [...current.lines, data.line].slice(-400),
+          startedAt: data.startedAt ?? 0,
+        }),
+      );
     });
     source.addEventListener("done", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as { error: string | null; running?: boolean };
-      setFeed((current) => ({ ...current, running: false, error: data.error }));
+      setFeed((current) => ({
+        ...current,
+        running: false,
+        error: data.error,
+        startedAt: 0,
+      }));
       onDoneRef.current();
     });
     return () => source.close();
@@ -38,16 +73,20 @@ export function useScanFeed(onDone: () => void) {
   return feed;
 }
 
-export function ScanLog({ lines, running }: { lines: string[]; running: boolean }) {
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+export function ScanLog({
+  lines,
+  running,
+  startedAtMs,
+}: {
+  lines: string[];
+  running: boolean;
+  /** Wall-clock start from the server scan manager (survives page reload). */
+  startedAtMs: number;
+}) {
   const [tick, setTick] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!running) {
-      setStartedAt(null);
-      return;
-    }
-    setStartedAt(Date.now());
+    if (!running) return;
     const id = window.setInterval(() => setTick(Date.now()), 500);
     return () => window.clearInterval(id);
   }, [running]);
@@ -55,15 +94,15 @@ export function ScanLog({ lines, running }: { lines: string[]; running: boolean 
   if (!running) return null;
 
   const progress = parseScanProgress(lines);
-  const elapsed =
-    startedAt === null ? null : formatDuration(Math.max(0, (tick - startedAt) / 1000));
+  const elapsedText =
+    startedAtMs > 0 ? formatDuration(Math.max(0, (tick - startedAtMs) / 1000)) : null;
 
   return (
     <div className="space-y-2 rounded-xl bg-black/40 px-4 py-3">
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className="font-medium text-foreground">{progress.label}</span>
         <span className="tabular-nums text-muted-foreground">
-          {elapsed ? `Elapsed ${elapsed}` : "Elapsed —"}
+          {elapsedText ? `Elapsed ${elapsedText}` : "Elapsed —"}
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-muted/80">

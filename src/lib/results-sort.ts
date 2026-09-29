@@ -106,19 +106,67 @@ export function resultsCardSizeStorageKey(section: string): string {
 
 export const DEFAULT_RESULTS_CARD_SIZE = 5;
 
+/** Column counts follow Tailwind's sm/lg/xl breakpoints. Gap is the default 16px root. */
+type ResultsGridSpec = {
+  className: string;
+  base: number;
+  sm: number;
+  lg: number;
+  xl: number;
+  gap: number;
+};
+
+const RESULTS_GRID_SPECS: Record<number, ResultsGridSpec> = {
+  1: { className: "grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-2", base: 1, sm: 1, lg: 2, xl: 2, gap: 16 },
+  2: { className: "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3", base: 1, sm: 2, lg: 2, xl: 3, gap: 16 },
+  3: { className: "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4", base: 1, sm: 2, lg: 3, xl: 4, gap: 16 },
+  4: { className: "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5", base: 2, sm: 3, lg: 4, xl: 5, gap: 12 },
+  5: { className: "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6", base: 2, sm: 4, lg: 5, xl: 6, gap: 8 },
+  6: { className: "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7", base: 2, sm: 4, lg: 5, xl: 7, gap: 8 },
+  7: { className: "grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7", base: 3, sm: 5, lg: 6, xl: 7, gap: 8 },
+  8: { className: "grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8", base: 3, sm: 5, lg: 6, xl: 8, gap: 6 },
+  9: { className: "grid grid-cols-3 gap-1.5 sm:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8", base: 3, sm: 6, lg: 7, xl: 8, gap: 6 },
+};
+
+function resultsGridSpec(cardSize: number): ResultsGridSpec {
+  const size = Math.min(9, Math.max(1, Math.round(cardSize)));
+  return RESULTS_GRID_SPECS[size] ?? RESULTS_GRID_SPECS[DEFAULT_RESULTS_CARD_SIZE];
+}
+
 /** 1 = largest cards, 9 = smallest. Default 5 matches the previous maximum density. */
 export function resultsCardGridClass(cardSize: number): string {
-  const size = Math.min(9, Math.max(1, Math.round(cardSize)));
-  const map: Record<number, string> = {
-    1: "grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-2",
-    2: "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3",
-    3: "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4",
-    4: "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
-    5: "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6",
-    6: "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7",
-    7: "grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7",
-    8: "grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8",
-    9: "grid grid-cols-3 gap-1.5 sm:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8",
-  };
-  return map[size];
+  return resultsGridSpec(cardSize).className;
+}
+
+/** Columns for the same breakpoints as `resultsCardGridClass`. */
+export function resultsGridColumns(cardSize: number, viewportWidth: number): number {
+  const spec = resultsGridSpec(cardSize);
+  if (viewportWidth >= 1280) return spec.xl;
+  if (viewportWidth >= 1024) return spec.lg;
+  if (viewportWidth >= 640) return spec.sm;
+  return spec.base;
+}
+
+export function resultsGridGap(cardSize: number): number {
+  return resultsGridSpec(cardSize).gap;
+}
+
+/** `endRow` is exclusive. */
+export function visibleRowRange(input: {
+  scrollTop: number;
+  viewportHeight: number;
+  gridTop: number;
+  rowStride: number;
+  rowCount: number;
+  overscan: number;
+}): { startRow: number; endRow: number } {
+  if (input.rowCount <= 0 || input.rowStride <= 0 || input.viewportHeight <= 0) return { startRow: 0, endRow: 0 };
+  const viewStart = input.scrollTop - input.gridTop;
+  const viewEnd = viewStart + input.viewportHeight;
+  let start = Math.floor(viewStart / input.rowStride) - input.overscan;
+  let end = Math.ceil(viewEnd / input.rowStride) + input.overscan;
+  if (start < 0) start = 0;
+  if (end > input.rowCount) end = input.rowCount;
+  if (end < start) end = start;
+  return { startRow: start, endRow: end };
 }

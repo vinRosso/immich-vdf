@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { cn } from "cn";
 import { api } from "@/components/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -65,14 +66,11 @@ export function FolderPicker({
   }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <HintWrap text={hint} className="flex min-w-0 flex-wrap items-center gap-2">
       <Button type="button" size="xs" variant="outline" onClick={() => setOpen(true)}>
         Browse
       </Button>
-      <span className="flex shrink-0 items-center gap-1 text-xs">
-        {label}
-        <Hint text={hint} />
-      </span>
+      <span className="shrink-0 text-xs">{label}</span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         {chosen.map((path) => (
           <Tooltip key={path}>
@@ -135,23 +133,20 @@ export function FolderPicker({
           </ul>
         </DialogContent>
       </Dialog>
-    </div>
+    </HintWrap>
   );
 }
 
-export function Hint({ text }: { text: string }) {
+/** Shows `text` when the user hovers the wrapped label or control. */
+export function HintWrap({ text, children, className }: { text: string; children: ReactNode; className?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex size-3.5 items-center justify-center rounded-full border border-border text-[9px] leading-none text-muted-foreground"
-          aria-label={text}
-        >
-          i
-        </button>
+        <span className={cn("cursor-help", className)} tabIndex={0}>
+          {children}
+        </span>
       </TooltipTrigger>
-      <TooltipContent side="top">{text}</TooltipContent>
+      <TooltipContent side="top" className="max-w-sm whitespace-normal">{text}</TooltipContent>
     </Tooltip>
   );
 }

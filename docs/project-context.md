@@ -9,28 +9,28 @@ Web UI for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinde
 1. **Files** — scan media on the host, compare duplicates, stream previews, move losers to `.vdf-trash/`.
 2. **Immich** — scan a read-only library mount, map paths to assets via API key, stack or trash duplicates through Immich.
 
-Deploy with Docker on a home server. Pull upstream VDF via the `upstream/` submodule and `scripts/update-upstream.sh` (no patches inside `upstream/`).
+Deploy with Docker on a home server: `docker compose up -d --build`. The image builds `vdf-cli` from `engine/`. There is no upstream submodule and no CLI download.
 
 ## Key docs
 
 - [vdf-web-plan.md](./vdf-web-plan.md) — full product and architecture plan.
-- [../README.md](../README.md) — deploy, env vars, local dev, upstream updates.
+- [../README.md](../README.md) — deploy, env vars, local dev.
+- [../FORK.md](../FORK.md) — vendored VDF commit.
 
 ## Repo layout
 
 | Path | Role |
 |------|------|
-| `upstream/` | Submodule, pinned VDF release tag |
+| `engine/` | Vendored VDF.Core and VDF.CLI (see FORK.md) |
 | `server.ts` | Custom Node server (scheduler, scans, streaming) |
 | `src/` | Next.js UI and API routes |
 | `fixtures/cli-results.json` | Parser contract for CI / Docker build |
-| `scripts/update-upstream.sh` | Bump submodule tag and rebuild |
 
 ## Local development (Windows)
 
 - Open this folder in Cursor.
-- `npm install`, copy `.env.example` → `.env`, `npm run dev` → http://localhost:47821
-- ffmpeg/ffprobe on PATH for thumbnails and playback; Docker for full `vdf-cli` scans.
+- `npm install`, copy `.env.example` → `.env`, `npm run build:cli` (`.NET 10 SDK`), set `VDF_CLI=./bin/vdf-cli/vdf-cli.exe`, `npm run dev` → http://localhost:47821
+- ffmpeg/ffprobe on PATH for thumbnails and playback; fork `vdf-cli` from `engine/` for scans (no official CLI download).
 - Clone on Windows use `C:\...\02_vdf-web` via `/mnt/c/...` in WSL is wrong; use real `C:\` paths in PowerShell.
 
 ## Origin remote
@@ -49,6 +49,6 @@ When we revisit speed, pre-remux browser-safe codecs in a non-MP4 container (for
 
 ## Agent conventions
 
-- Do not modify files under `upstream/`.
+- The engine in `engine/` is ours. Keep its AGPL copyright headers.
 - Minimize diff scope; match existing TypeScript and UI patterns.
 - Security: path jail, no shell string interpolation for paths, never return Immich API key to the client.

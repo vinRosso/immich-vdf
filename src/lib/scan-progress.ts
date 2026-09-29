@@ -15,12 +15,31 @@ const POST_COMPARE = [
   { test: /Finishing up/i, label: "Finishing up", detail: "Preparing your results…" },
 ] as const;
 
+const PROGRESS_COUNT_RE = /(\d+)\s*\/\s*(\d+)\s+(paths|images)\b/i;
+
+function progressCount(line: string): { current: number; total: number; noun: string } | null {
+  const count = line.match(PROGRESS_COUNT_RE);
+  if (!count) return null;
+  return { current: Number(count[1]), total: Number(count[2]), noun: count[3].toLowerCase() };
+}
+
+function progressCountDetail(line: string, fallback: string): string {
+  const count = progressCount(line);
+  if (!count) return fallback;
+  return `${count.current.toLocaleString()} of ${count.total.toLocaleString()} ${count.noun}`;
+}
+
 function postComparePhase(lines: string[]): ScanProgressInfo | null {
   for (const phase of POST_COMPARE) {
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (phase.test.test(lines[i])) {
-        return { percent: 100, label: phase.label, detail: phase.detail, indeterminate: true };
+      if (!phase.test.test(lines[i])) continue;
+      const count = progressCount(lines[i]);
+      const detail = progressCountDetail(lines[i], phase.detail);
+      if (!count || count.total <= 0) {
+        return { percent: 0, label: phase.label, detail, indeterminate: true };
       }
+      const percent = Math.min(100, Math.max(0, Math.round((count.current / count.total) * 100)));
+      return { percent, label: phase.label, detail, indeterminate: false };
     }
   }
   return null;

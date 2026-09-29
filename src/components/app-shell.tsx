@@ -5,7 +5,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "cn";
 import { api } from "@/components/api";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { TRASH_SAVED_EVENT } from "@/lib/trash-events";
 import { sectionLabel } from "@/lib/section-label";
@@ -24,7 +23,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const ignoredSection =
     pathname === "/ignored" ? (searchParams.get("section") === "immich" ? "immich" : "server") : null;
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
-  const [cliError, setCliError] = useState<string | null>(null);
   const [trashSavedBytes, setTrashSavedBytes] = useState<number | null>(null);
 
   function loadTrashSaved() {
@@ -37,7 +35,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return api<RuntimeInfo>("/api/runtime")
       .then((next) => {
         setRuntime(next);
-        setCliError(null);
       })
       .catch(() => {
         setRuntime(null);
@@ -99,7 +96,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {runtime && !runtime.cliAvailable ? (
                 <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
               ) : null}
-              {runtime?.cliVersion ? <CliRelease runtime={runtime} error={cliError} onError={setCliError} onUpdated={() => void loadRuntime()} /> : null}
+              {runtime?.cliVersion ? <span className="font-mono text-sm text-foreground/80">{runtime.cliVersion}</span> : null}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -148,48 +145,3 @@ function navActive(pathname: string, href: string, ignoredSection: SectionId | n
   return pathname === href;
 }
 
-function CliRelease({
-  runtime,
-  error,
-  onError,
-  onUpdated,
-}: {
-  runtime: RuntimeInfo;
-  error: string | null;
-  onError: (error: string | null) => void;
-  onUpdated: () => void;
-}) {
-  const [pending, setPending] = useState(false);
-
-  async function update() {
-    setPending(true);
-    onError(null);
-    try {
-      await api("/api/cli/update", { method: "POST" });
-      onUpdated();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not update vdf-cli");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="font-mono text-foreground/80">{runtime.cliVersion}</span>
-      {runtime.updateAvailable && runtime.latestVersion ? (
-        <>
-          <span className="text-amber-300">{runtime.latestVersion} available</span>
-          <Button size="sm" disabled={pending} onClick={() => void update()}>
-            {pending ? "Updating…" : "Update"}
-          </Button>
-        </>
-      ) : runtime.latestVersion ? (
-        <span className="text-primary">latest</span>
-      ) : (
-        <span className="text-amber-300">could not check for a newer release</span>
-      )}
-      {error ? <span className="text-destructive">{error}</span> : null}
-    </div>
-  );
-}

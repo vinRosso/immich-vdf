@@ -1,25 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestFfmpegConcurrency, suggestScanParallelism } from "../src/lib/config";
+import { maxScanParallelism, suggestScanParallelism } from "../src/lib/config";
 import { attachAssets, cliPathToOriginal, matchAsset } from "../src/lib/immich-join";
 import { likelyDirectPlayback, playbackMode, type ProbeSummary } from "../src/lib/playback";
 import { pickPrimaryIndex } from "../src/lib/primary";
 import { dueSlot, nextOccurrence } from "../src/lib/schedule";
 import type { ScheduleSettings, StoredGroup } from "../src/lib/types";
 
-test("ffmpeg concurrency suggestion is half the cores, clamped to 1..4", () => {
-  assert.equal(suggestFfmpegConcurrency(1), 1);
-  assert.equal(suggestFfmpegConcurrency(2), 1);
-  assert.equal(suggestFfmpegConcurrency(8), 4);
-  assert.equal(suggestFfmpegConcurrency(16), 4);
+test("scan parallelism is capped at three quarters of the cores", () => {
+  assert.equal(maxScanParallelism(1), 1);
+  assert.equal(maxScanParallelism(4), 3);
+  assert.equal(maxScanParallelism(8), 6);
+  assert.equal(maxScanParallelism(16), 12);
 });
 
-test("scan parallelism suggestion is a quarter of the cores, clamped to 1..8", () => {
+test("scan parallelism suggestion is a quarter of the cores, within the ceiling", () => {
   assert.equal(suggestScanParallelism(1), 1);
   assert.equal(suggestScanParallelism(4), 1);
   assert.equal(suggestScanParallelism(8), 2);
   assert.equal(suggestScanParallelism(20), 5);
-  assert.equal(suggestScanParallelism(40), 8);
+  assert.equal(suggestScanParallelism(40), 10);
 });
 
 test("primary prefers resolution, then video bitrate, then smaller size", () => {

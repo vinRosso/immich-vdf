@@ -46,7 +46,24 @@ test("parseScanProgress shows post-compare phases", () => {
     "[scan] Processing results…",
   ]);
   assert.equal(saving.label, "Processing results");
+  assert.equal(saving.detail, "Reading file metadata…");
   assert.equal(saving.indeterminate, true);
+
+  const paths = parseScanProgress([
+    "[scan] Processing results…",
+    "[scan] Processing results… 4000/20481 paths",
+  ]);
+  assert.equal(paths.detail, `${(4000).toLocaleString()} of ${(20481).toLocaleString()} paths`);
+  assert.equal(paths.indeterminate, false);
+  assert.equal(paths.percent, Math.round((4000 / 20481) * 100));
+
+  const images = parseScanProgress([
+    "[scan] Processing results… 20481/20481 paths",
+    "[scan] Processing results… 200/20481 images",
+  ]);
+  assert.equal(images.detail, `${(200).toLocaleString()} of ${(20481).toLocaleString()} images`);
+  assert.equal(images.indeterminate, false);
+  assert.equal(images.percent, Math.round((200 / 20481) * 100));
 
   const immich = parseScanProgress([
     "[scan] Finishing up…",

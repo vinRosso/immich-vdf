@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { loadEnvConfig } from "@next/env";
 import { REQUIRED_CLI_COMPARE_HELP, REQUIRED_CLI_SCAN_HELP } from "../src/lib/cli-args";
+import { loadConfig, resolveVdfCli } from "../src/lib/config";
 
-const cli = process.env.VDF_CLI || "vdf-cli";
+loadEnvConfig(process.cwd());
+const cli = resolveVdfCli(loadConfig());
 const command = spawnSync(cli, ["--help"], { encoding: "utf8" });
 const scan = spawnSync(cli, ["scan", "--help"], { encoding: "utf8" });
 const compare = spawnSync(cli, ["compare", "--help"], { encoding: "utf8" });

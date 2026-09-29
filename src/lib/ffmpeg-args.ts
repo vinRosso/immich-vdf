@@ -80,6 +80,22 @@ export function ffprobeArgs(file: string): string[] {
   return ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "--", file];
 }
 
+/** Bit depth only: first video stream, no format or extra streams. */
+export function ffprobeBitDepthArgs(file: string): string[] {
+  return [
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=codec_type,bits_per_raw_sample,pix_fmt",
+    "-of",
+    "json",
+    "--",
+    file,
+  ];
+}
+
 export const STRIP_FRAMES = 6;
 
 export function sampleTimes(duration: number, count: number): number[] {

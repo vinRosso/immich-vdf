@@ -1,8 +1,6 @@
 # VDF web for server and Immich
 
-Upstream [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder) already ships a desktop app, `vdf-cli`, and a Docker web UI (`ghcr.io/0x90d/vdf-web`). That web UI only scans local folders. This app does not fork it.
-
-VDF stays an unmodified git submodule at `upstream/`, pinned to a release tag (`v4.1.x`), not to `master`, so a daily upstream commit cannot break a rebuild. Our process runs `vdf-cli scan-and-compare --format json --output <file>`. Their code is AGPLv3; we do not patch it. Updating is `scripts/update-upstream.sh [tag]` (moves the submodule, then rebuilds) and `docker compose up -d`. The image build runs `vdf-cli --help` and parses a checked-in JSON fixture through our parser, so a CLI flag or output change fails the build instead of a scan at 3 a.m.
+This app is a fork of [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). `engine/` holds VDF.Core and VDF.CLI from v4.1.1 (`21ec967`). Deploy stays `docker compose up -d --build`: the image compiles that CLI, then the Next.js app. Their code is AGPLv3. The image build runs `vdf-cli --help` and parses a checked-in JSON fixture through our parser, so a CLI flag or output change fails the build instead of a scan at 3 a.m.
 
 Immich library is mounted on the same server (read-only). Immich deletes go through the API.
 
@@ -10,7 +8,7 @@ Immich library is mounted on the same server (read-only). Immich deletes go thro
 flowchart LR
   browser[Browser]
   app[Next.js app]
-  cli[vdf-cli from submodule]
+  cli[vdf-cli from engine]
   disk[Mounted media and Immich library]
   immich[Immich API]
   browser --> app
@@ -23,7 +21,7 @@ flowchart LR
 
 One Compose service, built from a multi-stage [Dockerfile](../Dockerfile):
 
-- Build `vdf-cli` from `upstream/` the same way as [VDF.CLI/Dockerfile](https://github.com/0x90d/videoduplicatefinder/blob/master/VDF.CLI/Dockerfile) (.NET 10).
+- Build `vdf-cli` from `engine/` (.NET 10). The runtime stage deletes `engine/` after publish so the image does not carry the C# sources.
 - Build the Next.js app.
 - Runtime image: .NET 10 runtime, Node, ffmpeg, and ffprobe from the distro. VDF runs ffmpeg in process mode; the native binding needs FFmpeg 8 shared libraries and is not used.
 
@@ -73,4 +71,4 @@ LAN or reverse proxy only. Path jail, no shell interpolation for CLI/ffmpeg, sec
 
 ## Not in this slice
 
-Multiple users, downloading originals over the API, automatic stack or delete on a schedule, pre-building HLS or DASH for the library, and any edit under `upstream/`.
+Multiple users, downloading originals over the API, automatic stack or delete on a schedule, and pre-building HLS or DASH for the library.

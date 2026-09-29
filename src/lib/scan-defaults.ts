@@ -1,13 +1,19 @@
-import type { ScanSettings } from "./types";
+import { suggestScanParallelism } from "./scan-parallelism";
+import type { ScanSettings, SectionId } from "./types";
 
-/** Defaults aligned with vdf-cli / VDF.Core Settings. */
-export function defaultScan(): ScanSettings {
+/** Capture-time compare window (days). Files: whole library; Immich: narrow near-duplicates. */
+export function defaultTimeWindowDays(section: SectionId): number {
+  return section === "immich" ? 7 : 0;
+}
+
+/** Defaults aligned with vdf-cli / VDF.Core Settings. Pass core count to set Parallel. */
+export function defaultScan(section: SectionId = "server", cores?: number): ScanSettings {
   return {
     includes: [],
     excludes: [],
     threshold: 5,
     percent: 96,
-    parallelism: 1,
+    parallelism: cores === undefined ? 1 : suggestScanParallelism(cores),
     includeImages: true,
     usePhash: false,
     partialClip: false,
@@ -16,9 +22,10 @@ export function defaultScan(): ScanSettings {
     compareHorizontallyFlipped: false,
     ignoreBlackPixels: false,
     ignoreWhitePixels: false,
+    timeWindowDays: defaultTimeWindowDays(section),
   };
 }
 
-export function normalizeScan(scan: Partial<ScanSettings>): ScanSettings {
-  return { ...defaultScan(), ...scan };
+export function normalizeScan(scan: Partial<ScanSettings>, section: SectionId = "server"): ScanSettings {
+  return { ...defaultScan(section), ...scan };
 }

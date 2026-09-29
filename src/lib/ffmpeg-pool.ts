@@ -1,3 +1,6 @@
+import { loadConfig } from "./config";
+import { maxScanParallelism } from "./scan-parallelism";
+
 type Job = () => Promise<void>;
 
 type Queued = {
@@ -30,17 +33,19 @@ export function resetFfmpegPoolForTests(): void {
 }
 
 export function ffmpegSlots(limit: number): number {
-  return Math.min(8, Math.max(1, Math.floor(limit)));
+  const max = maxScanParallelism(loadConfig().cpuCount);
+  const requested = Number.isFinite(limit) ? Math.floor(limit) : 1;
+  return Math.min(max, Math.max(1, requested));
 }
 
-/** Playback jobs run before thumbnails, and one slot stays free for them when more than one is allowed. */
+/** Playback runs first, then thumbnails for the open group, then card posters. One slot stays free for playback when more than one is allowed. */
 export function enqueueFfmpeg(
   limit: number,
   job: Job,
-  options?: { priority?: "playback" | "thumbnail"; signal?: AbortSignal },
+  options?: { priority?: "playback" | "viewer" | "thumbnail"; signal?: AbortSignal },
 ): Promise<void> {
   const pool = state();
-  const priority = options?.priority === "playback" ? 0 : 1;
+  const priority = options?.priority === "playback" ? 0 : options?.priority === "viewer" ? 1 : 2;
   const signal = options?.signal;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {

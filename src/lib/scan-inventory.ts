@@ -20,7 +20,9 @@ async function walkDir(
   excludeRoots: string[],
   seen: Set<string>,
   entries: InventoryEntry[],
+  shouldAbort?: () => boolean,
 ): Promise<void> {
+  if (shouldAbort?.()) return;
   const normDir = path.normalize(dir);
   if (isExcluded(normDir, excludeRoots)) return;
   let names: string[];
@@ -30,6 +32,7 @@ async function walkDir(
     return;
   }
   for (const name of names) {
+    if (shouldAbort?.()) return;
     const full = path.join(dir, name);
     const norm = path.normalize(full);
     if (isExcluded(norm, excludeRoots)) continue;
@@ -40,7 +43,7 @@ async function walkDir(
       continue;
     }
     if (info.isDirectory()) {
-      await walkDir(full, excludeRoots, seen, entries);
+      await walkDir(full, excludeRoots, seen, entries, shouldAbort);
       continue;
     }
     if (!info.isFile()) continue;
@@ -51,12 +54,17 @@ async function walkDir(
 }
 
 /** Walk include roots (minus exclude prefixes) the same way the scan job resolves paths. */
-export async function walkScanInventory(includes: string[], excludes: string[]): Promise<InventoryEntry[]> {
+export async function walkScanInventory(
+  includes: string[],
+  excludes: string[],
+  shouldAbort?: () => boolean,
+): Promise<InventoryEntry[]> {
   const excludeRoots = excludes.map((folder) => path.normalize(folder));
   const seen = new Set<string>();
   const entries: InventoryEntry[] = [];
   for (const include of includes) {
-    await walkDir(path.normalize(include), excludeRoots, seen, entries);
+    if (shouldAbort?.()) break;
+    await walkDir(path.normalize(include), excludeRoots, seen, entries, shouldAbort);
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
   return entries;
@@ -92,8 +100,14 @@ export function fingerprintMatchingSettings(scan: ScanSettings): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-export function combinedCompareFingerprint(inventoryFp: string, settingsFp: string): string {
-  return createHash("sha256").update(inventoryFp).update(":").update(settingsFp).digest("hex");
+export function combinedCompareFingerprint(inventoryFp: string, settingsFp: string, timeWindowDays = 0): string {
+  return createHash("sha256")
+    .update(inventoryFp)
+    .update(":")
+    .update(settingsFp)
+    .update(":")
+    .update(String(timeWindowDays))
+    .digest("hex");
 }
 
 export function countInventoryChanges(before: InventoryEntry[], after: InventoryEntry[]): number {

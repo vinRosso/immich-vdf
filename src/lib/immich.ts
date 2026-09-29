@@ -1,6 +1,17 @@
 import { assertHttpUrl, safeFetch } from "./urls";
 
-export type ImmichAsset = { id: string; originalPath: string };
+export type ImmichAsset = {
+  id: string;
+  originalPath: string;
+  stackId?: string | null;
+  stackPrimary?: boolean;
+};
+
+export type ImmichStack = {
+  id: string;
+  primaryAssetId: string;
+  assets: { id: string; originalPath: string; updatedAt?: string }[];
+};
 export type ImmichAlbum = { id: string; name: string };
 
 export function immichRoot(baseUrl: string): string {
@@ -27,6 +38,24 @@ export async function pingImmich(baseUrl: string, apiKey: string): Promise<void>
     throw new Error("Immich rejected the API key");
   }
   if (!response.ok) throw new Error(`Immich ping failed (${response.status})`);
+}
+
+export type ImmichAssetStatistics = { images: number; videos: number; total: number };
+
+export async function fetchImmichAssetStatistics(baseUrl: string, apiKey: string): Promise<ImmichAssetStatistics> {
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/assets/statistics`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Immich rejected the API key for asset statistics");
+  }
+  if (!response.ok) throw new Error(`Immich asset statistics failed (${response.status})`);
+  const body = (await response.json()) as { images?: unknown; videos?: unknown; total?: unknown };
+  const images = typeof body.images === "number" && Number.isFinite(body.images) ? body.images : 0;
+  const videos = typeof body.videos === "number" && Number.isFinite(body.videos) ? body.videos : 0;
+  const total = typeof body.total === "number" && Number.isFinite(body.total) ? body.total : images + videos;
+  return { images, videos, total };
 }
 
 export async function fetchImmichUser(baseUrl: string, apiKey: string): Promise<ImmichUser> {
@@ -84,6 +113,16 @@ export async function listImmichLibraryImportPaths(baseUrl: string, apiKey: stri
 
 type SearchPage = { items: ImmichAsset[]; nextPage: string | number | null };
 
+const TRASHED_AFTER_EPOCH = "1970-01-01T00:00:00.000Z";
+
+/** True when Immich marks an asset as in the trash (not visible in the main library). */
+export function immichAssetTrashed(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { isTrashed?: unknown; deletedAt?: unknown };
+  if (record.isTrashed === true) return true;
+  return typeof record.deletedAt === "string" && record.deletedAt.length > 0;
+}
+
 function parseSearchPage(body: unknown): SearchPage {
   const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const nested = record.assets && typeof record.assets === "object" ? (record.assets as Record<string, unknown>) : null;
@@ -92,9 +131,11 @@ function parseSearchPage(body: unknown): SearchPage {
   if (Array.isArray(rawItems)) {
     for (const item of rawItems) {
       if (!item || typeof item !== "object") continue;
-      const asset = item as { id?: unknown; originalPath?: unknown };
+      if (immichAssetTrashed(item)) continue;
+      const asset = item as { id?: unknown; originalPath?: unknown; stack?: unknown };
       if (typeof asset.id === "string" && typeof asset.originalPath === "string") {
-        items.push({ id: asset.id, originalPath: asset.originalPath });
+        const stack = stackFields(asset.stack, asset.id);
+        items.push({ id: asset.id, originalPath: asset.originalPath, ...stack });
       }
     }
   }
@@ -103,19 +144,92 @@ function parseSearchPage(body: unknown): SearchPage {
   return { items, nextPage };
 }
 
-async function searchMetadataPage(
-  baseUrl: string,
-  apiKey: string,
-  query: { page: number; type: string; originalFileName?: string },
-): Promise<SearchPage> {
+type MetadataSearchQuery = {
+  page: number;
+  type: string;
+  originalFileName?: string;
+  updatedAfter?: string;
+  withDeleted?: boolean;
+  trashedAfter?: string;
+};
+
+function searchMetadataBody(query: MetadataSearchQuery): string {
+  return JSON.stringify({
+    page: query.page,
+    size: 1000,
+    type: query.type,
+    withExif: false,
+    withDeleted: query.withDeleted ?? false,
+    originalFileName: query.originalFileName,
+    updatedAfter: query.updatedAfter,
+    trashedAfter: query.trashedAfter,
+  });
+}
+
+async function searchMetadataPage(baseUrl: string, apiKey: string, query: MetadataSearchQuery): Promise<SearchPage> {
   const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
     method: "POST",
     headers: headers(apiKey, true),
-    body: JSON.stringify({ page: query.page, size: 1000, type: query.type, withExif: false, originalFileName: query.originalFileName }),
+    body: searchMetadataBody(query),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Immich search failed (${response.status})`);
   return parseSearchPage(await response.json());
+}
+
+export type TrashedImmichLookup = { ids: Set<string>; originalPaths: Set<string> };
+
+function parseTrashedFromSearchBody(body: unknown): { entries: { id: string; originalPath: string | null }[]; nextPage: string | number | null } {
+  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const nested = record.assets && typeof record.assets === "object" ? (record.assets as Record<string, unknown>) : null;
+  const rawItems = (nested?.items ?? record.items) as unknown;
+  const entries: { id: string; originalPath: string | null }[] = [];
+  if (Array.isArray(rawItems)) {
+    for (const item of rawItems) {
+      if (!item || typeof item !== "object") continue;
+      const asset = item as { id?: unknown; originalPath?: unknown };
+      if (typeof asset.id !== "string" || !immichAssetTrashed(item)) continue;
+      entries.push({
+        id: asset.id,
+        originalPath: typeof asset.originalPath === "string" ? asset.originalPath : null,
+      });
+    }
+  }
+  const next = nested?.nextPage ?? record.nextPage;
+  const nextPage = typeof next === "string" || typeof next === "number" ? next : null;
+  return { entries, nextPage };
+}
+
+/** Trashed Immich assets (ids and original paths) for filtering scan results and cache. */
+export async function listTrashedImmichAssets(baseUrl: string, apiKey: string): Promise<TrashedImmichLookup> {
+  const ids = new Set<string>();
+  const originalPaths = new Set<string>();
+  for (const type of ["IMAGE", "VIDEO"]) {
+    let page = 1;
+    for (let guard = 0; guard < 500; guard += 1) {
+      const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+        method: "POST",
+        headers: headers(apiKey, true),
+        body: searchMetadataBody({ page, type, withDeleted: true, trashedAfter: TRASHED_AFTER_EPOCH }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) throw new Error(`Immich trash search failed (${response.status})`);
+      const batch = parseTrashedFromSearchBody(await response.json());
+      for (const entry of batch.entries) {
+        ids.add(entry.id);
+        if (entry.originalPath) originalPaths.add(entry.originalPath.replace(/\\/g, "/"));
+      }
+      if (!batch.nextPage || batch.entries.length === 0) break;
+      const parsed = Number(batch.nextPage);
+      page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+    }
+  }
+  return { ids, originalPaths };
+}
+
+/** Asset ids currently in Immich trash (for filtering scan results and cache). */
+export async function listTrashedImmichAssetIds(baseUrl: string, apiKey: string): Promise<Set<string>> {
+  return (await listTrashedImmichAssets(baseUrl, apiKey)).ids;
 }
 
 async function searchAllPages(
@@ -135,6 +249,79 @@ async function searchAllPages(
     page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
   }
   return assets;
+}
+
+export type ImmichAssetUpdate = { id: string; updatedAt: string };
+
+/** Assets Immich has modified after `updatedAfter`. Search results omit stack membership. */
+export async function listImmichAssetsUpdatedSince(
+  baseUrl: string,
+  apiKey: string,
+  updatedAfter: string,
+): Promise<ImmichAssetUpdate[]> {
+  const pages = await Promise.all(["IMAGE", "VIDEO"].map((type) => listUpdatedOfType(baseUrl, apiKey, type, updatedAfter)));
+  const byId = new Map<string, string>();
+  for (const batch of pages) {
+    for (const asset of batch) byId.set(asset.id, asset.updatedAt);
+  }
+  return [...byId.entries()].map(([id, updatedAt]) => ({ id, updatedAt }));
+}
+
+async function listUpdatedOfType(
+  baseUrl: string,
+  apiKey: string,
+  type: string,
+  updatedAfter: string,
+): Promise<ImmichAssetUpdate[]> {
+  const items: ImmichAssetUpdate[] = [];
+  let page = 1;
+  for (let guard = 0; guard < 20; guard += 1) {
+    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+      method: "POST",
+      headers: headers(apiKey, true),
+      body: searchMetadataBody({ page, type, updatedAfter }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`Immich update search failed (${response.status})`);
+    const batch = parseUpdatedAssets(await response.json());
+    items.push(...batch.items);
+    if (!batch.nextPage || batch.items.length === 0) break;
+    const parsed = Number(batch.nextPage);
+    page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+  }
+  return items;
+}
+
+function parseUpdatedAssets(body: unknown): { items: ImmichAssetUpdate[]; nextPage: string | number | null } {
+  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const nested = record.assets && typeof record.assets === "object" ? (record.assets as Record<string, unknown>) : null;
+  const rawItems = (nested?.items ?? record.items) as unknown;
+  const items: ImmichAssetUpdate[] = [];
+  if (Array.isArray(rawItems)) {
+    for (const item of rawItems) {
+      if (!item || typeof item !== "object") continue;
+      const asset = item as { id?: unknown; updatedAt?: unknown };
+      if (typeof asset.id === "string" && typeof asset.updatedAt === "string") {
+        items.push({ id: asset.id, updatedAt: asset.updatedAt });
+      }
+    }
+  }
+  const next = nested?.nextPage ?? record.nextPage;
+  const nextPage = typeof next === "string" || typeof next === "number" ? next : null;
+  return { items, nextPage };
+}
+
+export async function fetchImmichAssetStackId(baseUrl: string, apiKey: string, assetId: string): Promise<string | null> {
+  assertImmichId(assetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Immich asset lookup failed (${response.status})`);
+  const body = (await response.json()) as { stack?: unknown };
+  if (immichAssetTrashed(body)) return null;
+  return stackFields(body.stack, assetId).stackId;
 }
 
 export async function listImmichAssets(baseUrl: string, apiKey: string, includeImages: boolean): Promise<ImmichAsset[]> {
@@ -157,7 +344,47 @@ export async function searchImmichAssetsByFileName(
   return assets;
 }
 
-export async function stackAssets(baseUrl: string, apiKey: string, assetIds: string[]): Promise<void> {
+function stackFields(stack: unknown, assetId: string): { stackId: string | null; stackPrimary: boolean } {
+  if (!stack || typeof stack !== "object") return { stackId: null, stackPrimary: false };
+  const record = stack as { id?: unknown; primaryAssetId?: unknown };
+  const stackId = typeof record.id === "string" ? record.id : null;
+  const primaryAssetId = typeof record.primaryAssetId === "string" ? record.primaryAssetId : null;
+  return { stackId, stackPrimary: Boolean(stackId && primaryAssetId === assetId) };
+}
+
+export function parseImmichStack(body: unknown): ImmichStack | null {
+  if (!body || typeof body !== "object") return null;
+  const record = body as { id?: unknown; primaryAssetId?: unknown; assets?: unknown };
+  if (typeof record.id !== "string" || typeof record.primaryAssetId !== "string" || !Array.isArray(record.assets)) return null;
+  const assets: ImmichStack["assets"] = [];
+  for (const entry of record.assets) {
+    if (!entry || typeof entry !== "object") continue;
+    const asset = entry as { id?: unknown; originalPath?: unknown; updatedAt?: unknown };
+    if (immichAssetTrashed(entry)) continue;
+    if (typeof asset.id === "string" && typeof asset.originalPath === "string") {
+      assets.push({
+        id: asset.id,
+        originalPath: asset.originalPath,
+        updatedAt: typeof asset.updatedAt === "string" ? asset.updatedAt : undefined,
+      });
+    }
+  }
+  if (assets.length === 0) return null;
+  return { id: record.id, primaryAssetId: record.primaryAssetId, assets };
+}
+
+export async function fetchImmichStack(baseUrl: string, apiKey: string, stackId: string): Promise<ImmichStack | null> {
+  assertImmichId(stackId, "stack");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Immich stack lookup failed (${response.status})`);
+  return parseImmichStack(await response.json());
+}
+
+export async function stackAssets(baseUrl: string, apiKey: string, assetIds: string[]): Promise<ImmichStack> {
   const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks`, {
     method: "POST",
     headers: headers(apiKey, true),
@@ -165,6 +392,33 @@ export async function stackAssets(baseUrl: string, apiKey: string, assetIds: str
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Immich stack failed (${response.status})`);
+  const parsed = parseImmichStack(await response.json());
+  if (parsed) return parsed;
+  return { id: "", primaryAssetId: assetIds[0] ?? "", assets: assetIds.map((id) => ({ id, originalPath: "" })) };
+}
+
+export async function updateStackPrimary(
+  baseUrl: string,
+  apiKey: string,
+  stackId: string,
+  primaryAssetId: string,
+): Promise<ImmichStack | null> {
+  assertImmichId(stackId, "stack");
+  assertImmichId(primaryAssetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
+    method: "PUT",
+    headers: headers(apiKey, true),
+    body: JSON.stringify({ primaryAssetId }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Immich stack primary failed (${response.status})`);
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return parseImmichStack(JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
 }
 
 export async function trashAssets(baseUrl: string, apiKey: string, ids: string[]): Promise<void> {

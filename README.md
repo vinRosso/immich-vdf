@@ -2,7 +2,7 @@
 
 A small web app for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). It scans local files or a mounted Immich library, shows the duplicate groups, and lets you compare them. Files deletes move items into `.vdf-trash/` on that same mount. Immich stack and trash go through the Immich API, so the library mount stays read-only.
 
-Video Duplicate Finder stays an unmodified git submodule at `upstream/`, pinned to the release tag **v4.1.1** (commit `21ec967`). It is not pinned to `master` or to the moving `4.1.x` tag. The app runs `vdf-cli scan-and-compare --format json --output <file>` and does not patch upstream. Upstream is AGPLv3.
+This repo is a fork of Video Duplicate Finder. `engine/VDF.Core` and `engine/VDF.CLI` are the v4.1.1 sources (commit `21ec967`), and the image builds `vdf-cli` from them. See [FORK.md](FORK.md). The app runs `vdf-cli scan` and then `vdf-cli compare --format json`. The engine is AGPLv3 (`LICENSE`).
 
 ## Project docs (Cursor context in-repo)
 
@@ -48,29 +48,34 @@ The image build runs `vdf-cli --help` and parses `fixtures/cli-results.json` thr
 
 FFmpeg is used in process mode (`ffmpeg` and `ffprobe` on `PATH`). The native binding wants FFmpeg 8 shared libraries and is not enabled.
 
-## Pull upstream updates
+## Engine
 
-Do not edit anything under `upstream/`.
+`docker compose up -d --build` is the deploy. A checkout already contains `engine/`, so the build does not need `git submodule update`. The runtime image ships the published `vdf-cli`, not the .NET SDK. Pair scores (`PairScores.db`) sit next to `ScannedFiles.db` on the data volume and survive an image rebuild.
 
-```bash
-./scripts/update-upstream.sh v4.1.2
-docker compose up -d
-```
-
-The script fetches tags, checks out that release tag (detached, never `master`, `main`, or a rolling `*.x` tag), and rebuilds the image. Commit the submodule pointer if you want the repository to stay on the new tag. Then `docker compose up -d` restarts the container.
-
-If upstream renames a flag or the JSON groups, the image build fails on `vdf-cli --help` or on `fixtures/cli-results.json`. Update the parser and the fixture together with the pin. Their code stays untouched.
+If a CLI flag this app passes disappears, the image build fails on `vdf-cli --help` or on `fixtures/cli-results.json`.
 
 ## Local development
 
-The UI runs without a scan. `vdf-cli` is only required when you press Scan.
+Runs without Docker. The UI works before any scan; `vdf-cli` is required when you press Scan.
 
 ```bash
 npm install
-APP_PASSWORD=local-dev npm run dev
+cp .env.example .env   # set APP_PASSWORD
+npm run build:cli      # needs .NET 10 SDK; writes bin/vdf-cli/
 ```
 
-The dev server listens on port **47821**. Empty folders `dev-media` and `dev-immich` are created for the default mounts. Point `MEDIA_ROOTS` and `IMMICH_LIBRARY` at real directories if you have them. Thumbnail and playback routes need `ffmpeg` and `ffprobe` on `PATH`.
+In `.env`, point `VDF_CLI` at `./bin/vdf-cli/vdf-cli.exe` (Windows) or `./bin/vdf-cli/vdf-cli` (Linux/macOS). `npm run dev` builds the CLI automatically if that binary is missing.
+
+```bash
+npm run dev
+```
+
+The dev server listens on port **47821**. Empty folders `dev-media` and `dev-immich` are created for the default mounts. Point `MEDIA_ROOTS` and `IMMICH_LIBRARY` (or `IMMICH_PATH`) at real directories if you have them. Thumbnail and playback routes need `ffmpeg` and `ffprobe` on `PATH`.
+
+```bash
+npm run check-cli      # uses VDF_CLI from .env
+npm run test:engine    # fork engine unit tests
+```
 
 ```bash
 npm test

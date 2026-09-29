@@ -1,9 +1,34 @@
 import path from "node:path";
+import { runPool } from "./concurrency";
 import { loadConfig } from "./config";
-import { readJson, writeJson } from "./json-file";
+import { exclusive, readJson, writeJson } from "./json-file";
 import { listImmichAssets, searchImmichAssetsByFileName, type ImmichAsset } from "./immich";
 
-type AssetCache = { byPath: Record<string, string> };
+type AssetCacheEntry = string | { id: string; stackId: string | null; stackPrimary: boolean };
+type AssetCache = { byPath: Record<string, AssetCacheEntry> };
+
+function cacheAsset(asset: ImmichAsset): AssetCacheEntry {
+  return { id: asset.id, stackId: asset.stackId ?? null, stackPrimary: Boolean(asset.stackPrimary) };
+}
+
+function cacheHasId(entry: AssetCacheEntry | undefined): boolean {
+  if (!entry) return false;
+  return typeof entry === "string" ? entry.length > 0 : Boolean(entry.id);
+}
+
+function cacheEntryId(entry: AssetCacheEntry): string {
+  return typeof entry === "string" ? entry : entry.id;
+}
+
+export function pruneTrashedFromAssetCache(cache: AssetCache, trashedIds: ReadonlySet<string>): AssetCache {
+  if (trashedIds.size === 0) return cache;
+  const byPath: Record<string, AssetCacheEntry> = {};
+  for (const [filePath, entry] of Object.entries(cache.byPath)) {
+    if (trashedIds.has(cacheEntryId(entry))) continue;
+    byPath[filePath] = entry;
+  }
+  return { byPath };
+}
 
 function cacheFile(): string {
   return path.join(loadConfig().dataDir, "immich-asset-index.json");
@@ -63,11 +88,48 @@ export function assetSearchNames(filePath: string): string[] {
   return names;
 }
 
+export type StackCacheMember = {
+  assetId: string;
+  originalPath: string | null;
+  stackId: string | null;
+  stackPrimary: boolean;
+};
+
+/** Point cached assets at a stack the user just created, merged, or left. */
+export function applyStackMembershipToCache(cache: AssetCache, members: StackCacheMember[]): AssetCache {
+  const byId = new Map<string, string[]>();
+  for (const [filePath, entry] of Object.entries(cache.byPath)) {
+    const id = typeof entry === "string" ? entry : entry.id;
+    const paths = byId.get(id) ?? [];
+    paths.push(filePath);
+    byId.set(id, paths);
+  }
+  const byPath = { ...cache.byPath };
+  for (const member of members) {
+    const paths = new Set(byId.get(member.assetId) ?? []);
+    if (member.originalPath) paths.add(slash(member.originalPath));
+    if (paths.size === 0) continue;
+    const next: AssetCacheEntry = { id: member.assetId, stackId: member.stackId, stackPrimary: member.stackPrimary };
+    for (const filePath of paths) byPath[filePath] = next;
+  }
+  return { byPath };
+}
+
+export async function writeStackMembership(members: StackCacheMember[]): Promise<void> {
+  if (members.length === 0) return;
+  await exclusive(async () => {
+    const cache = await readJson<AssetCache>(cacheFile(), { byPath: {} });
+    await writeJson(cacheFile(), applyStackMembershipToCache(cache, members));
+  });
+}
+
 export function assetsFromCache(cache: AssetCache, originalPaths: string[]): ImmichAsset[] {
   const assets: ImmichAsset[] = [];
   for (const originalPath of originalPaths) {
-    const id = cache.byPath[slash(originalPath)];
-    if (id) assets.push({ id, originalPath });
+    const entry = cache.byPath[slash(originalPath)];
+    if (!entry) continue;
+    if (typeof entry === "string") assets.push({ id: entry, originalPath });
+    else assets.push({ id: entry.id, originalPath, stackId: entry.stackId, stackPrimary: entry.stackPrimary });
   }
   return assets;
 }
@@ -84,12 +146,19 @@ export async function assetsForOriginalPaths(
   apiKey: string,
   originalPaths: string[],
   includeImages: boolean,
+  parallelism: number,
   progress?: AssetLookupProgress,
+  trashedIds?: ReadonlySet<string>,
 ): Promise<ImmichAsset[]> {
-  const cache = await readJson<AssetCache>(cacheFile(), { byPath: {} });
+  let cache = await readJson<AssetCache>(cacheFile(), { byPath: {} });
+  if (trashedIds && trashedIds.size > 0) {
+    cache = pruneTrashedFromAssetCache(cache, trashedIds);
+    await writeJson(cacheFile(), cache);
+  }
   const missing: string[] = [];
   for (const originalPath of originalPaths) {
-    if (!cache.byPath[slash(originalPath)]) missing.push(originalPath);
+    const entry = cache.byPath[slash(originalPath)];
+    if (!cacheHasId(entry)) missing.push(originalPath);
   }
   const byName = new Map<string, string[]>();
   for (const originalPath of missing) {
@@ -102,27 +171,32 @@ export async function assetsForOriginalPaths(
   progress?.onIndex?.({ pathCount: originalPaths.length, missing: missing.length, searchNames: byName.size });
   if (missing.length > 0) {
     let filenameSearchFailed = false;
-    const searchTotal = byName.size;
+    const searches = [...byName.entries()];
+    const searchTotal = searches.length;
     let searchDone = 0;
-    for (const [name, paths] of byName) {
+    await runPool(searches, parallelism, async ([name, paths]) => {
+      if (filenameSearchFailed) return;
       searchDone += 1;
       progress?.onSearch?.(searchDone, searchTotal, name);
       try {
         const found = await searchImmichAssetsByFileName(baseUrl, apiKey, name, includeImages);
         const wanted = new Set(paths.map((entry) => slash(entry)));
         for (const asset of found) {
+          if (trashedIds?.has(asset.id)) continue;
           const key = slash(asset.originalPath);
-          if (wanted.has(key)) cache.byPath[key] = asset.id;
+          if (wanted.has(key)) cache.byPath[key] = cacheAsset(asset);
         }
       } catch {
         filenameSearchFailed = true;
-        break;
       }
-    }
+    });
     if (filenameSearchFailed) {
       progress?.onLibraryFallback?.();
       const all = await listImmichAssets(baseUrl, apiKey, includeImages);
-      for (const asset of all) cache.byPath[slash(asset.originalPath)] = asset.id;
+      for (const asset of all) {
+        if (trashedIds?.has(asset.id)) continue;
+        cache.byPath[slash(asset.originalPath)] = cacheAsset(asset);
+      }
     }
     await writeJson(cacheFile(), cache);
   }

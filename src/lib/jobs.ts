@@ -8,13 +8,16 @@ import { loadConfig, resolveVdfCli } from "./config";
 import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
 import { errorText } from "./errors";
 import { assetsForOriginalPaths } from "./immich-asset-index";
-import { attachAssets, originalPathsForGroups } from "./immich-join";
+import { attachAssets, dropImmichTrashedFromGroups, originalPathsForGroups } from "./immich-join";
+import { listTrashedImmichAssets } from "./immich";
+import { expandImmichGroups } from "./immich-stack-sync";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
 import { parseResolution } from "./primary";
-import { resolveInside } from "./path-jail";
+import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
+import { runPool } from "./concurrency";
 import { redact } from "./redact";
 import { getScan } from "./scan";
 import { walkScanInventory, type InventoryEntry } from "./scan-inventory";
@@ -31,7 +34,6 @@ import {
   secretValues,
 } from "./store";
 import { probeImageBitDepth } from "./probe";
-import { queueThumbnails } from "./thumbs";
 import type { CompareDecision } from "./compare-decision";
 import type { ScanSettings, SectionId, Settings, StoredGroup, StoredItem } from "./types";
 import { postWebhook } from "./webhook";
@@ -58,6 +60,7 @@ export async function startScan(
   if (!scan.tryBegin({ section, trigger, secrets: secretValues(settings), slotKey })) {
     return { ok: false, status: 409, error: "A scan is already running" };
   }
+  const startedAt = Date.now();
   try {
     const paths = await resolveScanPaths(section, scanSettings, settings);
     const dbDir = sectionDbDir(section);
@@ -66,7 +69,7 @@ export async function startScan(
     const outputFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-${stamp}.json`);
     const settingsFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-settings-${stamp}.json`);
     await writeFile(settingsFile, `${JSON.stringify(buildVdfCliSettingsFile(scanSettings))}\n`);
-    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile });
+    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile }, startedAt);
     return { ok: true };
   } catch (error) {
     const message = redact(errorText(error), secretValues(settings));
@@ -107,12 +110,13 @@ async function runScanPipeline(
   section: SectionId,
   scanSettings: ScanSettings,
   paths: ScanPaths,
+  startedAt: number,
 ): Promise<void> {
   const scan = getScan();
   const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
   const scanResult = await spawnVdfCli(scanArgs);
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true });
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
     return;
   }
   if (scanResult.spawnFailed || scanResult.code !== 0) {
@@ -123,6 +127,7 @@ async function runScanPipeline(
       scanSettings,
       spawnFailed: scanResult.spawnFailed,
       cancelled: false,
+      startedAt,
     });
     return;
   }
@@ -130,7 +135,7 @@ async function runScanPipeline(
   scan.addLine("[scan] Checking whether compare is needed…");
   let inventory: InventoryEntry[];
   try {
-    inventory = await walkScanInventory(paths.includes, paths.excludes);
+    inventory = await walkScanInventory(paths.includes, paths.excludes, () => scan.cancelled);
   } catch (error) {
     scan.addLine(redact(errorText(error), scan.secrets));
     await finishScan(section, {
@@ -140,7 +145,12 @@ async function runScanPipeline(
       scanSettings,
       spawnFailed: false,
       cancelled: false,
+      startedAt,
     });
+    return;
+  }
+  if (scan.cancelled) {
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
     return;
   }
 
@@ -162,6 +172,7 @@ async function runScanPipeline(
       inventory,
       decision,
       cancelled: false,
+      startedAt,
     });
     return;
   }
@@ -169,7 +180,7 @@ async function runScanPipeline(
   const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths });
   const compareResult = await spawnVdfCli(compareArgs);
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true });
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
     return;
   }
   await finishScan(section, {
@@ -181,6 +192,7 @@ async function runScanPipeline(
     decision,
     spawnFailed: compareResult.spawnFailed,
     cancelled: false,
+    startedAt,
   });
 }
 
@@ -194,7 +206,9 @@ function spawnVdfCli(args: string[]): Promise<{ code: number | null; spawnFailed
   });
 }
 
-type FinishInput =
+type FinishInput = {
+  startedAt: number;
+} & (
   | {
       kind: "reuse";
       paths: ScanPaths;
@@ -220,7 +234,8 @@ type FinishInput =
       scanSettings: ScanSettings;
       spawnFailed: boolean;
       cancelled: boolean;
-    };
+    }
+);
 
 async function finishScan(section: SectionId, input: FinishInput): Promise<void> {
   const scan = getScan();
@@ -245,15 +260,11 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
         await saveResults(section, {
           ...existing,
           finishedAt: new Date().toISOString(),
+          durationMs: pipelineDurationMs(input.startedAt),
           error: null,
         });
         groupCount = await countVisibleGroups(section, existing.groups);
         ok = true;
-        if (section === "server" || section === "immich") {
-          queueThumbnails(
-            existing.groups.flatMap((group) => group.items.filter((item) => !item.isImage).map((item) => item.path)),
-          );
-        }
       }
     } else if (input.spawnFailed || input.code === null) {
       error = "vdf-cli could not be started. Set VDF_CLI or run the Docker image.";
@@ -262,7 +273,31 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     } else {
       const raw = await readFile(paths.outputFile, "utf8");
       scan.addLine("[scan] Processing results…");
-      let groups = await enrichImageBitDepth(await keepInside(section, parseCliResults(raw).map(toStoredGroup), settings));
+      const kept = await keepInside(
+        section,
+        parseCliResults(raw).map(toStoredGroup),
+        settings,
+        input.scanSettings.parallelism,
+        (done, total) => {
+          if (done === 0 || done === total || done % 200 === 0) {
+            scan.addLine(`[scan] Processing results… ${done}/${total} paths`);
+          }
+        },
+        () => scan.cancelled,
+      );
+      const previous = await loadResults(section);
+      let groups = await enrichImageBitDepth(
+        kept,
+        input.scanSettings.parallelism,
+        bitDepthsFromResults(previous),
+        (done, total) => {
+          if (done === total || done % 200 === 0) scan.addLine(`[scan] Processing results… ${done}/${total} images`);
+        },
+        () => scan.cancelled,
+      );
+      if (scan.cancelled) {
+        error = "Cancelled";
+      } else {
       let warning: string | null = null;
       if (section === "immich") {
         if (!settings.immich.baseUrl || !settings.immich.apiKey) {
@@ -272,36 +307,47 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
             scan.addLine("[scan] Matching Immich library…");
             const creds = immichCredentials(settings);
             const maps = await resolveImmichPathMap(creds);
+            const trashed = await listTrashedImmichAssets(settings.immich.baseUrl, settings.immich.apiKey);
             const assets = await assetsForOriginalPaths(
               settings.immich.baseUrl,
               settings.immich.apiKey,
               originalPathsForGroups(groups, maps),
               settings.immich.scan.includeImages,
+              input.scanSettings.parallelism,
+              undefined,
+              trashed.ids,
             );
             groups = attachAssets(groups, assets, maps);
+            groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
+            groups = await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism);
+            groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
           } catch (err) {
             warning = "The scan finished, but Immich assets could not be listed, so nothing can be stacked or trashed yet.";
             scan.addLine(redact(errorText(err), secrets));
           }
         }
       }
+      if (scan.cancelled) {
+        error = "Cancelled";
+      } else {
       await saveStoredInventory(section, input.inventory);
       await saveResults(section, {
         finishedAt: new Date().toISOString(),
+        durationMs: pipelineDurationMs(input.startedAt),
         error: null,
         warning,
         groups,
         compareFingerprint: input.decision.compareFingerprint,
         compareInventoryFingerprint: input.decision.inventoryFingerprint,
         compareSettingsFingerprint: input.decision.settingsFingerprint,
+        compareTimeWindowDays: input.scanSettings.timeWindowDays,
       });
       const ignoredRaw = await loadIgnored(section);
       const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
       if (pruned.length !== ignoredRaw.length) await saveIgnored(section, pruned);
       groupCount = await countVisibleGroups(section, groups);
       ok = true;
-      if (section === "server" || section === "immich") {
-        queueThumbnails(groups.flatMap((group) => group.items.filter((item) => !item.isImage).map((item) => item.path)));
+      }
       }
     }
   } catch (err) {
@@ -333,6 +379,12 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
   scan.finish(ok && !scan.cancelled, message, groupCount);
 }
 
+/** Wall clock from scan button to saved results (index, hash, compare, Immich join). */
+export function pipelineDurationMs(startedAt: number, now = Date.now()): number {
+  if (!startedAt) return 0;
+  return Math.max(0, now - startedAt);
+}
+
 async function countVisibleGroups(section: SectionId, groups: StoredGroup[]): Promise<number> {
   const ignored = await loadIgnored(section);
   const hidden = new Set(ignored.map((entry) => entry.key));
@@ -343,43 +395,137 @@ function immichCredentials(settings: Settings): ImmichCredentials {
   return { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
 }
 
-async function enrichImageBitDepth(groups: StoredGroup[]): Promise<StoredGroup[]> {
-  const enriched: StoredGroup[] = [];
-  for (const group of groups) {
-    const items: StoredItem[] = [];
+function bitDepthKey(path: string, sizeBytes: number): string {
+  return `${path}\0${sizeBytes}`;
+}
+
+function bitDepthsFromResults(results: { groups: StoredGroup[] } | null): Map<string, number> {
+  const depths = new Map<string, number>();
+  if (!results) return depths;
+  for (const group of results.groups) {
     for (const item of group.items) {
-      if (!item.isImage) {
-        items.push(item);
+      if (!item.isImage || item.bitDepth <= 0) continue;
+      depths.set(bitDepthKey(item.path, item.sizeBytes), item.bitDepth);
+    }
+  }
+  return depths;
+}
+
+async function enrichImageBitDepth(
+  groups: StoredGroup[],
+  parallelism: number,
+  known: Map<string, number>,
+  onProgress?: (done: number, total: number) => void,
+  shouldAbort?: () => boolean,
+): Promise<StoredGroup[]> {
+  const images = groups.reduce((sum, group) => sum + group.items.filter((item) => item.isImage).length, 0);
+  const depthByKey = new Map<string, number>();
+  const pending: { path: string; sizeBytes: number }[] = [];
+  const seen = new Set<string>();
+  let done = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (!item.isImage) continue;
+      const key = bitDepthKey(item.path, item.sizeBytes);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const reused = known.get(key);
+      if (reused && reused > 0) {
+        depthByKey.set(key, reused);
         continue;
       }
+      pending.push({ path: item.path, sizeBytes: item.sizeBytes });
+    }
+  }
+  const occurrences = new Map<string, number>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (!item.isImage) continue;
+      const key = bitDepthKey(item.path, item.sizeBytes);
+      occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [key, depth] of depthByKey) {
+    if (depth <= 0) continue;
+    done += occurrences.get(key) ?? 0;
+  }
+  if (done > 0) onProgress?.(Math.min(done, images), images);
+
+  await runPool(
+    pending,
+    parallelism,
+    async (item) => {
+      const key = bitDepthKey(item.path, item.sizeBytes);
       let bitDepth = 0;
       try {
         bitDepth = await probeImageBitDepth(item.path);
       } catch {
         // Leave 0 so tie-breakers still apply.
       }
-      items.push({ ...item, bitDepth });
-    }
-    enriched.push({ ...group, items });
-  }
-  return enriched;
+      depthByKey.set(key, bitDepth);
+      done += occurrences.get(key) ?? 1;
+      onProgress?.(Math.min(done, images), images);
+    },
+    shouldAbort,
+  );
+
+  if (shouldAbort?.()) return groups;
+
+  return groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => {
+      if (!item.isImage) return item;
+      return { ...item, bitDepth: depthByKey.get(bitDepthKey(item.path, item.sizeBytes)) ?? 0 };
+    }),
+  }));
 }
 
-async function keepInside(section: SectionId, groups: StoredGroup[], settings: Settings): Promise<StoredGroup[]> {
+async function keepInside(
+  section: SectionId,
+  groups: StoredGroup[],
+  settings: Settings,
+  parallelism: number,
+  onProgress?: (done: number, total: number) => void,
+  shouldAbort?: () => boolean,
+): Promise<StoredGroup[]> {
   const roots =
     section === "server"
       ? loadConfig().mediaRoots
       : await resolveImmichScanRoots(immichCredentials(settings));
+  const resolvedRoots = await resolveRoots(roots);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (seen.has(item.path)) continue;
+      seen.add(item.path);
+      unique.push(item.path);
+    }
+  }
+  const resolved = new Map<string, string>();
+  let done = 0;
+  onProgress?.(0, unique.length);
+  await runPool(
+    unique,
+    parallelism,
+    async (filePath) => {
+      try {
+        resolved.set(filePath, await resolveAgainstRoots(resolvedRoots, filePath));
+      } catch {
+        // Drop paths that are missing or that resolve outside the mount.
+      }
+      done += 1;
+      onProgress?.(done, unique.length);
+    },
+    shouldAbort,
+  );
+  if (shouldAbort?.()) return [];
   const kept: StoredGroup[] = [];
   for (const group of groups) {
     const items: StoredItem[] = [];
     for (const item of group.items) {
-      try {
-        const real = await resolveInside(roots, item.path);
-        items.push({ ...item, path: real });
-      } catch {
-        // Drop paths that are missing or that resolve outside the mount.
-      }
+      const real = resolved.get(item.path);
+      if (real) items.push({ ...item, path: real });
     }
     if (items.length >= 2) kept.push({ ...group, items });
   }
@@ -411,6 +557,8 @@ function toStoredItem(item: ParsedGroup["items"][number]): StoredItem {
     fps: item.fps,
     assetId: null,
     originalPath: null,
+    stackId: null,
+    stackPrimary: false,
   };
 }
 

@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { createServer } from "node:http";
+import path from "node:path";
 import { parse } from "node:url";
 import { loadEnvConfig } from "@next/env";
 import next from "next";
@@ -6,6 +8,7 @@ import { ensureRuntimeDirs, loadConfig } from "./src/lib/config";
 import { errorText } from "./src/lib/errors";
 import { redact } from "./src/lib/redact";
 import { startScheduler } from "./src/lib/scheduler";
+import { loginUrlForPath, safeLoginNext } from "./src/lib/auth-redirect";
 import { cookieIsValid } from "./src/lib/session";
 import { loadSettings, secretValues } from "./src/lib/store";
 import { handleRaw } from "./src/server/raw";
@@ -20,7 +23,7 @@ if (!config.password) {
 ensureRuntimeDirs(config);
 startScheduler();
 
-const dev = process.env.NODE_ENV !== "production";
+const dev = nextDevMode();
 const app = next({ dev, hostname: config.host, port: config.port });
 const handle = app.getRequestHandler();
 
@@ -40,12 +43,13 @@ const httpServer = createServer(async (request, response) => {
         response.end(JSON.stringify({ error: "Sign in required" }));
         return;
       }
-      response.writeHead(302, { Location: "/login" });
+      response.writeHead(302, { Location: loginUrlForPath(url.pathname, url.search) });
       response.end();
       return;
     }
     if (authed && url.pathname === "/login") {
-      response.writeHead(302, { Location: "/" });
+      const dest = safeLoginNext(url.searchParams.get("next")) ?? "/";
+      response.writeHead(302, { Location: dest });
       response.end();
       return;
     }
@@ -71,4 +75,17 @@ void main();
 
 function isPublicPage(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/_next") || pathname === "/favicon.ico";
+}
+
+function nextDevMode(): boolean {
+  const lifecycle = process.env.npm_lifecycle_event;
+  if (lifecycle === "dev" || lifecycle === "dev:web") return true;
+  const built = existsSync(path.join(process.cwd(), ".next", "required-server-files.json"));
+  if (!built) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn("No Next.js production build found; using development mode. Run `npm run build` before `npm start`.");
+    }
+    return true;
+  }
+  return process.env.NODE_ENV !== "production";
 }

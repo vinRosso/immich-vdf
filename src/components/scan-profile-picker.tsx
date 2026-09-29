@@ -1,6 +1,5 @@
 "use client";
 
-import { Hint } from "@/components/folder-picker";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SCAN_PROFILES, applyScanProfile, detectScanProfile } from "@/lib/scan-profiles";
@@ -38,10 +37,16 @@ export function ScanProfilePicker({
         );
       })}
       {active === "custom" ? (
-        <span className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
-          Custom
-          <Hint text="Your settings do not match a scan preset. Adjust the controls below or pick a preset." />
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="cursor-help px-1 text-xs text-muted-foreground" tabIndex={0}>
+              Custom
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-sm whitespace-normal">
+            Your settings do not match a scan preset. Adjust the controls below or pick a preset.
+          </TooltipContent>
+        </Tooltip>
       ) : null}
     </div>
   );

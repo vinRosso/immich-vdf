@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1
 
-# vdf-cli is built the same way as upstream VDF.CLI/Dockerfile (.NET 10, process-mode ffmpeg).
+# vdf-cli is built from engine/ (.NET 10, process-mode ffmpeg).
 # Native FFmpeg bindings need FFmpeg 8 shared libraries and are not used.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS vdf
 WORKDIR /src
-COPY upstream/VDF.Core/VDF.Core.csproj VDF.Core/
-COPY upstream/VDF.CLI/VDF.CLI.csproj VDF.CLI/
+COPY engine/VDF.Core/VDF.Core.csproj VDF.Core/
+COPY engine/VDF.CLI/VDF.CLI.csproj VDF.CLI/
+COPY engine/Directory.Build.props ./
 RUN dotnet restore VDF.CLI/VDF.CLI.csproj
-COPY upstream/VDF.Core/ VDF.Core/
-COPY upstream/VDF.CLI/ VDF.CLI/
+COPY engine/VDF.Core/ VDF.Core/
+COPY engine/VDF.CLI/ VDF.CLI/
 RUN dotnet publish VDF.CLI/VDF.CLI.csproj -c Release -o /out --no-restore
 
 FROM node:22-bookworm-slim AS web
@@ -27,7 +28,7 @@ COPY --from=node:22-bookworm-slim /usr/local /usr/local
 WORKDIR /app
 COPY --from=vdf /out /opt/vdf
 COPY --from=web /app /app
-RUN rm -rf /app/upstream /app/agent-tools
+RUN rm -rf /app/upstream /app/engine /app/agent-tools
 ENV NODE_ENV=production \
   PORT=47821 \
   DATA_DIR=/data \

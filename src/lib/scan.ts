@@ -1,12 +1,19 @@
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { redact } from "./redact";
 import type { SectionId } from "./types";
 
 export type ScanListener = (event: ScanEvent) => void;
 
 export type ScanEvent =
-  | { event: "snapshot"; running: boolean; section: SectionId | null; lines: string[]; error: string | null }
-  | { event: "log"; line: string }
+  | {
+      event: "snapshot";
+      running: boolean;
+      section: SectionId | null;
+      lines: string[];
+      error: string | null;
+      startedAt: number;
+    }
+  | { event: "log"; line: string; startedAt: number }
   | { event: "done"; section: SectionId; ok: boolean; error: string | null; groupCount: number | null };
 
 type Begin = {
@@ -25,6 +32,7 @@ export class ScanManager {
   error: string | null = null;
   cancelled = false;
   settled = false;
+  startedAt = 0;
   claimed = false;
   secrets: string[] = [];
   child: ChildProcess | null = null;
@@ -40,10 +48,18 @@ export class ScanManager {
     this.error = null;
     this.cancelled = false;
     this.settled = false;
+    this.startedAt = Date.now();
     this.claimed = false;
     this.secrets = begin.secrets;
     this.child = null;
-    this.emit({ event: "snapshot", running: true, section: begin.section, lines: [], error: null });
+    this.emit({
+      event: "snapshot",
+      running: true,
+      section: begin.section,
+      lines: [],
+      error: null,
+      startedAt: this.startedAt,
+    });
     return true;
   }
 
@@ -89,7 +105,7 @@ export class ScanManager {
     const clean = redact(line, this.secrets).slice(0, 4000);
     this.lines.push(clean);
     if (this.lines.length > 500) this.lines.splice(0, this.lines.length - 500);
-    this.emit({ event: "log", line: clean });
+    this.emit({ event: "log", line: clean, startedAt: this.startedAt });
   }
 
   finish(ok: boolean, error: string | null, groupCount: number | null): void {
@@ -107,11 +123,9 @@ export class ScanManager {
   }
 
   cancel(): boolean {
-    if (!this.running || !this.child) return false;
+    if (!this.running) return false;
     this.cancelled = true;
-    this.child.kill("SIGTERM");
-    const child = this.child;
-    setTimeout(() => child.kill("SIGKILL"), 4000).unref?.();
+    if (this.child) killChildTree(this.child);
     return true;
   }
 
@@ -123,6 +137,7 @@ export class ScanManager {
       section: this.section,
       lines: [...this.lines],
       error: this.error,
+      startedAt: this.startedAt,
     });
     return () => this.listeners.delete(listener);
   }
@@ -132,8 +147,41 @@ export class ScanManager {
   }
 }
 
+export type ScanStatusPayload = {
+  running: boolean;
+  section: SectionId | null;
+  lines: string[];
+  error: string | null;
+  startedAt: number;
+};
+
+export function scanStatusPayload(): ScanStatusPayload {
+  const scan = getScan();
+  return {
+    running: scan.running,
+    section: scan.section,
+    lines: [...scan.lines],
+    error: scan.error,
+    startedAt: scan.startedAt,
+  };
+}
+
 export function getScan(): ScanManager {
-  const holder = globalThis as typeof globalThis & { __vdfScan?: ScanManager };
+  const holder = process as NodeJS.Process & { __vdfScan?: ScanManager };
   if (!holder.__vdfScan) holder.__vdfScan = new ScanManager();
   return holder.__vdfScan;
+}
+
+function killChildTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (process.platform === "win32" && pid) {
+    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { shell: false, stdio: "ignore" }).on("error", () => {
+      child.kill("SIGKILL");
+    });
+    return;
+  }
+  child.kill("SIGTERM");
+  setTimeout(() => {
+    if (!child.killed) child.kill("SIGKILL");
+  }, 4000).unref?.();
 }

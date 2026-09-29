@@ -8,5 +8,7 @@ immich-library
 agent-tools
 .git
 upstream/.git
+engine/**/bin
+engine/**/obj
 *.md
 !README.md

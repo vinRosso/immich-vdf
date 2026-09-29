@@ -22,6 +22,41 @@ test("different players do not cancel each other", () => {
   right.release();
 });
 
+test("viewer thumbnails run before queued card posters", async () => {
+  resetFfmpegPoolForTests();
+  let release: (() => void) | undefined;
+  const blocker = enqueueFfmpeg(
+    1,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    { priority: "thumbnail" },
+  );
+  const order: string[] = [];
+  const card = enqueueFfmpeg(
+    1,
+    async () => {
+      order.push("card");
+    },
+    { priority: "thumbnail" },
+  );
+  const viewer = enqueueFfmpeg(
+    1,
+    async () => {
+      order.push("viewer");
+    },
+    { priority: "viewer" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, []);
+  release?.();
+  await blocker;
+  await viewer;
+  await card;
+  assert.deepEqual(order, ["viewer", "card"]);
+});
+
 test("an aborted playback leaves the queue without starting", async () => {
   resetFfmpegPoolForTests();
   let releaseFirst: (() => void) | undefined;
