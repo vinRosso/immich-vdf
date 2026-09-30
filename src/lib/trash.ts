@@ -2,7 +2,17 @@ import { mkdir, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { AppError } from "./errors";
-import { addTrashFreed, clearTrashAdded, forgetTrashAdded, loadTrashAdded, loadTrashStats, rememberTrashAdded, rememberTrashAddedMany, trashAddedKey } from "./store";
+import {
+  addTrashFreed,
+  clearTrashAdded,
+  forgetTrashAdded,
+  loadTrashAdded,
+  loadTrashStats,
+  rememberTrashAdded,
+  rememberTrashAddedMany,
+  trashAddedKey,
+  trashStatsSavedTotal,
+} from "./store";
 import { ensurePoster, sectionParallelism } from "./thumbs";
 import { containingRoot, isInside, PathJailError, resolveInside } from "./path-jail";
 import type { TrashEntry } from "./types";
@@ -245,5 +255,5 @@ export async function emptyTrash(): Promise<{ removed: number; freedBytes: numbe
   }
   if (listed.length > 0) await clearTrashAdded();
   const stats = freedBytes > 0 || listed.length > 0 ? await addTrashFreed(freedBytes) : await loadTrashStats();
-  return { removed: listed.length, freedBytes, totalSavedBytes: stats.bytesFreed };
+  return { removed: listed.length, freedBytes, totalSavedBytes: trashStatsSavedTotal(stats) };
 }

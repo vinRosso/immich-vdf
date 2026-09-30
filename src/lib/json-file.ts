@@ -12,13 +12,20 @@ export function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+function missingFile(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT");
+}
+
+/** Missing files use `fallback`. Corrupt JSON throws so a later save cannot replace it with defaults. */
 export async function readJson<T>(file: string, fallback: T): Promise<T> {
+  let text: string;
   try {
-    const text = await readFile(file, "utf8");
-    return JSON.parse(text) as T;
-  } catch {
-    return fallback;
+    text = await readFile(file, "utf8");
+  } catch (error) {
+    if (missingFile(error)) return fallback;
+    throw error;
   }
+  return JSON.parse(text) as T;
 }
 
 export async function writeJson(file: string, value: unknown): Promise<void> {

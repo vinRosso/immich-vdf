@@ -50,14 +50,18 @@ export function TrashScreen() {
   const [confirming, setConfirming] = useState(false);
   const [restoringKey, setRestoringKey] = useState<string | null>(null);
   const [totalBytes, setTotalBytes] = useState(0);
+  const [bytesFreed, setBytesFreed] = useState(0);
+  const [immichBytesTrashed, setImmichBytesTrashed] = useState(0);
   const [sort, setSort] = useState<TrashSort>("latest");
   const [preview, setPreview] = useState<TrashEntry | null>(null);
   const sorted = useMemo(() => (entries ? sortTrash(entries, sort) : []), [entries, sort]);
 
   async function load() {
-    const listed = await api<{ entries: TrashEntry[]; totalBytes: number }>("/api/trash");
+    const listed = await api<{ entries: TrashEntry[]; totalBytes: number; bytesFreed?: number; immichBytesTrashed?: number }>("/api/trash");
     setEntries(listed.entries);
     setTotalBytes(listed.totalBytes);
+    setBytesFreed(listed.bytesFreed ?? 0);
+    setImmichBytesTrashed(listed.immichBytesTrashed ?? 0);
   }
 
   useEffect(() => {
@@ -121,7 +125,12 @@ export function TrashScreen() {
                 <ArrowLeft className="size-5" />
               </a>
             </Button>
-            <h1 className="font-heading text-4xl">Trash</h1>
+            <div>
+              <h1 className="font-heading text-4xl">Trash</h1>
+              <p className="text-sm text-muted-foreground tabular-nums">
+                {formatBytes(bytesFreed)} freed from Files · {formatBytes(immichBytesTrashed)} trashed in Immich
+              </p>
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             {hasFiles ? (

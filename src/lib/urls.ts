@@ -21,6 +21,16 @@ export function assertHttpUrl(value: string): URL {
   return url;
 }
 
+/** Drop credentials when a redirect leaves the original host. */
+export function fetchInitForRedirect(init: RequestInit, from: URL, to: URL): RequestInit {
+  if (from.host.toLowerCase() === to.host.toLowerCase()) return init;
+  const headers = new Headers(init.headers);
+  headers.delete("authorization");
+  headers.delete("x-api-key");
+  headers.delete("cookie");
+  return { ...init, headers };
+}
+
 export async function safeFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const first = assertHttpUrl(input);
   const response = await fetch(first, { ...init, redirect: "manual" });
@@ -28,5 +38,5 @@ export async function safeFetch(input: string, init: RequestInit = {}): Promise<
   const location = response.headers.get("location");
   if (!location) throw new HttpUrlError("Redirect had no location");
   const next = assertHttpUrl(new URL(location, first).toString());
-  return fetch(next, { ...init, redirect: "manual" });
+  return fetch(next, { ...fetchInitForRedirect(init, first, next), redirect: "manual" });
 }

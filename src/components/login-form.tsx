@@ -59,7 +59,10 @@ export function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4">
-      <p className="text-xs tracking-[0.22em] text-primary uppercase">Video Duplicate Finder</p>
+      <p className="flex items-center gap-2 text-xs tracking-[0.22em] text-primary uppercase">
+        <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+        Video Duplicate Finder
+      </p>
       <h1 className="mt-2 font-heading text-5xl">Sign in</h1>
       <p className="mt-3 text-sm text-muted-foreground">
         This app can read every mounted file and trash an Immich library. The password is <span className="text-foreground">APP_PASSWORD</span>, kept out of the image and out of the browser after this form.

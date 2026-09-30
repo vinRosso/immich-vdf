@@ -50,13 +50,14 @@ export function zonedTimeToUtc(
   minute: number,
   timeZone: string,
 ): Date {
-  let utc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let utc = desired;
   for (let pass = 0; pass < 3; pass += 1) {
     const zoned = zonedParts(new Date(utc), timeZone);
-    const asUtc = Date.UTC(zoned.year, zoned.month - 1, zoned.day, zoned.hour, zoned.minute, 0);
-    const next = utc - (asUtc - utc);
-    if (next === utc) break;
-    utc = next;
+    const got = Date.UTC(zoned.year, zoned.month - 1, zoned.day, zoned.hour, zoned.minute, 0);
+    const delta = got - desired;
+    if (delta === 0) break;
+    utc -= delta;
   }
   return new Date(utc);
 }

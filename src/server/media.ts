@@ -11,7 +11,7 @@ import { playbackMode } from "../lib/playback";
 import { claimPlayback } from "../lib/playback-sessions";
 import { ffmpegBin, probeFile } from "../lib/probe";
 import { parseByteRange } from "../lib/range";
-import { loadResults, loadSettings } from "../lib/store";
+import { resultMediaMeta } from "../lib/store";
 import { thumbRequestSignal } from "../lib/thumb-sessions";
 import { ensurePoster, ensureStrip, sectionParallelism } from "../lib/thumbs";
 import type { SectionId } from "../lib/types";
@@ -51,8 +51,7 @@ async function streamClaimedMedia(
   signal: AbortSignal,
   maxHeight: number | null,
 ): Promise<void> {
-  const results = await loadResults(section);
-  const item = results?.groups.flatMap((group) => group.items).find((entry) => entry.path === real || entry.path === filePath);
+  const item = (await resultMediaMeta(section, real)) ?? (await resultMediaMeta(section, filePath));
   const info = await stat(real);
   if (signal.aborted || response.destroyed || response.writableEnded) return;
   if (item?.isImage || isImageExt(real)) {
@@ -82,7 +81,7 @@ async function streamClaimedMedia(
     sendFile(request, response, real, info.size, contentType(real));
     return;
   }
-  const settings = await loadSettings();
+  const parallelism = await sectionParallelism(section);
   if (signal.aborted || response.destroyed || response.writableEnded) return;
   response.writeHead(200, {
     "Content-Type": "video/mp4",
@@ -91,7 +90,7 @@ async function streamClaimedMedia(
     "X-Content-Type-Options": "nosniff",
   });
   const height = mode === "transcode" ? playbackHeight(maxHeight) : TRANSCODE_FULL_HEIGHT;
-  await enqueueFfmpeg(settings.server.ffmpegConcurrency, () => pipeFfmpeg(response, transcodeArgs(real, offset, mode, clipSeconds, height), signal), {
+  await enqueueFfmpeg(parallelism, () => pipeFfmpeg(response, transcodeArgs(real, offset, mode, clipSeconds, height), signal), {
     priority: "playback",
     signal,
   });

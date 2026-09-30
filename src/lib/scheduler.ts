@@ -1,7 +1,7 @@
 import { recordSkipped, startScan } from "./jobs";
 import { dueSlot } from "./schedule";
 import { getScan } from "./scan";
-import { loadRuns, loadSettings } from "./store";
+import { loadRuns, loadSettings, patchRun } from "./store";
 import type { SectionId } from "./types";
 
 let ticking = false;
@@ -40,5 +40,15 @@ async function fire(section: SectionId, slot: string): Promise<void> {
     await recordSkipped(section, slot);
     return;
   }
-  await startScan(section, "schedule", slot);
+  const started = await startScan(section, "schedule", slot);
+  if (!started.ok && started.status !== 409) {
+    await patchRun(section, {
+      slotKey: slot,
+      at: new Date().toISOString(),
+      status: "error",
+      groupCount: null,
+      error: started.error,
+      trigger: "schedule",
+    });
+  }
 }

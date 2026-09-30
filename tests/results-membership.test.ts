@@ -18,4 +18,5 @@ test("membership indexes asset ids and paths from saved groups", () => {
   assert.equal(membership.assetIds.has("asset-c"), true);
   assert.equal(membership.assetIds.has("asset-b"), false);
   assert.deepEqual([...membership.paths], ["/photos/a.jpg", "/photos/b.jpg", "/photos/c.jpg"]);
+  assert.equal(membership.mediaByPath.get("/photos/a.jpg")?.isImage, false);
 });

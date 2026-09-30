@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
+import { exclusive, readJson, writeJson } from "./json-file";
 
 const COOKIE = "vdf_session";
 const MAX_AGE_SECONDS = 60 * 60 * 12;
@@ -34,9 +35,24 @@ export async function sessionSecret(): Promise<string> {
 }
 
 export function issueToken(secret: string, expiresAt: number): string {
-  const payload = Buffer.from(JSON.stringify({ exp: expiresAt })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ exp: expiresAt, jti: randomBytes(16).toString("hex") })).toString("base64url");
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
+}
+
+function tokenBody(token: string): { exp?: number; jti?: string } | null {
+  const payload = token.split(".")[0];
+  if (!payload) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: number; jti?: string };
+  } catch {
+    return null;
+  }
+}
+
+export function tokenId(token: string): string | null {
+  const body = tokenBody(token);
+  return body && typeof body.jti === "string" && body.jti ? body.jti : null;
 }
 
 export function verifyToken(secret: string, token: string, now = Date.now()): boolean {
@@ -87,10 +103,55 @@ export function readCookie(header: string | null | undefined): string | null {
   return null;
 }
 
+type RevokedFile = { entries: { id: string; exp: number }[] };
+
+const revokedState = { ids: new Set<string>(), loaded: false };
+
+function revokedPath(): string {
+  return path.join(loadConfig().dataDir, "revoked-sessions.json");
+}
+
+export function resetSessionRevocationForTests(): void {
+  revokedState.ids = new Set();
+  revokedState.loaded = false;
+}
+
+async function revokedIds(now = Date.now()): Promise<Set<string>> {
+  if (revokedState.loaded) return revokedState.ids;
+  const file = await readJson<RevokedFile>(revokedPath(), { entries: [] });
+  const ids = new Set<string>();
+  for (const entry of file.entries) {
+    if (entry && entry.exp > now && entry.id) ids.add(entry.id);
+  }
+  revokedState.ids = ids;
+  revokedState.loaded = true;
+  return ids;
+}
+
+/** Forget this cookie until it would have expired. Other browsers stay signed in. */
+export async function revokeToken(token: string): Promise<void> {
+  const id = tokenId(token);
+  const body = tokenBody(token);
+  const exp = body && typeof body.exp === "number" ? body.exp : 0;
+  if (!id || exp <= Date.now()) return;
+  await exclusive(async () => {
+    const now = Date.now();
+    const file = await readJson<RevokedFile>(revokedPath(), { entries: [] });
+    const entries = file.entries.filter((entry) => entry.exp > now && entry.id !== id);
+    entries.push({ id, exp });
+    await writeJson(revokedPath(), { entries });
+    revokedState.ids.add(id);
+    revokedState.loaded = true;
+  });
+}
+
 export async function cookieIsValid(header: string | null | undefined): Promise<boolean> {
   const token = readCookie(header);
   if (!token) return false;
-  return verifyToken(await sessionSecret(), token);
+  if (!verifyToken(await sessionSecret(), token)) return false;
+  const id = tokenId(token);
+  if (!id) return false;
+  return !(await revokedIds()).has(id);
 }
 
 export function sessionExpiry(now = Date.now()): number {

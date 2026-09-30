@@ -74,6 +74,11 @@ export function groupIsOneCompleteStack(group: StoredGroup): boolean {
   return stackIds.size === 1;
 }
 
+/** Drop groups Immich has already resolved. Partial stacks and mixed stacks stay visible. */
+export function dropCompleteStacks(groups: StoredGroup[]): StoredGroup[] {
+  return groups.filter((group) => group.items.length >= 2 && !groupIsOneCompleteStack(group));
+}
+
 /**
  * Copy stack id and primary from full Immich stacks, insert members the scan
  * did not group, then merge groups that share a file.
@@ -264,7 +269,7 @@ export function setStackPrimary(group: StoredGroup, stackId: string, assetId: st
   const items = group.items.map((item) =>
     itemStackId(item) === stackId ? { ...item, stackPrimary: item.assetId === assetId } : item,
   );
-  return { ...group, items: orderGroupItems(items) };
+  return { ...group, items };
 }
 
 export function looseAssetIds(group: StoredGroup): string[] {

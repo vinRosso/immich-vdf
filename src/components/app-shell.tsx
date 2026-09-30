@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "cn";
 import { api } from "@/components/api";
@@ -18,10 +18,7 @@ const links = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const ignoredSection =
-    pathname === "/ignored" ? (searchParams.get("section") === "immich" ? "immich" : "server") : null;
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [trashSavedBytes, setTrashSavedBytes] = useState<number | null>(null);
 
@@ -84,19 +81,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-dvh w-full flex-col overflow-hidden px-4 pb-4">
-      <header className="sticky top-0 z-30 -mx-4 mb-4 border-b border-border bg-background/85 px-4 py-3 backdrop-blur-md">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex h-dvh w-full flex-col overflow-hidden">
+      <header className="sticky top-0 z-30 mb-4 w-full border-b border-white/[0.06] bg-background/75 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-3">
           <div className="min-w-0">
-            <p className="text-[11px] tracking-[0.22em] text-primary uppercase">Video Duplicate Finder</p>
+            <p className="text-[11px] font-medium tracking-[0.22em] text-primary/90 uppercase">Video Duplicate Finder</p>
             <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
-              <a href="/" className="font-heading text-3xl leading-none">
+              <a href="/" className="font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90">
                 VDF
               </a>
               {runtime && !runtime.cliAvailable ? (
                 <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
               ) : null}
-              {runtime?.cliVersion ? <span className="font-mono text-sm text-foreground/80">{runtime.cliVersion}</span> : null}
+              {runtime?.cliVersion ? <span className="font-mono text-sm text-muted-foreground/80">{runtime.cliVersion}</span> : null}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -105,36 +102,76 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : (
               <a
                 href="/trash"
-                className="rounded-full px-3 py-1.5 text-sm text-muted-foreground tabular-nums hover:bg-muted hover:text-foreground"
-                title="Disk space freed after permanently emptying .vdf-trash"
+                className="rounded-full border border-white/[0.06] bg-white/[0.02] px-3.5 py-1.5 text-sm text-muted-foreground tabular-nums transition-colors hover:border-white/[0.12] hover:bg-white/[0.05] hover:text-foreground"
+                title="Duplicates removed via .vdf-trash (emptied) and Immich trash"
               >
                 {formatBytes(trashSavedBytes)} saved
               </a>
             )}
-            <nav className="flex items-center gap-0.5 rounded-full bg-muted p-1">
-              {links.map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  className={cn(
-                    "rounded-full px-3 py-1.5 text-sm",
-                    navActive(pathname, link.href, ignoredSection, pathname === "/trash")
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground",
-                  )}
-                >
-                  {link.label}
-                </a>
-              ))}
-            </nav>
-            <button type="button" onClick={() => void logout()} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+            <Suspense
+              fallback={
+                <nav className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 shadow-inner backdrop-blur-sm">
+                  {links.map((link) => (
+                    <a
+                      key={link.href}
+                      href={link.href}
+                      className={cn(
+                        "rounded-full px-3.5 py-1 text-sm font-medium transition-all duration-150",
+                        navActive(pathname, link.href, null, pathname === "/trash")
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
+                      )}
+                    >
+                      {link.label}
+                    </a>
+                  ))}
+                </nav>
+              }
+            >
+              <AppShellNav pathname={pathname} />
+            </Suspense>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="rounded-full px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
+            >
               Sign out
             </button>
           </div>
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
+      <div
+        className={cn(
+          "scrollbar-subtle mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col overflow-auto px-6 pb-4",
+        )}
+      >
+        {children}
+      </div>
     </div>
+  );
+}
+
+function AppShellNav({ pathname }: { pathname: string }) {
+  const searchParams = useSearchParams();
+  const ignoredSection =
+    pathname === "/ignored" ? (searchParams.get("section") === "immich" ? "immich" : "server") : null;
+  return (
+    <nav className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 shadow-inner backdrop-blur-sm">
+      {links.map((link) => (
+        <a
+          key={link.href}
+          href={link.href}
+          className={cn(
+            "rounded-full px-3.5 py-1 text-sm font-medium transition-all duration-150",
+            navActive(pathname, link.href, ignoredSection, pathname === "/trash")
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
+          )}
+        >
+          {link.label}
+        </a>
+      ))}
+    </nav>
   );
 }
 

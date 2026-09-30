@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Figtree, Fraunces } from "next/font/google";
 import { AppProviders } from "@/components/app-providers";
+import { PageMarks } from "@/components/page-marks";
 import "./globals.css";
 
 const sans = Figtree({ subsets: ["latin"], variable: "--font-figtree" });
@@ -14,7 +15,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${sans.variable} ${display.variable} dark`}>
-      <body className="min-h-screen antialiased">
+      <body className="relative isolate min-h-screen antialiased">
+        <PageMarks />
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

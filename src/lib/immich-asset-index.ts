@@ -2,13 +2,18 @@ import path from "node:path";
 import { runPool } from "./concurrency";
 import { loadConfig } from "./config";
 import { exclusive, readJson, writeJson } from "./json-file";
-import { listImmichAssets, searchImmichAssetsByFileName, type ImmichAsset } from "./immich";
+import { listArchivedImmichAssetIds, listImmichAssets, searchImmichAssetsByFileName, type ImmichAsset } from "./immich";
 
-type AssetCacheEntry = string | { id: string; stackId: string | null; stackPrimary: boolean };
+type AssetCacheEntry = string | { id: string; stackId: string | null; stackPrimary: boolean; isArchived?: boolean };
 type AssetCache = { byPath: Record<string, AssetCacheEntry> };
 
 function cacheAsset(asset: ImmichAsset): AssetCacheEntry {
-  return { id: asset.id, stackId: asset.stackId ?? null, stackPrimary: Boolean(asset.stackPrimary) };
+  return {
+    id: asset.id,
+    stackId: asset.stackId ?? null,
+    stackPrimary: Boolean(asset.stackPrimary),
+    isArchived: Boolean(asset.isArchived),
+  };
 }
 
 function cacheHasId(entry: AssetCacheEntry | undefined): boolean {
@@ -109,8 +114,16 @@ export function applyStackMembershipToCache(cache: AssetCache, members: StackCac
     const paths = new Set(byId.get(member.assetId) ?? []);
     if (member.originalPath) paths.add(slash(member.originalPath));
     if (paths.size === 0) continue;
-    const next: AssetCacheEntry = { id: member.assetId, stackId: member.stackId, stackPrimary: member.stackPrimary };
-    for (const filePath of paths) byPath[filePath] = next;
+    for (const filePath of paths) {
+      const prior = byPath[filePath];
+      const priorArchived = prior && typeof prior !== "string" ? Boolean(prior.isArchived) : false;
+      byPath[filePath] = {
+        id: member.assetId,
+        stackId: member.stackId,
+        stackPrimary: member.stackPrimary,
+        isArchived: priorArchived,
+      };
+    }
   }
   return { byPath };
 }
@@ -123,13 +136,37 @@ export async function writeStackMembership(members: StackCacheMember[]): Promise
   });
 }
 
+export function applyArchivedIdsToCache(cache: AssetCache, archivedIds: ReadonlySet<string>): AssetCache {
+  const byPath: Record<string, AssetCacheEntry> = {};
+  for (const [filePath, entry] of Object.entries(cache.byPath)) {
+    const id = cacheEntryId(entry);
+    const isArchived = archivedIds.has(id);
+    if (typeof entry === "string") {
+      byPath[filePath] = isArchived
+        ? { id: entry, stackId: null, stackPrimary: false, isArchived: true }
+        : entry;
+    } else {
+      byPath[filePath] = { ...entry, isArchived };
+    }
+  }
+  return { byPath };
+}
+
 export function assetsFromCache(cache: AssetCache, originalPaths: string[]): ImmichAsset[] {
   const assets: ImmichAsset[] = [];
   for (const originalPath of originalPaths) {
     const entry = cache.byPath[slash(originalPath)];
     if (!entry) continue;
     if (typeof entry === "string") assets.push({ id: entry, originalPath });
-    else assets.push({ id: entry.id, originalPath, stackId: entry.stackId, stackPrimary: entry.stackPrimary });
+    else {
+      assets.push({
+        id: entry.id,
+        originalPath,
+        stackId: entry.stackId,
+        stackPrimary: entry.stackPrimary,
+        isArchived: Boolean(entry.isArchived),
+      });
+    }
   }
   return assets;
 }
@@ -199,6 +236,12 @@ export async function assetsForOriginalPaths(
       }
     }
     await writeJson(cacheFile(), cache);
+  }
+  try {
+    cache = applyArchivedIdsToCache(cache, await listArchivedImmichAssetIds(baseUrl, apiKey));
+    await writeJson(cacheFile(), cache);
+  } catch {
+    // Archive sync is best-effort; matching still returns cached ids.
   }
   return assetsFromCache(cache, originalPaths);
 }

@@ -14,7 +14,7 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
   const next: Settings = structuredClone(current);
   if (update.server) {
     next.server.scan = mergeScan(next.server.scan, update.server.scan, "server");
-    next.server.schedule = mergeSchedule(next.server.schedule, update.server.schedule);
+    next.server.schedule = mergeSchedule(next.server.schedule, update.server.schedule, "server");
     await jailScan("server", next.server.scan);
   }
   if (update.immich) {
@@ -22,7 +22,7 @@ export async function applySettingsUpdate(current: Settings, update: SettingsUpd
     if (update.immich.clearApiKey) next.immich.apiKey = "";
     else if (update.immich.apiKey) next.immich.apiKey = update.immich.apiKey.trim().slice(0, 2000);
     next.immich.scan = mergeScan(next.immich.scan, update.immich.scan, "immich");
-    next.immich.schedule = mergeSchedule(next.immich.schedule, update.immich.schedule);
+    next.immich.schedule = mergeSchedule(next.immich.schedule, update.immich.schedule, "immich");
     const creds: ImmichCredentials = { baseUrl: next.immich.baseUrl, apiKey: next.immich.apiKey };
     await jailScan("immich", next.immich.scan, creds);
     next.immich.pathMap = await resolveImmichPathMap(creds);
@@ -61,8 +61,18 @@ function mergeScan(
   return next;
 }
 
-function mergeSchedule(current: ScheduleSettings, patch: Partial<ScheduleSettings> | undefined): ScheduleSettings {
-  const next = { ...current, ...patch };
+function mergeSchedule(
+  current: ScheduleSettings,
+  patch: Partial<ScheduleSettings> | undefined,
+  section: SectionId,
+): ScheduleSettings {
+  const next: ScheduleSettings = {
+    mode: patch?.mode ?? current.mode,
+    time: patch?.time ?? current.time,
+    weekday: patch?.weekday ?? current.weekday,
+    timezone: patch?.timezone ?? current.timezone,
+    scan: current.scan,
+  };
   if (next.mode !== "off" && next.mode !== "daily" && next.mode !== "weekly") {
     throw new AppError("Schedule must be off, daily, or weekly");
   }
@@ -74,6 +84,7 @@ function mergeSchedule(current: ScheduleSettings, patch: Partial<ScheduleSetting
   if (hour > 23 || minute > 59) throw new AppError("Schedule time must be HH:mm");
   next.weekday = integerIn(next.weekday, 0, 6, "Weekday");
   if (!isValidTimeZone(next.timezone)) throw new AppError("Timezone is not recognized");
+  if (patch?.scan) next.scan = mergeScan(current.scan ?? defaultScan(section), patch.scan, section);
   return next;
 }
 

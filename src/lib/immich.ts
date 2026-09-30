@@ -5,6 +5,7 @@ export type ImmichAsset = {
   originalPath: string;
   stackId?: string | null;
   stackPrimary?: boolean;
+  isArchived?: boolean;
 };
 
 export type ImmichStack = {
@@ -115,6 +116,12 @@ type SearchPage = { items: ImmichAsset[]; nextPage: string | number | null };
 
 const TRASHED_AFTER_EPOCH = "1970-01-01T00:00:00.000Z";
 
+/** True when Immich marks an asset as archived in the library. */
+export function immichAssetArchived(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return (value as { isArchived?: unknown }).isArchived === true;
+}
+
 /** True when Immich marks an asset as in the trash (not visible in the main library). */
 export function immichAssetTrashed(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -135,7 +142,12 @@ function parseSearchPage(body: unknown): SearchPage {
       const asset = item as { id?: unknown; originalPath?: unknown; stack?: unknown };
       if (typeof asset.id === "string" && typeof asset.originalPath === "string") {
         const stack = stackFields(asset.stack, asset.id);
-        items.push({ id: asset.id, originalPath: asset.originalPath, ...stack });
+        items.push({
+          id: asset.id,
+          originalPath: asset.originalPath,
+          ...stack,
+          isArchived: immichAssetArchived(item),
+        });
       }
     }
   }
@@ -151,10 +163,12 @@ type MetadataSearchQuery = {
   updatedAfter?: string;
   withDeleted?: boolean;
   trashedAfter?: string;
+  withArchived?: boolean;
+  isArchived?: boolean;
 };
 
 function searchMetadataBody(query: MetadataSearchQuery): string {
-  return JSON.stringify({
+  const body: Record<string, unknown> = {
     page: query.page,
     size: 1000,
     type: query.type,
@@ -163,7 +177,10 @@ function searchMetadataBody(query: MetadataSearchQuery): string {
     originalFileName: query.originalFileName,
     updatedAfter: query.updatedAfter,
     trashedAfter: query.trashedAfter,
-  });
+  };
+  if (query.withArchived !== undefined) body.withArchived = query.withArchived;
+  if (query.isArchived !== undefined) body.isArchived = query.isArchived;
+  return JSON.stringify(body);
 }
 
 async function searchMetadataPage(baseUrl: string, apiKey: string, query: MetadataSearchQuery): Promise<SearchPage> {
@@ -232,6 +249,24 @@ export async function listTrashedImmichAssetIds(baseUrl: string, apiKey: string)
   return (await listTrashedImmichAssets(baseUrl, apiKey)).ids;
 }
 
+/** Asset ids Immich marks as archived (hidden from the main timeline). */
+export async function listArchivedImmichAssetIds(baseUrl: string, apiKey: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const type of ["IMAGE", "VIDEO"]) {
+    let page = 1;
+    for (let guard = 0; guard < 500; guard += 1) {
+      const batch = await searchMetadataPage(baseUrl, apiKey, { page, type, isArchived: true, withArchived: true });
+      for (const asset of batch.items) {
+        if (asset.isArchived) ids.add(asset.id);
+      }
+      if (!batch.nextPage || batch.items.length === 0) break;
+      const parsed = Number(batch.nextPage);
+      page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+    }
+  }
+  return ids;
+}
+
 async function searchAllPages(
   baseUrl: string,
   apiKey: string,
@@ -242,7 +277,7 @@ async function searchAllPages(
   const assets: ImmichAsset[] = [];
   let page = 1;
   for (let guard = 0; guard < maxPages; guard += 1) {
-    const batch = await searchMetadataPage(baseUrl, apiKey, { page, type, originalFileName });
+    const batch = await searchMetadataPage(baseUrl, apiKey, { page, type, originalFileName, withArchived: true });
     assets.push(...batch.items);
     if (!batch.nextPage || batch.items.length === 0) break;
     const parsed = Number(batch.nextPage);

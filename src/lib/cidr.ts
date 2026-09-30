@@ -11,6 +11,15 @@ function ipv4ToInt(ip: string): number | null {
   return value >>> 0;
 }
 
+/** Proxy trust must name a real network no larger than a /8. `0.0.0.0/0` and other catch-alls are refused. */
+export function isTrustedProxyCidr(cidr: string): boolean {
+  const [network, bitsRaw] = cidr.trim().split("/");
+  const bits = Number(bitsRaw);
+  if (!network || network.includes(":") || !Number.isInteger(bits) || bits < 8 || bits > 32) return false;
+  const networkInt = ipv4ToInt(network);
+  return networkInt !== null && networkInt !== 0;
+}
+
 export function ipInCidr(ip: string, cidr: string): boolean {
   const trimmed = ip.trim().replace(/^::ffff:/i, "");
   const [network, bitsRaw] = cidr.trim().split("/");
@@ -18,10 +27,9 @@ export function ipInCidr(ip: string, cidr: string): boolean {
   const bits = Number(bitsRaw);
   const ipInt = ipv4ToInt(trimmed);
   const networkInt = ipv4ToInt(network);
-  if (ipInt === null || networkInt === null || !Number.isInteger(bits) || bits < 0 || bits > 32) {
+  if (ipInt === null || networkInt === null || !Number.isInteger(bits) || bits < 1 || bits > 32) {
     return false;
   }
-  if (bits === 0) return true;
   const mask = bits === 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
   return (ipInt & mask) === (networkInt & mask);
 }

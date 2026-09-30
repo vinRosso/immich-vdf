@@ -142,3 +142,11 @@ test("daily schedule is due only inside the window and not twice", () => {
   const weekly: ScheduleSettings = { mode: "weekly", time: "03:00", weekday: 0, timezone: "UTC" };
   assert.equal(nextOccurrence(weekly, new Date("2026-09-26T12:00:00Z"))?.toISOString(), "2026-09-27T03:00:00.000Z");
 });
+
+test("schedule clock in Rome stays on that civil time", () => {
+  const schedule: ScheduleSettings = { mode: "daily", time: "21:39", weekday: 0, timezone: "Europe/Rome" };
+  const before = new Date("2026-09-30T19:30:00Z");
+  assert.equal(nextOccurrence(schedule, before)?.toISOString(), "2026-09-30T19:39:00.000Z");
+  const after = new Date("2026-09-30T19:40:00Z");
+  assert.equal(nextOccurrence(schedule, after)?.toISOString(), "2026-10-01T19:39:00.000Z");
+});

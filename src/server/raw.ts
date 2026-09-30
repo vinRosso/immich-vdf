@@ -6,7 +6,7 @@ import { AppError, errorText } from "../lib/errors";
 import { openImmichThumbnail } from "../lib/immich";
 import { loadConfig } from "../lib/config";
 import { PathJailError } from "../lib/path-jail";
-import { clientIp, requestIsHttps } from "../lib/request-meta";
+import { clientIp, mutationSiteAllowed, requestIsHttps } from "../lib/request-meta";
 import { clearLoginFailures, loginAllowed, recordLoginFailure } from "../lib/rate-limit";
 import { redact } from "../lib/redact";
 import { getScan } from "../lib/scan";
@@ -15,11 +15,13 @@ import {
   cookieIsValid,
   issueToken,
   passwordsMatch,
+  readCookie,
+  revokeToken,
   sessionCookie,
   sessionExpiry,
   sessionSecret,
 } from "../lib/session";
-import { loadResults, loadSettings, secretValues } from "../lib/store";
+import { loadSettings, resultsMembership, secretValues } from "../lib/store";
 import { ThumbnailCancelled } from "../lib/thumbs";
 import { HttpUrlError } from "../lib/urls";
 import { trashThumbFile } from "../lib/trash";
@@ -32,10 +34,20 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
     return true;
   }
   if (request.method === "POST" && pathname === "/api/login") {
+    if (!originAllowed(request)) {
+      sendJson(response, 403, { error: "Cross-origin request refused" });
+      return true;
+    }
     await login(request, response);
     return true;
   }
   if (request.method === "POST" && pathname === "/api/logout") {
+    if (!originAllowed(request)) {
+      sendJson(response, 403, { error: "Cross-origin request refused" });
+      return true;
+    }
+    const token = readCookie(request.headers.cookie);
+    if (token) await revokeToken(token);
     response.setHeader("Set-Cookie", clearCookie(requestIsHttps(request)));
     sendJson(response, 200, { ok: true });
     return true;
@@ -176,10 +188,19 @@ function clientAbortSignal(request: IncomingMessage, response: ServerResponse): 
   return controller.signal;
 }
 
+function originAllowed(request: IncomingMessage): boolean {
+  const forwarded = request.headers["x-forwarded-host"];
+  const host = (Array.isArray(forwarded) ? forwarded[0] : forwarded) || request.headers.host;
+  return mutationSiteAllowed({
+    origin: request.headers.origin,
+    referer: request.headers.referer,
+    host: Array.isArray(host) ? host[0] : host,
+  });
+}
+
 async function proxyImmichThumb(request: IncomingMessage, response: ServerResponse, assetId: string): Promise<void> {
-  const results = await loadResults("immich");
-  const known = results?.groups.some((group) => group.items.some((item) => item.assetId === assetId)) ?? false;
-  if (!known) throw new AppError("That asset is not in the current results", 404);
+  const membership = await resultsMembership("immich");
+  if (!membership.found || !membership.assetIds.has(assetId)) throw new AppError("That asset is not in the current results", 404);
   const settings = await loadSettings();
   if (!settings.immich.baseUrl || !settings.immich.apiKey) throw new AppError("Immich is not configured");
   const upstream = await openImmichThumbnail(settings.immich.baseUrl, settings.immich.apiKey, assetId);

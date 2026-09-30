@@ -116,9 +116,15 @@ export function rewriteHostPathWithBinds(
   return hostPath;
 }
 
+const scanRootsCache = new Map<string, { at: number; roots: string[] }>();
+const SCAN_ROOTS_TTL_MS = 60_000;
+
 /** Host paths allowed for Immich scans (upload mount, env roots, mapped library import paths, bind targets). */
 export async function resolveImmichScanRoots(credentials?: ImmichCredentials): Promise<string[]> {
   const config = loadConfig();
+  const cacheKey = `${normalizeRoot(config.immichLibrary)}\0${credentials?.baseUrl.trim() ?? ""}`;
+  const hit = scanRootsCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < SCAN_ROOTS_TTL_MS) return hit.roots;
   const roots = new Set<string>([config.immichLibrary, ...config.immichScanRoots, ...config.immichBinds.map((bind) => bind.hostPath)]);
   const url = credentials?.baseUrl.trim() ?? "";
   const key = credentials?.apiKey ?? "";
@@ -133,7 +139,9 @@ export async function resolveImmichScanRoots(credentials?: ImmichCredentials): P
       // Fall back to compose/env roots.
     }
   }
-  return dedupeRoots([...roots]);
+  const resolved = dedupeRoots([...roots]);
+  scanRootsCache.set(cacheKey, { at: Date.now(), roots: resolved });
+  return resolved;
 }
 
 /** External scan roots (not the upload mount at `/immich`). */

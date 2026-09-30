@@ -4,7 +4,7 @@ import { AppError } from "@/lib/errors";
 import { playbackMode } from "@/lib/playback";
 import { probeFile } from "@/lib/probe";
 import { api } from "@/lib/route";
-import { loadResults } from "@/lib/store";
+import { resultMediaMeta } from "@/lib/store";
 import type { MediaInfo, SectionId } from "@/lib/types";
 
 export const GET = api(async (request) => {
@@ -12,8 +12,7 @@ export const GET = api(async (request) => {
   const filePath = request.nextUrl.searchParams.get("path");
   if ((section !== "server" && section !== "immich") || !filePath) throw new AppError("Missing media");
   const real = await realResultPath(section as SectionId, filePath);
-  const results = await loadResults(section as SectionId);
-  const item = results?.groups.flatMap((group) => group.items).find((entry) => entry.path === real || entry.path === filePath);
+  const item = (await resultMediaMeta(section as SectionId, real)) ?? (await resultMediaMeta(section as SectionId, filePath));
   if (item?.isImage) {
     const body: MediaInfo = { mode: "direct", duration: 0, width: item.width, height: item.height, videoCodec: null, audioCodec: null };
     return NextResponse.json(body);

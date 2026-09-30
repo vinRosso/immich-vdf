@@ -99,6 +99,24 @@ function itemInImmichTrash(
   return candidates.some((value) => trashedPaths.has(normalizePath(value)));
 }
 
+/** Items still in these groups that Immich has already trashed, keyed so each asset is counted once. */
+export function immichTrashedCredits(
+  groups: StoredGroup[],
+  trashedIds: ReadonlySet<string>,
+  maps: PathMapEntry[] = [],
+  trashedPaths: ReadonlySet<string> = new Set(),
+): { id: string; bytes: number }[] {
+  if (trashedIds.size === 0 && trashedPaths.size === 0) return [];
+  const credits: { id: string; bytes: number }[] = [];
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (!itemInImmichTrash(item, trashedIds, trashedPaths, maps)) continue;
+      credits.push({ id: item.assetId || `path:${item.path}`, bytes: Math.max(0, item.sizeBytes) });
+    }
+  }
+  return credits;
+}
+
 /** Remove items linked to Immich-trashed assets; drop groups that no longer have duplicates. */
 export function dropImmichTrashedFromGroups(
   groups: StoredGroup[],
@@ -131,5 +149,6 @@ function decorate(
     assetId: asset?.id ?? null,
     stackId: asset?.stackId ?? null,
     stackPrimary: Boolean(asset?.stackPrimary),
+    immichArchived: Boolean(asset?.isArchived),
   };
 }

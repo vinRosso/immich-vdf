@@ -2,17 +2,20 @@ import { NextResponse } from "next/server";
 import { trashServerGroup, trashServerItems } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
-import { loadTrashStats } from "@/lib/store";
+import { loadTrashStats, trashStatsSavedTotal } from "@/lib/store";
 import { emptyTrash, listTrash, restoreAllTrash, restoreTrashItem } from "@/lib/trash";
 
 export const GET = api(async (request) => {
+  const stats = await loadTrashStats();
+  const savedBytes = trashStatsSavedTotal(stats);
+  const bytesFreed = stats.bytesFreed;
+  const immichBytesTrashed = stats.immichBytesTrashed ?? 0;
+  if (request.nextUrl.searchParams.get("summary") === "1") {
+    return NextResponse.json({ savedBytes, bytesFreed, immichBytesTrashed });
+  }
   const entries = await listTrash();
   const totalBytes = entries.reduce((sum, entry) => sum + entry.sizeBytes, 0);
-  const { bytesFreed: savedBytes } = await loadTrashStats();
-  if (request.nextUrl.searchParams.get("summary") === "1") {
-    return NextResponse.json({ count: entries.length, totalBytes, savedBytes });
-  }
-  return NextResponse.json({ entries, totalBytes, savedBytes });
+  return NextResponse.json({ entries, totalBytes, savedBytes, bytesFreed, immichBytesTrashed });
 });
 
 export const POST = api(async (request) => {

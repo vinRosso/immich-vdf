@@ -4,7 +4,7 @@ import { loadConfig } from "./config";
 import { clampScanParallelism } from "./scan-parallelism";
 import { exclusive, readJson, writeJson } from "./json-file";
 import { defaultScan } from "./scan-defaults";
-import { membershipFromResults, type ResultsMembership } from "./results-membership";
+import { membershipFromResults, type ResultMediaMeta, type ResultsMembership } from "./results-membership";
 import type { IgnoredEntry, RunRecord, RunsFile, ScanSettings, SectionId, Settings, StoredResults } from "./types";
 import type { InventoryEntry } from "./scan-inventory";
 
@@ -69,10 +69,18 @@ function trashStatsPath(): string {
 
 export type TrashStats = {
   bytesFreed: number;
+  /** Bytes of duplicates sent to Immich trash via VDF (cumulative). */
+  immichBytesTrashed?: number;
+  /** Asset ids already included in immichBytesTrashed, so a later scan does not add them again. */
+  immichCountedIds?: string[];
 };
 
+export function trashStatsSavedTotal(stats: TrashStats): number {
+  return stats.bytesFreed + Math.max(0, stats.immichBytesTrashed ?? 0);
+}
+
 export function loadTrashStats(): Promise<TrashStats> {
-  return readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0 });
+  return readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0, immichBytesTrashed: 0 });
 }
 
 function trashAddedPath(): string {
@@ -114,8 +122,44 @@ export function clearTrashAdded(): Promise<void> {
 
 export function addTrashFreed(bytes: number): Promise<TrashStats> {
   return exclusive(async () => {
-    const current = await readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0 });
-    const next = { bytesFreed: current.bytesFreed + Math.max(0, bytes) };
+    const current = await readJson<TrashStats>(trashStatsPath(), { bytesFreed: 0, immichBytesTrashed: 0 });
+    const next = {
+      bytesFreed: current.bytesFreed + Math.max(0, bytes),
+      immichBytesTrashed: current.immichBytesTrashed ?? 0,
+    };
+    await writeJson(trashStatsPath(), next);
+    return next;
+  });
+}
+
+export function addImmichTrashSaved(bytes: number): Promise<TrashStats> {
+  return creditImmichTrash([{ id: "", bytes }]);
+}
+
+/** Add Immich trash bytes once per asset id. Empty id always counts (tests and manual totals). */
+export function creditImmichTrash(items: { id: string; bytes: number }[]): Promise<TrashStats> {
+  return exclusive(async () => {
+    const current = await readJson<TrashStats & { immichCountedIds?: string[] }>(trashStatsPath(), {
+      bytesFreed: 0,
+      immichBytesTrashed: 0,
+    });
+    const seen = new Set(current.immichCountedIds ?? []);
+    let added = 0;
+    for (const item of items) {
+      const bytes = Math.max(0, item.bytes);
+      if (!item.id) {
+        added += bytes;
+        continue;
+      }
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      added += bytes;
+    }
+    const next = {
+      bytesFreed: current.bytesFreed,
+      immichBytesTrashed: (current.immichBytesTrashed ?? 0) + added,
+      immichCountedIds: [...seen],
+    };
     await writeJson(trashStatsPath(), next);
     return next;
   });
@@ -219,12 +263,44 @@ export function saveResults(section: SectionId, results: StoredResults): Promise
   });
 }
 
+/** Load and save results under the same write lock so two actions cannot overwrite each other. */
+export function updateResults(
+  section: SectionId,
+  mutator: (current: StoredResults | null) => StoredResults | null | Promise<StoredResults | null>,
+): Promise<StoredResults | null> {
+  return exclusive(async () => {
+    const current = await loadResults(section);
+    const next = await mutator(current);
+    if (!next || next === current) return current;
+    await writeJson(resultsPath(section), next);
+    membershipCache.delete(section);
+    return next;
+  });
+}
+
+export async function resultMediaMeta(section: SectionId, filePath: string): Promise<ResultMediaMeta | null> {
+  const membership = await resultsMembership(section);
+  return membership.mediaByPath.get(filePath) ?? null;
+}
+
 export function loadIgnored(section: SectionId): Promise<IgnoredEntry[]> {
   return readJson<IgnoredEntry[]>(ignorePath(section), []);
 }
 
 export function saveIgnored(section: SectionId, entries: IgnoredEntry[]): Promise<void> {
   return exclusive(() => writeJson(ignorePath(section), entries));
+}
+
+export function updateIgnored(
+  section: SectionId,
+  mutator: (current: IgnoredEntry[]) => IgnoredEntry[] | Promise<IgnoredEntry[]>,
+): Promise<IgnoredEntry[]> {
+  return exclusive(async () => {
+    const current = await loadIgnored(section);
+    const next = await mutator(current);
+    if (next !== current) await writeJson(ignorePath(section), next);
+    return next;
+  });
 }
 
 export async function loadRuns(): Promise<RunsFile> {

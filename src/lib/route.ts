@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { AppError, errorText } from "./errors";
 import { PathJailError } from "./path-jail";
 import { redact } from "./redact";
+import { mutationSiteAllowed } from "./request-meta";
 import { cookieIsValid } from "./session";
 import { loadSettings, secretValues } from "./store";
 import { HttpUrlError } from "./urls";
@@ -11,6 +12,12 @@ export function api(handler: (request: NextRequest) => Promise<NextResponse>): (
     try {
       if (!(await cookieIsValid(request.headers.get("cookie")))) {
         return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+      }
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+        if (!mutationSiteAllowed({ origin: request.headers.get("origin"), referer: request.headers.get("referer"), host })) {
+          return NextResponse.json({ error: "Cross-origin request refused" }, { status: 403 });
+        }
       }
       return await handler(request);
     } catch (error) {

@@ -23,6 +23,8 @@ export type ScheduleSettings = {
   time: string;
   weekday: number;
   timezone: string;
+  /** Matching options for scheduled scans. Folders stay on the section scan. */
+  scan?: ScanSettings;
 };
 
 export type PathMapEntry = {
@@ -96,6 +98,8 @@ export type StoredItem = {
   /** Immich stack this asset already belongs to. Missing on scans from before stacks were recorded. */
   stackId?: string | null;
   stackPrimary?: boolean;
+  /** Immich library archive flag from the last asset sync. */
+  immichArchived?: boolean;
 };
 
 export type StoredGroup = {
@@ -163,6 +167,8 @@ export type ClientItem = {
   format: string | null;
   fps: number;
   assetId: string | null;
+  /** True when Immich has this asset archived. Separate from VDF ignore. */
+  immichArchived?: boolean;
   originalPath: string | null;
   stackId: string | null;
   stackPrimary: boolean;
@@ -194,6 +200,28 @@ export type ResultsResponse = {
   hiddenIgnored: number;
   unmatched: number;
   groups: ClientGroup[];
+};
+
+/** Slim home-hub payload: counts plus a few posters, not every duplicate group. */
+export type ResultsPreviewGroup = {
+  groupId: string;
+  itemCount: number;
+  /** Immich archived flag on any item in the group. Ignored groups are omitted instead. */
+  immichArchived: boolean;
+  posterPath: string;
+  posterAssetId: string | null;
+  posterName: string;
+};
+
+export type ResultsPreviewResponse = {
+  section: SectionId;
+  scanned: boolean;
+  finishedAt: string | null;
+  durationMs: number | null;
+  error: string | null;
+  hiddenIgnored: number;
+  groupCount: number;
+  groups: ResultsPreviewGroup[];
 };
 
 export type RuntimeInfo = {

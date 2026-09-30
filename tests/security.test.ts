@@ -3,15 +3,16 @@ import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ipInCidr } from "../src/lib/cidr";
+import { ipInCidr, isTrustedProxyCidr } from "../src/lib/cidr";
 import { buildVdfArgs } from "../src/lib/cli-args";
 import { filmstripArgs, posterArgs, transcodeArgs } from "../src/lib/ffmpeg-args";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "../src/lib/ignore";
 import { isInside, resolveInside } from "../src/lib/path-jail";
 import { parseByteRange } from "../src/lib/range";
 import { redact } from "../src/lib/redact";
-import { issueToken, passwordsMatch, verifyToken } from "../src/lib/session";
-import { assertHttpUrl } from "../src/lib/urls";
+import { mutationSiteAllowed, originMatchesHost } from "../src/lib/request-meta";
+import { cookieIsValid, issueToken, passwordsMatch, resetSessionRevocationForTests, revokeToken, verifyToken } from "../src/lib/session";
+import { fetchInitForRedirect, assertHttpUrl } from "../src/lib/urls";
 import type { StoredItem } from "../src/lib/types";
 
 test("path jail follows symlinks and refuses an escape", async () => {
@@ -57,6 +58,51 @@ test("trusted proxy CIDR does not match a neighbor", () => {
   assert.equal(ipInCidr("10.1.2.3", "10.1.0.0/16"), true);
   assert.equal(ipInCidr("10.2.2.3", "10.1.0.0/16"), false);
   assert.equal(ipInCidr("::ffff:127.0.0.1", "127.0.0.1/32"), true);
+  assert.equal(ipInCidr("1.2.3.4", "0.0.0.0/0"), false);
+  assert.equal(isTrustedProxyCidr("10.0.0.0/8"), true);
+  assert.equal(isTrustedProxyCidr("172.16.0.0/12"), true);
+  assert.equal(isTrustedProxyCidr("0.0.0.0/0"), false);
+  assert.equal(isTrustedProxyCidr("0.0.0.0/8"), false);
+  assert.equal(isTrustedProxyCidr("1.0.0.0/7"), false);
+});
+
+test("redirects to another host drop API credentials", () => {
+  const init = { headers: { "x-api-key": "secret", accept: "application/json" } };
+  const same = fetchInitForRedirect(init, new URL("https://immich.local/api"), new URL("https://immich.local/v2"));
+  assert.equal(new Headers(same.headers).get("x-api-key"), "secret");
+  const other = fetchInitForRedirect(init, new URL("https://immich.local/api"), new URL("https://evil.example/api"));
+  const headers = new Headers(other.headers);
+  assert.equal(headers.get("x-api-key"), null);
+  assert.equal(headers.get("accept"), "application/json");
+});
+
+test("origin must match the request host when it is sent", () => {
+  assert.equal(originMatchesHost(null, "localhost:47821"), true);
+  assert.equal(originMatchesHost("http://localhost:47821", "localhost:47821"), true);
+  assert.equal(originMatchesHost("https://evil.example", "localhost:47821"), false);
+  assert.equal(mutationSiteAllowed({ referer: "http://localhost:47821/immich", host: "localhost:47821" }), true);
+  assert.equal(mutationSiteAllowed({ referer: "https://evil.example/immich", host: "localhost:47821" }), false);
+  assert.equal(mutationSiteAllowed({ host: "localhost:47821" }), true);
+});
+
+test("logout revokes that session token", async () => {
+  const { sessionSecret } = await import("../src/lib/session");
+  const secret = await sessionSecret();
+  const dir = await mkdtemp(path.join(tmpdir(), "vdf-session-"));
+  const previous = process.env.DATA_DIR;
+  process.env.DATA_DIR = dir;
+  resetSessionRevocationForTests();
+  try {
+    const token = issueToken(secret, Date.now() + 60_000);
+    assert.equal(verifyToken(secret, token), true);
+    assert.equal(await cookieIsValid(`vdf_session=${token}`), true);
+    await revokeToken(token);
+    assert.equal(await cookieIsValid(`vdf_session=${token}`), false);
+  } finally {
+    if (previous === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previous;
+    resetSessionRevocationForTests();
+  }
 });
 
 test("byte ranges", () => {

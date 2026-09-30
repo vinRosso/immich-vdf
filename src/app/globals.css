@@ -49,23 +49,23 @@
 }
 
 :root {
-  --background: oklch(0.16 0.03 292);
-  --foreground: oklch(0.96 0.015 292);
-  --card: oklch(0.21 0.035 294);
-  --card-foreground: oklch(0.96 0.015 292);
-  --popover: oklch(0.21 0.035 294);
-  --popover-foreground: oklch(0.96 0.015 292);
+  --background: oklch(0.105 0.02 292);
+  --foreground: oklch(0.95 0.012 292);
+  --card: oklch(0.155 0.026 294);
+  --card-foreground: oklch(0.95 0.012 292);
+  --popover: oklch(0.155 0.026 294);
+  --popover-foreground: oklch(0.95 0.012 292);
   --primary: oklch(0.74 0.16 302);
   --primary-foreground: oklch(0.18 0.04 292);
-  --secondary: oklch(0.28 0.04 294);
-  --secondary-foreground: oklch(0.96 0.015 292);
-  --muted: oklch(0.26 0.035 294);
-  --muted-foreground: oklch(0.74 0.04 298);
-  --accent: oklch(0.32 0.07 300);
-  --accent-foreground: oklch(0.96 0.015 292);
+  --secondary: oklch(0.2 0.028 294);
+  --secondary-foreground: oklch(0.95 0.012 292);
+  --muted: oklch(0.185 0.026 294);
+  --muted-foreground: oklch(0.72 0.035 298);
+  --accent: oklch(0.24 0.06 300);
+  --accent-foreground: oklch(0.95 0.012 292);
   --destructive: oklch(0.68 0.19 18);
-  --border: oklch(0.42 0.05 298 / 42%);
-  --input: oklch(0.28 0.04 294);
+  --border: oklch(0.48 0.05 298 / 28%);
+  --input: oklch(0.2 0.028 294);
   --ring: oklch(0.74 0.16 302);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -84,23 +84,23 @@
 }
 
 .dark {
-  --background: oklch(0.16 0.03 292);
-  --foreground: oklch(0.96 0.015 292);
-  --card: oklch(0.21 0.035 294);
-  --card-foreground: oklch(0.96 0.015 292);
-  --popover: oklch(0.21 0.035 294);
-  --popover-foreground: oklch(0.96 0.015 292);
+  --background: oklch(0.105 0.02 292);
+  --foreground: oklch(0.95 0.012 292);
+  --card: oklch(0.155 0.026 294);
+  --card-foreground: oklch(0.95 0.012 292);
+  --popover: oklch(0.155 0.026 294);
+  --popover-foreground: oklch(0.95 0.012 292);
   --primary: oklch(0.74 0.16 302);
   --primary-foreground: oklch(0.18 0.04 292);
-  --secondary: oklch(0.28 0.04 294);
-  --secondary-foreground: oklch(0.96 0.015 292);
-  --muted: oklch(0.26 0.035 294);
-  --muted-foreground: oklch(0.74 0.04 298);
-  --accent: oklch(0.32 0.07 300);
-  --accent-foreground: oklch(0.96 0.015 292);
+  --secondary: oklch(0.2 0.028 294);
+  --secondary-foreground: oklch(0.95 0.012 292);
+  --muted: oklch(0.185 0.026 294);
+  --muted-foreground: oklch(0.72 0.035 298);
+  --accent: oklch(0.24 0.06 300);
+  --accent-foreground: oklch(0.95 0.012 292);
   --destructive: oklch(0.68 0.19 18);
-  --border: oklch(0.42 0.05 298 / 42%);
-  --input: oklch(0.28 0.04 294);
+  --border: oklch(0.48 0.05 298 / 28%);
+  --input: oklch(0.2 0.028 294);
   --ring: oklch(0.74 0.16 302);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -123,7 +123,11 @@
   }
   body {
     @apply bg-background text-foreground;
-    background-image: radial-gradient(1200px 500px at 10% -10%, oklch(0.55 0.18 302 / 22%), transparent 55%);
+    background-image:
+      radial-gradient(1100px 520px at 8% -10%, oklch(0.44 0.18 302 / 15%), transparent 60%),
+      radial-gradient(900px 520px at 92% 110%, oklch(0.38 0.16 300 / 10%), transparent 65%);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
   }
   h1, h2, .font-heading {
     font-family: var(--font-heading);
@@ -147,6 +151,41 @@
   select option {
     background-color: var(--popover);
     color: var(--popover-foreground);
+  }
+}
+
+@layer utilities {
+  .scrollbar-subtle {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 32%, transparent) transparent;
+  }
+
+  .scrollbar-subtle::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+
+  .scrollbar-subtle::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-subtle::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+  }
+
+  .scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--muted-foreground) 48%, transparent);
+  }
+
+  .scrollbar-subtle::-webkit-scrollbar-button,
+  .scrollbar-subtle::-webkit-scrollbar-corner {
+    display: none;
+    height: 0;
+    width: 0;
   }
 }
 

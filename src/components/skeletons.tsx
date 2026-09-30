@@ -39,15 +39,11 @@ export function ResultsToolbarSkeleton() {
   );
 }
 
-export function HomeGroupListSkeleton() {
+export function HomeGroupGridSkeleton() {
   return (
-    <div className="space-y-3" aria-busy="true" aria-label="Loading groups">
-      {Array.from({ length: 4 }, (_, index) => (
-        <div key={index} className="space-y-3 rounded-xl border border-border p-4">
-          <Skeleton className="h-5 w-24" />
-          <Skeleton className="h-3 w-full max-w-md" />
-          <Skeleton className="h-3 w-32" />
-        </div>
+    <div className="grid w-full grid-cols-5 gap-1.5" aria-busy="true" aria-label="Loading groups">
+      {Array.from({ length: 10 }, (_, index) => (
+        <Skeleton key={index} className="aspect-square w-full rounded-md" />
       ))}
     </div>
   );

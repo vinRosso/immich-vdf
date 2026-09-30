@@ -8,8 +8,9 @@ import { loadConfig, resolveVdfCli } from "./config";
 import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
 import { errorText } from "./errors";
 import { assetsForOriginalPaths } from "./immich-asset-index";
-import { attachAssets, dropImmichTrashedFromGroups, originalPathsForGroups } from "./immich-join";
+import { attachAssets, dropImmichTrashedFromGroups, immichTrashedCredits, originalPathsForGroups } from "./immich-join";
 import { listTrashedImmichAssets } from "./immich";
+import { dropCompleteStacks } from "./immich-stacks";
 import { expandImmichGroups } from "./immich-stack-sync";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
@@ -22,13 +23,14 @@ import { redact } from "./redact";
 import { getScan } from "./scan";
 import { walkScanInventory, type InventoryEntry } from "./scan-inventory";
 import {
+  creditImmichTrash,
   loadIgnored,
   loadResults,
   loadSettings,
   loadStoredInventory,
   patchRun,
-  saveIgnored,
   saveResults,
+  updateIgnored,
   saveStoredInventory,
   sectionDbDir,
   secretValues,
@@ -46,13 +48,35 @@ type ScanPaths = {
   settingsFile: string;
 };
 
+/** Scheduled runs keep the live folders and use the schedule's own matching options. */
+function scanSettingsForRun(live: ScanSettings, scheduled: ScanSettings | undefined): ScanSettings {
+  if (!scheduled) return live;
+  return {
+    ...live,
+    threshold: scheduled.threshold,
+    percent: scheduled.percent,
+    parallelism: scheduled.parallelism,
+    includeImages: scheduled.includeImages,
+    usePhash: scheduled.usePhash,
+    partialClip: scheduled.partialClip,
+    aiMatching: scheduled.aiMatching,
+    aiPartial: scheduled.aiPartial,
+    compareHorizontallyFlipped: scheduled.compareHorizontallyFlipped,
+    ignoreBlackPixels: scheduled.ignoreBlackPixels,
+    ignoreWhitePixels: scheduled.ignoreWhitePixels,
+    timeWindowDays: scheduled.timeWindowDays,
+  };
+}
+
 export async function startScan(
   section: SectionId,
   trigger: "manual" | "schedule",
   slotKey: string | null = null,
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const settings = await loadSettings();
-  const scanSettings = section === "server" ? settings.server.scan : settings.immich.scan;
+  const live = section === "server" ? settings.server.scan : settings.immich.scan;
+  const scheduled = section === "server" ? settings.server.schedule.scan : settings.immich.schedule.scan;
+  const scanSettings = scanSettingsForRun(live, trigger === "schedule" ? scheduled : undefined);
   if (scanSettings.includes.length === 0 && section === "server") {
     return { ok: false, status: 400, error: "Add at least one folder to scan" };
   }
@@ -257,13 +281,15 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
       if (!existing) {
         error = "No saved duplicate groups to reuse.";
       } else {
-        await saveResults(section, {
-          ...existing,
-          finishedAt: new Date().toISOString(),
-          durationMs: pipelineDurationMs(input.startedAt),
-          error: null,
-        });
-        groupCount = await countVisibleGroups(section, existing.groups);
+      const groups = section === "immich" ? dropCompleteStacks(existing.groups) : existing.groups;
+      await saveResults(section, {
+        ...existing,
+        groups,
+        finishedAt: new Date().toISOString(),
+        durationMs: pipelineDurationMs(input.startedAt),
+        error: null,
+      });
+      groupCount = await countVisibleGroups(section, groups);
         ok = true;
       }
     } else if (input.spawnFailed || input.code === null) {
@@ -318,9 +344,14 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
               trashed.ids,
             );
             groups = attachAssets(groups, assets, maps);
+            const immichTrashCredits = immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths);
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
-            groups = await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism);
+            groups = dropCompleteStacks(
+              await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
+            );
+            immichTrashCredits.push(...immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths));
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
+            if (immichTrashCredits.length > 0) await creditImmichTrash(immichTrashCredits);
           } catch (err) {
             warning = "The scan finished, but Immich assets could not be listed, so nothing can be stacked or trashed yet.";
             scan.addLine(redact(errorText(err), secrets));
@@ -342,9 +373,10 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
         compareSettingsFingerprint: input.decision.settingsFingerprint,
         compareTimeWindowDays: input.scanSettings.timeWindowDays,
       });
-      const ignoredRaw = await loadIgnored(section);
-      const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
-      if (pruned.length !== ignoredRaw.length) await saveIgnored(section, pruned);
+      await updateIgnored(section, (ignoredRaw) => {
+        const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
+        return pruned.length === ignoredRaw.length ? ignoredRaw : pruned;
+      });
       groupCount = await countVisibleGroups(section, groups);
       ok = true;
       }
@@ -388,7 +420,8 @@ export function pipelineDurationMs(startedAt: number, now = Date.now()): number 
 async function countVisibleGroups(section: SectionId, groups: StoredGroup[]): Promise<number> {
   const ignored = await loadIgnored(section);
   const hidden = new Set(ignored.map((entry) => entry.key));
-  return groups.filter((group) => !hidden.has(ignoreKey(memberIds(section, group.items)))).length;
+  const source = section === "immich" ? dropCompleteStacks(groups) : groups;
+  return source.filter((group) => !hidden.has(ignoreKey(memberIds(section, group.items)))).length;
 }
 
 function immichCredentials(settings: Settings): ImmichCredentials {

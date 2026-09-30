@@ -4,8 +4,10 @@ import {
   applyChangedStackMembership,
   applyStackMembership,
   assignSelectionToStack,
+  dropCompleteStacks,
   groupIsOneCompleteStack,
   orderGroupItems,
+  setStackPrimary,
 } from "../src/lib/immich-stacks";
 import type { StoredGroup, StoredItem } from "../src/lib/types";
 
@@ -53,6 +55,24 @@ test("a group that is exactly one stack is hidden", () => {
     item("/mnt/c.jpg", null),
   ]);
   assert.equal(groupIsOneCompleteStack(unmatched), false);
+});
+
+test("a finished stack is dropped and a stack with a loose file stays", () => {
+  const kept = dropCompleteStacks([
+    group("done", [
+      item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
+      item("/mnt/b.jpg", "b", { stackId: "s" }),
+    ]),
+    group("open", [item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }), item("/mnt/c.jpg", "c")]),
+    group("two", [
+      item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
+      item("/mnt/d.jpg", "d", { stackId: "t", stackPrimary: true }),
+    ]),
+  ]);
+  assert.deepEqual(
+    kept.map((entry) => entry.groupId),
+    ["open", "two"],
+  );
 });
 
 test("missing stack members are inserted and groups that share one are merged", () => {
@@ -182,4 +202,23 @@ test("stacking loose files leaves an existing stack untouched", () => {
   assert.equal(next.items.filter((entry) => entry.stackId === "sa").length, 2);
   assert.equal(next.items.filter((entry) => entry.stackId === "new").length, 2);
   assert.equal(groupIsOneCompleteStack(next), false);
+});
+
+test("changing the stack cover keeps thumbnail order", () => {
+  const next = setStackPrimary(
+    group("g", [
+      item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
+      item("/mnt/b.jpg", "b", { stackId: "s" }),
+      item("/mnt/c.jpg", "c", { stackId: "s" }),
+      item("/mnt/loose.jpg", "l"),
+    ]),
+    "s",
+    "c",
+  );
+  assert.deepEqual(
+    next.items.map((entry) => entry.assetId),
+    ["a", "b", "c", "l"],
+  );
+  assert.equal(next.items.find((entry) => entry.assetId === "c")?.stackPrimary, true);
+  assert.equal(next.items.find((entry) => entry.assetId === "a")?.stackPrimary, false);
 });

@@ -8,23 +8,47 @@ import { resolveImmichScanRoots } from "./immich-mounts";
 import { resolveImmichPathMap } from "./immich-path-map";
 import {
   addAssetsToAlbum,
+  fetchImmichAssetStatistics,
   fetchImmichUser,
   pingImmich,
   removeAssetsFromAlbum,
   stackAssets,
   trashAssets,
+  updateStackPrimary,
   type ImmichUser,
 } from "./immich";
+import { groupHasImmichArchived } from "./immich-archived";
+import { forgetImmichStacks, rememberImmichStack } from "./immich-stack-sync";
+import {
+  assignSelectionToStack,
+  dropCompleteStacks,
+  groupIsOneCompleteStack,
+  looseAssetIds,
+  replaceGroup,
+  setStackPrimary,
+  stackIdsInGroup,
+} from "./immich-stacks";
+import { mergeStoredGroups } from "./merge-groups";
 import { pickPrimaryIndex } from "./primary";
+import { DEFAULT_RESULTS_GROUP_SORT, sortResultGroups, type ResultsGroupSortId } from "./results-sort";
 import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
 import { resolveInside } from "./path-jail";
 import { loadConfig } from "./config";
-import { loadIgnored, loadResults, loadSettings, saveIgnored, saveResults } from "./store";
+import {
+  creditImmichTrash,
+  loadIgnored,
+  loadResults,
+  loadSettings,
+  resultsMembership,
+  updateIgnored,
+  updateResults,
+} from "./store";
 import { moveToTrash, resolveMediaFile } from "./trash";
 import type {
   ClientGroup,
   ClientItem,
   IgnoredGroupCard,
+  ResultsPreviewResponse,
   ResultsResponse,
   SectionId,
   StoredGroup,
@@ -40,6 +64,7 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
       section,
       scanned: false,
       finishedAt: null,
+      durationMs: null,
       error: null,
       warning: null,
       hiddenIgnored: 0,
@@ -51,7 +76,8 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
   let hiddenIgnored = 0;
   let unmatched = 0;
   const groups: ClientGroup[] = [];
-  for (const group of results.groups) {
+  const source = section === "immich" ? dropCompleteStacks(results.groups) : results.groups;
+  for (const group of source) {
     if (hiddenKeys.has(ignoreKey(memberIds(section, group.items)))) {
       hiddenIgnored += 1;
       continue;
@@ -65,6 +91,7 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
     section,
     scanned: true,
     finishedAt: results.finishedAt,
+    durationMs: results.durationMs ?? null,
     error: results.error,
     warning: results.warning,
     hiddenIgnored,
@@ -73,11 +100,67 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
   };
 }
 
+export async function resultsPreview(
+  section: SectionId,
+  sortId: ResultsGroupSortId = DEFAULT_RESULTS_GROUP_SORT,
+  limit = 10,
+): Promise<ResultsPreviewResponse> {
+  const [results, ignored] = await Promise.all([loadResults(section), loadIgnored(section)]);
+  const empty: ResultsPreviewResponse = {
+    section,
+    scanned: false,
+    finishedAt: null,
+    durationMs: null,
+    error: null,
+    hiddenIgnored: 0,
+    groupCount: 0,
+    groups: [],
+  };
+  if (!results) return empty;
+  const hiddenKeys = new Set(ignored.map((entry) => entry.key));
+  let hiddenIgnored = 0;
+  const visible: StoredGroup[] = [];
+  const source = section === "immich" ? dropCompleteStacks(results.groups) : results.groups;
+  for (const group of source) {
+    if (hiddenKeys.has(ignoreKey(memberIds(section, group.items)))) {
+      hiddenIgnored += 1;
+      continue;
+    }
+    visible.push(group);
+  }
+  const cap = Math.min(10, Math.max(1, Math.floor(limit)));
+  const groups = sortResultGroups(visible, sortId)
+    .slice(0, cap)
+    .map((group) => {
+      const poster = group.items[pickPrimaryIndex(group.items)] ?? group.items[0];
+      return {
+        groupId: group.groupId,
+        itemCount: group.items.length,
+        immichArchived: groupHasImmichArchived(section, group),
+        posterPath: poster?.path ?? "",
+        posterAssetId: poster?.assetId ?? null,
+        posterName: poster ? baseName(poster.path) : "",
+      };
+    });
+  return {
+    section,
+    scanned: true,
+    finishedAt: results.finishedAt,
+    durationMs: results.durationMs ?? null,
+    error: results.error,
+    hiddenIgnored,
+    groupCount: visible.length,
+    groups,
+  };
+}
+
 export async function ignoredGroupsView(section: SectionId): Promise<IgnoredGroupCard[]> {
   const [results, ignored] = await Promise.all([loadResults(section), loadIgnored(section)]);
   if (!results) return ignored.map((entry) => ({ entry, group: null }));
-  const entries = pruneIgnoredEntries(section, ignored, results.groups);
-  if (entries.length !== ignored.length) await saveIgnored(section, entries);
+  const entries = await updateIgnored(section, (current) => {
+    const pruned = pruneIgnoredEntries(section, current, results.groups);
+    return pruned.length === current.length ? current : pruned;
+  });
   const byKey = new Map<string, StoredGroup>();
   for (const group of results.groups) {
     byKey.set(ignoreKey(memberIds(section, group.items)), group);
@@ -94,34 +177,44 @@ export async function ignoredGroupsView(section: SectionId): Promise<IgnoredGrou
 function toClient(section: SectionId, item: StoredItem, isPrimary: boolean): ClientItem {
   return {
     ...item,
+    stackId: item.stackId ?? null,
+    stackPrimary: Boolean(item.stackPrimary),
     name: baseName(item.path),
     matched: section === "server" ? true : Boolean(item.assetId),
     isPrimary,
   };
 }
 
+export async function mergeResultGroups(section: SectionId, sourceGroupId: string, targetGroupId: string): Promise<void> {
+  const saved = await updateResults(section, (current) => {
+    if (!current) throw new AppError("There is no scan to act on", 404);
+    return { ...current, groups: mergeStoredGroups(current.groups, sourceGroupId, targetGroupId) };
+  });
+  if (!saved) throw new AppError("There is no scan to act on", 404);
+  await updateIgnored(section, (entries) => pruneIgnoredEntries(section, entries, saved.groups));
+}
+
 export async function ignoreGroup(section: SectionId, groupId: string): Promise<void> {
   const results = await requireResults(section);
   const group = requireGroup(results, groupId);
   const key = ignoreKey(memberIds(section, group.items));
-  const entries = await loadIgnored(section);
-  if (entries.some((entry) => entry.key === key)) return;
-  entries.push({
-    key,
-    ignoredAt: new Date().toISOString(),
-    groupId,
-    labels: group.items.map((item) => baseName(item.path)),
+  await updateIgnored(section, (entries) => {
+    if (entries.some((entry) => entry.key === key)) return entries;
+    return [
+      ...entries,
+      {
+        key,
+        ignoredAt: new Date().toISOString(),
+        groupId,
+        labels: group.items.map((item) => baseName(item.path)),
+      },
+    ];
   });
-  await saveIgnored(section, entries);
   await cancelThumbJobs(section, group.items.map((item) => item.path));
 }
 
 export async function restoreIgnored(section: SectionId, key: string): Promise<void> {
-  const entries = await loadIgnored(section);
-  await saveIgnored(
-    section,
-    entries.filter((entry) => entry.key !== key),
-  );
+  await updateIgnored(section, (entries) => entries.filter((entry) => entry.key !== key));
 }
 
 export async function trashServerGroup(groupId: string, keepPath: string): Promise<number> {
@@ -129,7 +222,7 @@ export async function trashServerGroup(groupId: string, keepPath: string): Promi
   const group = requireGroup(results, groupId);
   const keep = await realResultPath("server", keepPath, group);
   const victims = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keep);
-  return commitServerTrash(results, victims);
+  return commitServerTrash(victims);
 }
 
 export async function trashServerItems(groupId: string, victimPaths: string[]): Promise<number> {
@@ -140,22 +233,101 @@ export async function trashServerItems(groupId: string, victimPaths: string[]): 
   for (const victimPath of victimPaths) victims.push(await realResultPath("server", victimPath, group));
   const unique = [...new Set(victims)];
   if (unique.length >= group.items.length) throw new AppError("Keep at least one file in this group");
-  return commitServerTrash(results, unique);
+  return commitServerTrash(unique);
 }
 
-export async function stackImmichGroup(groupId: string, primaryId: string): Promise<void> {
+export async function stackImmichGroup(groupId: string, primaryId: string, assetIds?: string[]): Promise<void> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
   const results = await requireResults("immich");
   const group = requireGroup(results, groupId);
   const ids = matchedIds(group);
-  if (!ids.includes(primaryId)) throw new AppError("The primary file is not a matched Immich asset");
-  const ordered = [primaryId, ...ids.filter((id) => id !== primaryId)];
+  const chosen = assetIds?.length ? ids.filter((id) => assetIds.includes(id) || id === primaryId) : ids;
+  if (!chosen.includes(primaryId)) throw new AppError("The primary file is not a matched Immich asset");
+  const ordered = [primaryId, ...chosen.filter((id) => id !== primaryId)];
   if (ordered.length < 2) throw new AppError("Stacking needs at least two matched assets");
-  await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, ordered);
-  await saveResults("immich", {
-    ...results,
-    groups: results.groups.filter((item) => item.groupId !== groupId),
+  const created = await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, ordered);
+  if (!created.id) throw new AppError("Immich did not return the stack");
+  rememberImmichStack(created);
+  const previousStacks = stackIdsInGroup(group).filter((id) => id !== created.id);
+  if (previousStacks.length > 0) forgetImmichStacks(previousStacks);
+  await saveImmichStackGroup(groupId, (fresh) => assignSelectionToStack(fresh, ordered, created.id, created.primaryAssetId || primaryId));
+}
+
+/** Add loose files in a group onto its single existing Immich stack. */
+export async function addToImmichStack(groupId: string, assetIds?: string[]): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const stacks = stackIdsInGroup(group);
+  if (stacks.length === 0) throw new AppError("This group has no Immich stack to join");
+  if (stacks.length > 1) throw new AppError("This group has more than one stack. Merge them first");
+  const stackId = stacks[0];
+  const primary =
+    group.items.find((item) => item.stackId === stackId && item.stackPrimary && item.assetId)?.assetId ??
+    group.items.find((item) => item.stackId === stackId && item.assetId)?.assetId;
+  if (!primary) throw new AppError("The stack has no matched assets");
+  const loose = new Set(looseAssetIds(group));
+  const adding = [...new Set(assetIds?.length ? assetIds : [...loose])];
+  if (adding.length === 0) throw new AppError("Choose a file to add to the stack");
+  const matched = new Set(matchedIds(group));
+  if (adding.some((id) => !matched.has(id))) throw new AppError("That file is not a matched Immich asset");
+  if (adding.some((id) => !loose.has(id))) throw new AppError("That file is already in a stack");
+  const created = await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, [primary, ...adding]);
+  if (!created.id) throw new AppError("Immich did not return the stack");
+  rememberImmichStack(created);
+  if (created.id !== stackId) forgetImmichStacks([stackId]);
+  const members = group.items.flatMap((item) => (item.assetId && item.stackId === stackId ? [item.assetId] : []));
+  const selected = [...new Set([primary, ...members, ...adding])];
+  await saveImmichStackGroup(groupId, (fresh) =>
+    assignSelectionToStack(fresh, selected, created.id, created.primaryAssetId || primary),
+  );
+}
+
+/** Merge every stack in a group into one, with `primaryId` as the cover. */
+export async function mergeImmichStacks(groupId: string, primaryId: string): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const stacks = stackIdsInGroup(group);
+  if (stacks.length < 2) throw new AppError("This group needs at least two stacks to merge");
+  if (!matchedIds(group).includes(primaryId)) throw new AppError("The primary file is not a matched Immich asset");
+  const stacked = group.items.flatMap((item) => (item.assetId && item.stackId ? [item.assetId] : []));
+  if (!stacked.includes(primaryId)) throw new AppError("The primary file is not in a stack");
+  const ordered = [primaryId, ...stacked.filter((id) => id !== primaryId)];
+  const created = await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, ordered);
+  if (!created.id) throw new AppError("Immich did not return the stack");
+  rememberImmichStack(created);
+  forgetImmichStacks(stacks.filter((id) => id !== created.id));
+  await saveImmichStackGroup(groupId, (fresh) =>
+    assignSelectionToStack(fresh, ordered, created.id, created.primaryAssetId || primaryId),
+  );
+}
+
+/** Make one member the cover of its Immich stack. */
+export async function makeImmichStackPrimary(groupId: string, assetId: string): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const item = group.items.find((entry) => entry.assetId === assetId);
+  if (!item?.assetId || !item.stackId) throw new AppError("That file is not in a stack");
+  const stackId = item.stackId;
+  await updateStackPrimary(settings.immich.baseUrl, settings.immich.apiKey, stackId, assetId);
+  forgetImmichStacks([stackId]);
+  await saveImmichStackGroup(groupId, (fresh) => setStackPrimary(fresh, stackId, assetId));
+}
+
+async function saveImmichStackGroup(groupId: string, apply: (group: StoredGroup) => StoredGroup): Promise<void> {
+  await updateResults("immich", (current) => {
+    if (!current) return current;
+    const fresh = current.groups.find((group) => group.groupId === groupId);
+    if (!fresh) return current;
+    const next = apply(fresh);
+    const kept = groupIsOneCompleteStack(next) ? null : next;
+    return { ...current, groups: replaceGroup(current.groups, groupId, kept) };
   });
 }
 
@@ -166,12 +338,16 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
   const group = requireGroup(results, groupId);
   const ids = matchedIds(group);
   if (!ids.includes(keepId)) throw new AppError("The kept file is not a matched Immich asset");
-  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, ids.filter((id) => id !== keepId));
+  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, ids.filter((id) => id !== keepId));
 }
 
 export async function mutateImmichAlbumAsset(albumId: string, assetId: string, action: "add" | "remove"): Promise<void> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const membership = await resultsMembership("immich");
+  if (!membership.found || !membership.assetIds.has(assetId)) {
+    throw new AppError("That asset is not in the current results", 404);
+  }
   const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
   if (action === "add") await addAssetsToAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
   else await removeAssetsFromAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
@@ -187,7 +363,7 @@ export async function trashImmichItems(groupId: string, victimIds: string[]): Pr
   if (unique.length === 0) throw new AppError("Choose a file to trash");
   if (unique.some((id) => !ids.includes(id))) throw new AppError("That file is not a matched Immich asset");
   if (unique.length >= ids.length) throw new AppError("Keep at least one file in this group");
-  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, results, unique);
+  return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, unique);
 }
 
 export async function unmatchedImmichReport(): Promise<{
@@ -257,6 +433,7 @@ export async function rejoinImmich(): Promise<number> {
       settings.immich.apiKey,
       paths,
       settings.immich.scan.includeImages,
+      settings.immich.scan.parallelism,
       {
         onIndex: ({ pathCount, missing, searchNames }) => {
           reportRejoin({
@@ -288,10 +465,12 @@ export async function rejoinImmich(): Promise<number> {
       },
     );
     reportRejoin({ percent: 92, label: "Saving", detail: "Updating linked assets in scan results…", indeterminate: false });
-    const groups = attachAssets(results.groups, assets, maps);
-    await saveResults("immich", { ...results, warning: null, groups });
+    const saved = await updateResults("immich", (current) => {
+      const base = current ?? results;
+      return { ...base, warning: null, groups: attachAssets(base.groups, assets, maps) };
+    });
     reportRejoin({ percent: 100, label: "Done", detail: "Match finished" });
-    return groups.reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
+    return (saved?.groups ?? []).reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
   } finally {
     endRejoin();
   }
@@ -314,7 +493,7 @@ export async function testImmichConnection(baseUrl: string, apiKey: string): Pro
 }
 
 export async function savedImmichStatus(): Promise<
-  | { connected: true; baseUrl: string; user: ImmichUser; scanRoots: string[] }
+  | { connected: true; baseUrl: string; user: ImmichUser; scanRoots: string[]; libraryTotal: number | null }
   | { connected: false; baseUrl?: string; error?: string }
 > {
   const settings = await loadSettings();
@@ -324,8 +503,13 @@ export async function savedImmichStatus(): Promise<
   const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
   try {
     const info = await immichConnectionInfo();
-    const scanRoots = await resolveImmichScanRoots(creds);
-    return { connected: true, ...info, scanRoots };
+    const [scanRoots, libraryTotal] = await Promise.all([
+      resolveImmichScanRoots(creds),
+      fetchImmichAssetStatistics(creds.baseUrl, creds.apiKey)
+        .then((stats) => stats.total)
+        .catch(() => null),
+    ]);
+    return { connected: true, ...info, scanRoots, libraryTotal };
   } catch (err) {
     return {
       connected: false,
@@ -336,19 +520,20 @@ export async function savedImmichStatus(): Promise<
 }
 
 export async function realResultPath(section: SectionId, candidate: string, group?: StoredGroup): Promise<string> {
-  const results = await requireResults(section);
-  const source = group ?? results.groups.find((item) => item.items.some((entry) => entry.path === candidate));
-  const known = new Set((source ? source.items : results.groups.flatMap((item) => item.items)).map((item) => item.path));
-  if (!known.has(candidate)) throw new AppError("That file is not in the current results");
+  if (group) {
+    if (!group.items.some((item) => item.path === candidate)) throw new AppError("That file is not in the current results");
+  } else {
+    const membership = await resultsMembership(section);
+    if (!membership.found) throw new AppError("There is no scan to act on", 404);
+    if (!membership.paths.has(candidate)) throw new AppError("That file is not in the current results");
+  }
   const config = loadConfig();
-  const settings = await loadSettings();
+  const settings = section === "immich" ? await loadSettings() : null;
   const roots =
     section === "server"
       ? config.mediaRoots
-      : await resolveImmichScanRoots({ baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey });
-  const real = section === "server" ? await resolveMediaFile(roots, candidate) : await resolveInside(roots, candidate);
-  if (!known.has(real) && !known.has(candidate)) throw new AppError("That file is not in the current results");
-  return real;
+      : await resolveImmichScanRoots({ baseUrl: settings?.immich.baseUrl ?? "", apiKey: settings?.immich.apiKey ?? "" });
+  return section === "server" ? resolveMediaFile(roots, candidate) : resolveInside(roots, candidate);
 }
 
 async function requireResults(section: SectionId): Promise<StoredResults> {
@@ -371,23 +556,40 @@ function requireImmich(baseUrl: string, apiKey: string): void {
   if (!baseUrl || !apiKey) throw new AppError("Save the Immich URL and API key first");
 }
 
-async function commitServerTrash(results: StoredResults, victims: string[]): Promise<number> {
+async function commitServerTrash(victims: string[]): Promise<number> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
   cancelThumbWork(victims);
   const moved = await moveToTrash(victims);
-  await saveResults("server", dropItems(results, (item) => victims.includes(item.path)));
+  await updateResults("server", (current) => {
+    if (!current) return current;
+    return dropItems(current, (item) => victims.includes(item.path));
+  });
   return moved;
 }
 
-async function commitImmichTrash(baseUrl: string, apiKey: string, results: StoredResults, victims: string[]): Promise<number> {
+async function commitImmichTrash(baseUrl: string, apiKey: string, victims: string[]): Promise<number> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
-  const victimPaths = results.groups
-    .flatMap((group) => group.items)
-    .filter((item) => item.assetId && victims.includes(item.assetId))
-    .map((item) => item.path);
+  const snapshot = await loadResults("immich");
+  const victimPaths =
+    snapshot?.groups
+      .flatMap((group) => group.items)
+      .filter((item) => item.assetId !== null && victims.includes(item.assetId))
+      .map((item) => item.path) ?? [];
   await cancelThumbJobs("immich", victimPaths);
   await trashAssets(baseUrl, apiKey, victims);
-  await saveResults("immich", dropItems(results, (item) => item.assetId !== null && victims.includes(item.assetId)));
+  let credited: { id: string; bytes: number }[] = [];
+  await updateResults("immich", (current) => {
+    if (!current) return current;
+    const victimItems = current.groups
+      .flatMap((group) => group.items)
+      .filter((item) => item.assetId !== null && victims.includes(item.assetId));
+    credited = victimItems.map((item) => ({
+      id: item.assetId || `path:${item.path}`,
+      bytes: Math.max(0, item.sizeBytes),
+    }));
+    return dropItems(current, (item) => item.assetId !== null && victims.includes(item.assetId));
+  });
+  if (credited.length > 0) await creditImmichTrash(credited);
   return victims.length;
 }
 

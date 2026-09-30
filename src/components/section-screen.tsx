@@ -8,6 +8,7 @@ import { FolderPicker, HintWrap } from "@/components/folder-picker";
 import { ScanProfilePicker } from "@/components/scan-profile-picker";
 import { ScanLog, useScanFeed } from "@/components/scan-log";
 import { ResultGroupCard } from "@/components/group-result-card";
+import { useGroupMergeDrag } from "@/components/use-group-merge-drag";
 import { ResultsGrid } from "@/components/results-grid";
 import {
   GroupCardGridSkeleton,
@@ -19,14 +20,22 @@ import { Viewer } from "@/components/viewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatBytes, formatClock, formatCompactThousands, formatLatestOkRun, formatScanDuration } from "@/lib/format";
+import { formatBytes, formatClock, formatCompactThousands, formatLatestOkRun, formatNextRun, formatScanDuration } from "@/lib/format";
 import { sectionLabel } from "@/lib/section-label";
 import { timeWindowHint } from "@/lib/time-window";
+import { mergeClientGroups } from "@/lib/merge-groups";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
   DEFAULT_RESULTS_GROUP_SORT,
@@ -38,8 +47,9 @@ import {
   sortResultGroups,
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
-import { Archive, CheckCircle2, LayoutGrid, Loader2, RotateCcw, XCircle } from "lucide-react";
+import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, XCircle } from "lucide-react";
 import { defaultScan, normalizeScan } from "@/lib/scan-defaults";
+import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { ClientGroup, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -93,6 +103,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
 
   const reload = useCallback(async () => {
     const [nextRuntime, nextSettings, nextResults, nextRuns] = await Promise.all([
@@ -178,13 +189,34 @@ export function SectionScreen({ section }: { section: SectionId }) {
     await reload();
   }
 
-  async function save() {
+  async function save(patch?: Partial<Draft>) {
     if (!draft || !settings) return;
+    const merged = patch ? { ...draft, ...patch } : draft;
+    if (patch) setDraft(merged);
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await persistDraft();
+      const body =
+        section === "server"
+          ? {
+              server: { scan: merged.scan, schedule: merged.schedule },
+              webhookUrl: merged.webhookUrl || undefined,
+              clearWebhook: merged.clearWebhook,
+            }
+          : {
+              immich: {
+                baseUrl: merged.baseUrl,
+                apiKey: merged.apiKey || undefined,
+                clearApiKey: merged.clearApiKey,
+                scan: merged.scan,
+                schedule: merged.schedule,
+              },
+              webhookUrl: merged.webhookUrl || undefined,
+              clearWebhook: merged.clearWebhook,
+            };
+      await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+      await reload();
       setNotice("Settings saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save");
@@ -339,27 +371,35 @@ export function SectionScreen({ section }: { section: SectionId }) {
                       />
                     )}
                     <div className="flex flex-wrap items-start gap-3">
-                      <div className="flex flex-col items-start gap-2">
-                        <div className="flex flex-wrap items-center gap-1">
-                          <ScheduleFields schedule={draft.schedule} onChange={(schedule) => setDraft({ ...draft, schedule })} zones={zoneList(runtime?.serverTimeZone, draft.schedule.timezone)} />
-                          <Button size="sm" variant="outline" className="h-7" onClick={() => void save()} disabled={busy}>
-                            Add schedule
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <p className="whitespace-nowrap text-[11px] leading-snug text-muted-foreground">
+                            {runs?.[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 shrink-0"
+                            onClick={() => setScheduleDialogOpen(true)}
+                            disabled={busy}
+                          >
+                            {draft.schedule.mode === "off" ? "Add schedule" : "Edit schedule"}
                           </Button>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Label htmlFor="webhook" className="text-xs text-muted-foreground">
-                            Finish webhook
-                          </Label>
-                          <Input
-                            id="webhook"
-                            className="h-7 w-52 sm:w-64"
-                            placeholder={settings?.webhookConfigured ? "Saved. Enter a new URL to replace it." : "https://example.test/hook"}
-                            value={draft.webhookUrl}
-                            onChange={(event) => setDraft({ ...draft, webhookUrl: event.target.value, clearWebhook: false })}
-                          />
-                          <Flag label="Clear" hint="Remove the saved finish webhook." checked={draft.clearWebhook} onChange={(clearWebhook) => setDraft({ ...draft, clearWebhook })} />
-                        </div>
+                        {notice ? <p className="text-right text-[11px] leading-snug text-primary">{notice}</p> : null}
                       </div>
+                      <ScheduleSettingsDialog
+                        open={scheduleDialogOpen}
+                        onOpenChange={setScheduleDialogOpen}
+                        section={section}
+                        draft={draft}
+                        settings={settings}
+                        runtime={runtime}
+                        zones={zoneList(runtime?.serverTimeZone, draft.schedule.timezone)}
+                        busy={busy}
+                        hasActiveSchedule={draft.schedule.mode !== "off"}
+                        onSave={(slice) => save(slice)}
+                      />
                       <div className="flex flex-col items-center gap-1">
                         <Button
                           className="h-11 min-w-[6.5rem] px-8 text-base"
@@ -369,9 +409,6 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         >
                           {runningHere ? "Scanning" : "Scan"}
                         </Button>
-                        <p className="max-w-[9rem] text-center text-[11px] leading-snug text-muted-foreground">
-                          {runs?.[section].nextRun ? `Next ${formatClock(runs[section].nextRun)}` : "Not scheduled"}
-                        </p>
                         {last?.at && last.status === "ok" ? (
                           <p className="whitespace-nowrap text-center text-[10px] leading-snug text-muted-foreground/80">
                             {formatLatestOkRun(last.at)}
@@ -394,7 +431,6 @@ export function SectionScreen({ section }: { section: SectionId }) {
       <div className="space-y-4">
         <section className="space-y-4">
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          {notice ? <p className="text-sm text-primary">{notice}</p> : null}
           <ScanLog
             lines={feed.section === section ? feed.lines : []}
             running={runningHere}
@@ -426,6 +462,9 @@ function Results({
   const [bulkConfirm, setBulkConfirm] = useState<
     { kind: "stack"; keepSmallest: boolean; count: number } | { kind: "trash"; keepSmallest: boolean; count: number } | null
   >(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [groupOverride, setGroupOverride] = useState<ClientGroup[] | null>(null);
 
   useEffect(() => {
     const stored = sessionStorage.getItem(resultsSortStorageKey(section));
@@ -442,10 +481,52 @@ function Results({
     sessionStorage.setItem(resultsSortStorageKey(section), next);
   }
 
+  const listedGroups = groupOverride ?? results?.groups;
   const sortedGroups = useMemo(
-    () => (results?.groups ? sortResultGroups(results.groups, sortId) : []),
-    [results?.groups, sortId],
+    () => (listedGroups ? sortResultGroups(listedGroups, sortId) : []),
+    [listedGroups, sortId],
   );
+
+  const mergeDroppedGroup = useCallback(
+    async (sourceGroupId: string, targetGroupId: string) => {
+      const base = groupOverride ?? results?.groups;
+      if (!base) return;
+      setMergeError(null);
+      setMergeBusy(true);
+      setGroupOverride(mergeClientGroups(base, sourceGroupId, targetGroupId));
+      setOpenGroupId((current) => (current === sourceGroupId ? targetGroupId : current));
+      try {
+        await api("/api/results/merge", {
+          method: "POST",
+          body: JSON.stringify({ section, sourceGroupId, targetGroupId }),
+        });
+      } catch (err) {
+        setGroupOverride(null);
+        setMergeError(err instanceof Error ? err.message : "Could not merge those groups");
+        setMergeBusy(false);
+        return;
+      }
+      try {
+        await onReload();
+      } catch (err) {
+        setMergeError(err instanceof Error ? err.message : "Merged, but the list did not refresh");
+      } finally {
+        setMergeBusy(false);
+      }
+    },
+    [groupOverride, onReload, results?.groups, section],
+  );
+
+  const mergeDrag = useGroupMergeDrag({
+    enabled: !bulkBusy && !mergeBusy,
+    onMerge: (sourceGroupId, targetGroupId) => {
+      void mergeDroppedGroup(sourceGroupId, targetGroupId);
+    },
+  });
+
+  useEffect(() => {
+    setGroupOverride(null);
+  }, [results]);
   const openIndex = openGroupId === null ? -1 : sortedGroups.findIndex((group) => group.groupId === openGroupId);
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
@@ -464,7 +545,7 @@ function Results({
     setOpenGroupId(next?.groupId ?? null);
   }
 
-  async function archiveGroup(groupId: string) {
+  async function ignoreGroup(groupId: string) {
     const fromIndex = openGroupId === groupId ? openIndex : -1;
     await api("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
     await openGroupAfterRefresh(fromIndex >= 0, fromIndex, groupId);
@@ -534,6 +615,8 @@ function Results({
       }
       setOpenGroupId(null);
       await onReload();
+      const summary = await api<{ savedBytes: number }>("/api/trash?summary=1");
+      publishTrashSavedBytes(summary.savedBytes);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Bulk trash failed");
     } finally {
@@ -578,8 +661,9 @@ function Results({
             </Badge>
           ) : null}
           <span className="text-muted-foreground">
-            {results.groups.length} {results.groups.length === 1 ? "group" : "groups"}
+            {sortedGroups.length} {sortedGroups.length === 1 ? "group" : "groups"}
           </span>
+          {mergeError ? <span className="text-destructive">{mergeError}</span> : null}
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span className="sr-only">Sort groups</span>
             <select
@@ -693,18 +777,24 @@ function Results({
             <ResultGroupCard
               section={section}
               group={group}
-              onSelect={() => setOpenGroupId(group.groupId)}
+              dragging={mergeDrag.draggingId === group.groupId}
+              dropTarget={mergeDrag.dropTargetId === group.groupId}
+              dragBind={mergeDrag.bind(group.groupId)}
+              onSelect={() => {
+                if (mergeDrag.consumeSuppressedClick()) return;
+                setOpenGroupId(group.groupId);
+              }}
               topRight={
                 <Button
                   type="button"
                   size="icon-sm"
                   variant="secondary"
                   className="bg-background/90 shadow-sm hover:bg-yellow-400 hover:text-yellow-950 dark:hover:bg-yellow-500 dark:hover:text-yellow-950"
-                  aria-label="Archive group"
-                  title="Archive group (hide from results)"
-                  onClick={() => void archiveGroup(group.groupId)}
+                  aria-label="Ignore group"
+                  title="Ignore group (hide from results)"
+                  onClick={() => void ignoreGroup(group.groupId)}
                 >
-                  <Archive className="size-3.5" />
+                  <EyeOff className="size-3.5" />
                 </Button>
               }
             />
@@ -997,63 +1087,408 @@ function Flag({ label, hint, checked, onChange }: { label: string; hint?: string
   return <HintWrap text={hint}>{row}</HintWrap>;
 }
 
-function ScheduleFields({
+type ScheduleDialogSlice = Pick<Draft, "schedule" | "webhookUrl"> & { scan: ScanSettings; webhookEdited: boolean };
+
+function ScheduleSettingsDialog({
+  open,
+  onOpenChange,
+  section,
+  draft,
+  settings,
+  runtime,
+  zones,
+  busy,
+  hasActiveSchedule,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  section: SectionId;
+  draft: Draft;
+  settings: PublicSettings | null;
+  runtime: RuntimeInfo | null;
+  zones: { id: string; label: string }[];
+  busy: boolean;
+  hasActiveSchedule: boolean;
+  onSave: (slice: Pick<Draft, "schedule" | "webhookUrl" | "clearWebhook">) => Promise<void>;
+}) {
+  const [local, setLocal] = useState<ScheduleDialogSlice | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookTestOk, setWebhookTestOk] = useState(false);
+  const [webhookTestError, setWebhookTestError] = useState<string | null>(null);
+  const [clock, setClock] = useState({ hour: "03", minute: "00" });
+  const [timeError, setTimeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setDeleteConfirmOpen(false);
+      setWebhookTestOk(false);
+      setWebhookTestError(null);
+      setTimeError(null);
+      return;
+    }
+    const schedule = draft.schedule.mode === "off" ? { ...draft.schedule, mode: "daily" } : draft.schedule;
+    setClock(scheduleTimeParts(schedule.time));
+    setTimeError(null);
+    setLocal({
+      schedule,
+      scan: structuredClone(draft.schedule.scan ?? draft.scan),
+      webhookUrl: draft.webhookUrl,
+      webhookEdited: false,
+    });
+  }, [open, draft]);
+
+  function patchScan(patch: Partial<ScanSettings>) {
+    setLocal((current) => (current ? { ...current, scan: { ...current.scan, ...patch } } : current));
+  }
+
+  function resetScheduleMatching() {
+    const defaults = defaultScan(section);
+    patchScan({
+      threshold: defaults.threshold,
+      percent: defaults.percent,
+      parallelism: runtime?.suggestedParallelism ?? defaults.parallelism,
+      includeImages: defaults.includeImages,
+      usePhash: defaults.usePhash,
+      partialClip: defaults.partialClip,
+      aiMatching: defaults.aiMatching,
+      aiPartial: defaults.aiPartial,
+      compareHorizontallyFlipped: defaults.compareHorizontallyFlipped,
+      ignoreBlackPixels: defaults.ignoreBlackPixels,
+      ignoreWhitePixels: defaults.ignoreWhitePixels,
+      timeWindowDays: defaults.timeWindowDays,
+    });
+  }
+
+  async function apply() {
+    if (!local) return;
+    const time = normalizeScheduleClock(clock.hour, clock.minute);
+    if (!time) {
+      setTimeError("Enter an hour from 00 to 23 and a minute from 00 to 59.");
+      return;
+    }
+    setTimeError(null);
+    const mode = local.schedule.mode === "off" ? "daily" : local.schedule.mode;
+    const webhookUrl = local.webhookUrl.trim();
+    const clearWebhook =
+      webhookUrl.length === 0 && local.webhookEdited && Boolean(settings?.webhookConfigured);
+    await onSave({
+      schedule: {
+        ...local.schedule,
+        mode,
+        time,
+        scan: { ...local.scan, includes: draft.scan.includes, excludes: draft.scan.excludes },
+      },
+      webhookUrl,
+      clearWebhook,
+    });
+    onOpenChange(false);
+  }
+
+  async function testWebhook() {
+    if (!local) return;
+    const webhookUrl = local.webhookUrl.trim();
+    if (!webhookUrl && !settings?.webhookConfigured) return;
+    setWebhookTesting(true);
+    setWebhookTestOk(false);
+    setWebhookTestError(null);
+    try {
+      await api("/api/webhook/test", {
+        method: "POST",
+        body: JSON.stringify({
+          section,
+          webhookUrl: webhookUrl || undefined,
+        }),
+      });
+      setWebhookTestOk(true);
+    } catch (err) {
+      setWebhookTestError(err instanceof Error ? err.message : "Webhook test failed");
+    } finally {
+      setWebhookTesting(false);
+    }
+  }
+
+  async function confirmDeleteSchedule() {
+    await onSave({
+      schedule: { ...draft.schedule, mode: "off" },
+      webhookUrl: "",
+      clearWebhook: true,
+    });
+    setDeleteConfirmOpen(false);
+    onOpenChange(false);
+  }
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="w-max max-h-[calc(100dvh-2rem)] max-w-[calc(100%-2rem)] justify-items-start overflow-y-auto sm:max-w-[calc(100%-2rem)]">
+        <DialogHeader>
+          <DialogTitle>Schedule</DialogTitle>
+          <DialogDescription>
+            Scheduled runs only start a scan. They never stack, trash, or delete.
+            <br />
+            These matching options are used by the schedule and stay separate from the controls on the page.
+          </DialogDescription>
+        </DialogHeader>
+        {local ? (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={local.scan.threshold} onChange={(threshold) => patchScan({ threshold })} />
+                <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={local.scan.percent} onChange={(percent) => patchScan({ percent })} />
+                <NumberField wide label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
+                <NumberField
+                  label="Parallel"
+                  hint={
+                    runtime
+                      ? `How many jobs run at once for hashing, probes, and thumbnails. This machine has ${runtime.cpuCount} cores. Suggested: ${runtime.suggestedParallelism}. Maximum: ${runtime.maxParallelism}.`
+                      : "How many jobs run at once for hashing, probes, and thumbnails."
+                  }
+                  value={local.scan.parallelism}
+                  onChange={(parallelism) => patchScan({ parallelism })}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Flag label="Images" hint="Include image files as well as video." checked={local.scan.includeImages} onChange={(includeImages) => patchScan({ includeImages })} />
+                <Flag label="pHash" hint="Perceptual hash instead of grayscale frame sampling." checked={local.scan.usePhash} onChange={(usePhash) => patchScan({ usePhash })} />
+                <Flag
+                  label="Mirrored"
+                  hint="Also compare each pair against a horizontally flipped version to catch mirror re-uploads. Roughly doubles comparison work."
+                  checked={local.scan.compareHorizontallyFlipped}
+                  onChange={(compareHorizontallyFlipped) => patchScan({ compareHorizontallyFlipped })}
+                />
+                <Flag label="Partial clips" hint="Find a clip inside a longer file using audio fingerprints." checked={local.scan.partialClip} onChange={(partialClip) => patchScan({ partialClip })} />
+                <Flag label="AI match" hint="Neural embeddings for cropped, mirrored, or heavily edited copies. Downloads about 100 MB on first use." checked={local.scan.aiMatching} onChange={(aiMatching) => patchScan({ aiMatching })} />
+                <Flag label="AI partial" hint="Visual partial matches without audio. Downloads the AI components on first use." checked={local.scan.aiPartial} onChange={(aiPartial) => patchScan({ aiPartial })} />
+                <Button type="button" size="xs" variant="ghost" className="h-7 gap-1 text-muted-foreground" onClick={resetScheduleMatching}>
+                  <RotateCcw className="size-3" />
+                  Reset defaults
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <ScheduleTimingRow
+                schedule={local.schedule}
+                zones={zones}
+                hour={clock.hour}
+                minute={clock.minute}
+                timeError={timeError}
+                onClockChange={(next) => {
+                  setTimeError(null);
+                  setClock(next);
+                }}
+                onChange={(schedule) => setLocal({ ...local, schedule: { ...schedule, scan: local.scan } })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="schedule-webhook">Finish webhook</Label>
+              <p className="text-sm text-muted-foreground">A webhook fires when a scheduled scan finishes.</p>
+              <div className="flex max-w-[min(28rem,calc(100vw-3rem))] items-center gap-2">
+                <Input
+                  id="schedule-webhook"
+                  className="min-w-0 flex-1"
+                  placeholder={settings?.webhookConfigured ? "Saved. Enter a new URL to replace it." : "https://example.test/hook"}
+                  value={local.webhookUrl}
+                  onChange={(event) => {
+                    setWebhookTestOk(false);
+                    setWebhookTestError(null);
+                    setLocal({ ...local, webhookUrl: event.target.value, webhookEdited: true });
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0"
+                  disabled={
+                    busy ||
+                    webhookTesting ||
+                    (!local.webhookUrl.trim() && !settings?.webhookConfigured)
+                  }
+                  onClick={() => void testWebhook()}
+                >
+                  {webhookTesting ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Test
+                    </>
+                  ) : (
+                    "Test"
+                  )}
+                </Button>
+              </div>
+              {webhookTestOk ? (
+                <p className="text-xs text-muted-foreground">Webhook accepted the test request.</p>
+              ) : null}
+              {webhookTestError ? <p className="text-xs text-destructive">{webhookTestError}</p> : null}
+            </div>
+          </div>
+        ) : null}
+        <DialogFooter className="mx-0 mb-0 mt-4 w-full flex-row items-center justify-between gap-2 border-t-0 bg-transparent p-0 sm:justify-between">
+          {hasActiveSchedule ? (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => setDeleteConfirmOpen(true)}
+            >
+              Delete schedule
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex flex-row-reverse gap-2 sm:flex-row">
+            <Button type="button" onClick={() => void apply()} disabled={busy || !local}>
+              Save schedule
+            </Button>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleteConfirmOpen} onOpenChange={(next) => !busy && setDeleteConfirmOpen(next)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete schedule?</DialogTitle>
+            <DialogDescription>
+              Scheduled scans for this section will stop and the saved finish webhook will be removed. Scan settings on the page are not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" disabled={busy} onClick={() => setDeleteConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" disabled={busy} onClick={() => void confirmDeleteSchedule()}>
+              Delete schedule
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function ScheduleTimingRow({
   schedule,
   onChange,
   zones,
+  hour,
+  minute,
+  timeError,
+  onClockChange,
 }: {
   schedule: ScheduleSettings;
   onChange: (schedule: ScheduleSettings) => void;
   zones: { id: string; label: string }[];
+  hour: string;
+  minute: string;
+  timeError: string | null;
+  onClockChange: (clock: { hour: string; minute: string }) => void;
 }) {
-  const selectClass = "h-7 rounded-lg border border-input bg-popover px-2 text-xs text-popover-foreground [color-scheme:dark]";
+  const selectClass =
+    "h-7 rounded-md border-0 bg-transparent px-0.5 text-sm font-semibold text-foreground underline decoration-muted-foreground/50 underline-offset-4 [color-scheme:dark] hover:decoration-foreground focus-visible:decoration-foreground focus-visible:outline-none";
+  const timeFieldClass =
+    "h-7 w-9 border-0 bg-transparent px-0.5 text-center text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent";
   const timezone = canonicalZone(schedule.timezone);
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <HintWrap
-        text="A schedule only scans. It never stacks, trashes, or deletes. If a scan is already running, that slot is skipped."
-        className="flex flex-wrap items-center gap-1.5"
-      >
-        <span className="text-xs text-muted-foreground">Schedule</span>
+    <div className="space-y-1">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+        Frequency
         <select
           className={selectClass}
-          aria-label="Schedule"
-          value={schedule.mode}
-          onChange={(event) => onChange({ ...schedule, mode: event.target.value as ScheduleSettings["mode"] })}
+          aria-label="Frequency"
+          value={schedule.mode === "off" ? "daily" : schedule.mode}
+          onChange={(event) =>
+            onChange({ ...schedule, mode: event.target.value as Exclude<ScheduleSettings["mode"], "off"> })
+          }
         >
-        <option value="off">Off</option>
-        <option value="daily">Daily</option>
-        <option value="weekly">Weekly</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
         </select>
-      </HintWrap>
-      {schedule.mode !== "off" ? (
-        <Input className="h-7 w-28 px-2" type="time" aria-label="Schedule time" value={schedule.time} onChange={(event) => onChange({ ...schedule, time: event.target.value })} />
-      ) : null}
+      </label>
+      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+        Time
+        <Input
+          className={timeFieldClass}
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={2}
+          aria-label="Hour"
+          aria-invalid={Boolean(timeError)}
+          value={hour}
+          onChange={(event) => onClockChange({ hour: event.target.value, minute })}
+        />
+        <span className="text-sm text-muted-foreground">:</span>
+        <Input
+          className={timeFieldClass}
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={2}
+          aria-label="Minute"
+          aria-invalid={Boolean(timeError)}
+          value={minute}
+          onChange={(event) => onClockChange({ hour, minute: event.target.value })}
+        />
+      </label>
       {schedule.mode === "weekly" ? (
+        <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+          Weekday
+          <select
+            className={selectClass}
+            aria-label="Weekday"
+            value={schedule.weekday}
+            onChange={(event) => onChange({ ...schedule, weekday: Number(event.target.value) })}
+          >
+            {WEEKDAYS.map((day, index) => (
+              <option key={day} value={index}>{day}</option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+        Timezone
         <select
           className={selectClass}
-          aria-label="Weekday"
-          value={schedule.weekday}
-          onChange={(event) => onChange({ ...schedule, weekday: Number(event.target.value) })}
+          aria-label="Timezone"
+          value={timezone}
+          onChange={(event) => onChange({ ...schedule, timezone: event.target.value })}
         >
-          {WEEKDAYS.map((day, index) => (
-            <option key={day} value={index}>{day}</option>
+          {zones.map((zone) => (
+            <option key={zone.id} value={zone.id}>{zone.label}</option>
           ))}
         </select>
-      ) : null}
-      <span className="text-xs text-muted-foreground">Timezone</span>
-      <select
-        className={`${selectClass} max-w-52`}
-        aria-label="Timezone"
-        value={timezone}
-        onChange={(event) => onChange({ ...schedule, timezone: event.target.value })}
-      >
-        {zones.map((zone) => (
-          <option key={zone.id} value={zone.id}>{zone.label}</option>
-        ))}
-      </select>
+      </label>
+    </div>
+    {timeError ? <p className="text-xs text-destructive">{timeError}</p> : null}
     </div>
   );
+}
+
+function scheduleTimeParts(time: string): { hour: string; minute: string } {
+  const match = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!match) return { hour: "02", minute: "00" };
+  return { hour: match[1], minute: match[2] };
+}
+
+function normalizeScheduleClock(hourText: string, minuteText: string): string | null {
+  const hour = parseClockPart(hourText, 23);
+  const minute = parseClockPart(minuteText, 59);
+  if (hour == null || minute == null) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseClockPart(value: string, max: number): number | null {
+  const trimmed = value.trim();
+  if (!/^\d{1,2}$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  if (parsed > max) return null;
+  return parsed;
 }
 
 function canonicalZone(zone: string): string {

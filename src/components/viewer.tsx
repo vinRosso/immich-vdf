@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type RefObject, type SyntheticEvent } from "react";
+import { posterSrc } from "@/components/group-result-card";
 import { AlbumTagsSkeleton, ThumbnailSkeleton } from "@/components/skeletons";
 import { cn } from "cn";
 import { api } from "@/components/api";
@@ -21,7 +22,9 @@ import {
   removableAlbumIds,
   type GroupAlbumMap,
 } from "@/lib/immich-album-sync";
+import { groupHasImmichArchived } from "@/lib/immich-archived";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
+import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { ClientGroup, ClientItem, MediaInfo, SectionId } from "@/lib/types";
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Star, Volume2, VolumeX, XIcon } from "lucide-react";
 
@@ -69,7 +72,7 @@ export function Viewer({
   onClose: () => void;
   /** Refresh data after an action; advance moves to the next group when the current one is gone. */
   onActionDone: (advance: boolean) => void | Promise<void>;
-  /** When set, the group is on the archived list and the header action restores it. */
+  /** When set, the group is on the ignored list and the header action restores it. */
   ignoredKey?: string | null;
 }) {
   const [left, setLeft] = useState(0);
@@ -81,6 +84,7 @@ export function Viewer({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [bestPath, setBestPath] = useState<string | null>(null);
+  const [immichArchivedRevealed, setImmichArchivedRevealed] = useState(false);
   const canPrev = index > 0;
   const canNext = index >= 0 && index < total - 1;
 
@@ -93,7 +97,10 @@ export function Viewer({
     setBlend("difference");
     setError(null);
     setBestPath(null);
+    setImmichArchivedRevealed(false);
   }, [group]);
+
+  const immichArchiveLocked = groupHasImmichArchived(section, group) && !immichArchivedRevealed;
 
   const imageOnly = Boolean(group?.items.length && group.items.every((item) => item.isImage));
 
@@ -138,7 +145,8 @@ export function Viewer({
     setPending(label);
     setError(null);
     try {
-      await api(url, { method, body: JSON.stringify(body) });
+      const result = await api<{ totalSavedBytes?: number }>(url, { method, body: JSON.stringify(body) });
+      if (typeof result.totalSavedBytes === "number") publishTrashSavedBytes(result.totalSavedBytes);
       await onActionDone(advance);
       if (!advance) setSelected(new Set());
     } catch (err) {
@@ -146,6 +154,11 @@ export function Viewer({
     } finally {
       setPending(null);
     }
+  }
+
+  function makeStackCover(item: ClientItem) {
+    if (!group || !item.assetId || !item.stackId || item.stackPrimary) return;
+    void act("Cover", "/api/immich/stack/primary", { groupId: group.groupId, assetId: item.assetId }, false);
   }
 
   function stackPrimary(item: ClientItem | undefined) {
@@ -258,15 +271,114 @@ export function Viewer({
   const bestItem = (bestPath && group?.items.find((item) => item.path === bestPath)) || rankedBest;
   const smallestItem = group ? group.items[pickSmallestIndex(group.items)] : undefined;
 
+  function filmstripThumb(item: ClientItem, itemIndex: number) {
+    const shown = imageOnly ? itemIndex === previewIndex : itemIndex === left || itemIndex === right;
+    return (
+      <div
+        key={item.path}
+        className={cn(
+          "group relative w-36 shrink-0 rounded-lg",
+          shown ? "ring-2 ring-primary ring-offset-2 ring-offset-popover" : "ring-1 ring-foreground/15",
+        )}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          draggable={imageOnly || undefined}
+          onClick={() => selectPreview(itemIndex)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selectPreview(itemIndex);
+          }}
+          onDragStart={(event) => {
+            if (!imageOnly) {
+              event.preventDefault();
+              return;
+            }
+            event.dataTransfer.setData(ITEM_DRAG_TYPE, String(itemIndex));
+            event.dataTransfer.setData("text/plain", String(itemIndex));
+            event.dataTransfer.effectAllowed = "copy";
+          }}
+          className={cn("block w-full overflow-hidden rounded-lg bg-black text-left", imageOnly && "cursor-grab active:cursor-grabbing")}
+        >
+          <LoadingImage src={thumbSrc(section, item)} className="aspect-video w-full object-cover" />
+          <span className="block truncate px-1.5 py-1 text-[11px] text-white">
+            {itemIndex + 1}. {item.name}
+          </span>
+        </div>
+        {immich && item.stackId && item.assetId ? (
+          <button
+            type="button"
+            aria-label={item.stackPrimary ? `${item.name} is the stack cover` : `Set ${item.name} as the stack cover`}
+            aria-pressed={item.stackPrimary}
+            title={item.stackPrimary ? "Stack cover" : "Set as stack cover"}
+            disabled={Boolean(pending) || Boolean(item.stackPrimary)}
+            onClick={(event) => {
+              event.stopPropagation();
+              makeStackCover(item);
+            }}
+            className={cn(
+              "absolute bottom-7 left-1.5 z-10 rounded-full bg-background/95 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-foreground shadow-sm transition-opacity",
+              item.stackPrimary ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            COVER
+          </button>
+        ) : null}
+        <button
+          type="button"
+          aria-label={item.path === bestItem?.path ? `${item.name} is best` : `Mark ${item.name} as best`}
+          aria-pressed={item.path === bestItem?.path}
+          onClick={(event) => {
+            event.stopPropagation();
+            setBestPath(item.path);
+          }}
+          className={cn(
+            "absolute top-1.5 left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm transition-opacity",
+            item.path === bestItem?.path
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-50 hover:opacity-100 focus-visible:opacity-100",
+          )}
+        >
+          <Star className="size-3 fill-white text-white" />
+        </button>
+        <input
+          type="checkbox"
+          checked={selected.has(item.path)}
+          onChange={() => toggleSelected(item.path)}
+          aria-label={`Select ${item.name}`}
+          className="absolute top-1.5 right-1.5 size-4 accent-primary"
+        />
+      </div>
+    );
+  }
+
   return (
     <Dialog open={Boolean(group)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent showCloseButton={false} className="flex h-[calc(100dvh-2.5rem)] w-[calc(100vw-8rem)] max-w-none flex-col gap-3 overflow-visible p-4 sm:max-w-none">
-        <Button type="button" variant="secondary" size="icon-lg" disabled={!canPrev} onClick={onPrev} aria-label="Previous group" className="absolute top-1/2 -left-12 -translate-y-1/2 shadow-md">
+        <Button
+          type="button"
+          size="icon-lg"
+          disabled={!canPrev}
+          onClick={onPrev}
+          aria-label="Previous group"
+          className="absolute top-1/2 -left-12 z-20 size-11 -translate-y-1/2 bg-primary text-primary-foreground shadow-xl ring-2 ring-primary-foreground/40 hover:bg-primary/90 [&_svg]:size-6"
+        >
           <ChevronLeft />
         </Button>
-        <Button type="button" variant="secondary" size="icon-lg" disabled={!canNext} onClick={onNext} aria-label="Next group" className="absolute top-1/2 -right-12 -translate-y-1/2 shadow-md">
+        <Button
+          type="button"
+          size="icon-lg"
+          disabled={!canNext}
+          onClick={onNext}
+          aria-label="Next group"
+          className="absolute top-1/2 -right-12 z-20 size-11 -translate-y-1/2 bg-primary text-primary-foreground shadow-xl ring-2 ring-primary-foreground/40 hover:bg-primary/90 [&_svg]:size-6"
+        >
           <ChevronRight />
         </Button>
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className={cn("flex min-h-0 flex-1 flex-col gap-3", immichArchiveLocked && "pointer-events-none select-none blur-2xl")}>
         <DialogHeader className="relative flex-row flex-wrap items-center gap-3 pr-10">
           <DialogClose asChild>
             <Button type="button" variant="secondary" size="icon-sm" aria-label="Close" className="absolute top-0 right-0 shadow-sm">
@@ -313,7 +425,7 @@ export function Viewer({
                 disabled={Boolean(pending) || !group}
                 onClick={() => group && void act("Ignore", "/api/ignore", { section, groupId: group.groupId }, true)}
               >
-                Archive group
+                Ignore group
               </Button>
             )}
           </div>
@@ -387,76 +499,70 @@ export function Viewer({
                 </button>
               </div>
             </div>
-            <div className="flex justify-center gap-2 overflow-x-auto px-1 py-1">
-              {group.items.map((item, itemIndex) => {
-                const shown = imageOnly ? itemIndex === previewIndex : itemIndex === left || itemIndex === right;
+            <div className="flex items-end justify-center gap-2 overflow-x-auto px-1 py-1">
+              {filmstripRuns(group.items).map((run) => {
+                const thumbs = group.items.slice(run.start, run.end + 1).map((item, offset) =>
+                  filmstripThumb(item, run.start + offset),
+                );
+                if (!run.stackId || run.end === run.start) {
+                  return <div key={`loose-${run.start}`} className="contents">{thumbs}</div>;
+                }
                 return (
-                  <div
-                    key={item.path}
-                    className={cn(
-                      "group relative w-36 shrink-0 rounded-lg",
-                      shown ? "ring-2 ring-primary ring-offset-2 ring-offset-popover" : "ring-1 ring-foreground/15",
-                    )}
-                  >
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      draggable={imageOnly || undefined}
-                      onClick={() => selectPreview(itemIndex)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        selectPreview(itemIndex);
-                      }}
-                      onDragStart={(event) => {
-                        if (!imageOnly) {
-                          event.preventDefault();
-                          return;
-                        }
-                        event.dataTransfer.setData(ITEM_DRAG_TYPE, String(itemIndex));
-                        event.dataTransfer.setData("text/plain", String(itemIndex));
-                        event.dataTransfer.effectAllowed = "copy";
-                      }}
-                      className={cn("block w-full overflow-hidden rounded-lg bg-black text-left", imageOnly && "cursor-grab active:cursor-grabbing")}
-                    >
-                      <LoadingImage src={thumbSrc(section, item)} className="aspect-video w-full object-cover" />
-                      <span className="block truncate px-1.5 py-1 text-[11px] text-white">
-                        {itemIndex + 1}. {item.name}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={item.path === bestItem?.path ? `${item.name} is best` : `Mark ${item.name} as best`}
-                      aria-pressed={item.path === bestItem?.path}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setBestPath(item.path);
-                      }}
-                      className={cn(
-                        "absolute top-1.5 left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary shadow-sm transition-opacity",
-                        item.path === bestItem?.path
-                          ? "opacity-100"
-                          : "opacity-0 group-hover:opacity-50 hover:opacity-100 focus-visible:opacity-100",
-                      )}
-                    >
-                      <Star className="size-3 fill-white text-white" />
-                    </button>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(item.path)}
-                      onChange={() => toggleSelected(item.path)}
-                      aria-label={`Select ${item.name}`}
-                      className="absolute top-1.5 right-1.5 size-4 accent-primary"
-                    />
+                  <div key={`stack-${run.stackId}-${run.start}`} className="flex shrink-0 flex-col gap-1 rounded-xl px-1.5 pt-1 ring-1 ring-primary/50">
+                    <span className="px-1 text-[10px] font-semibold tracking-wide text-primary uppercase">Stack</span>
+                    <div className="flex gap-2">{thumbs}</div>
                   </div>
                 );
               })}
             </div>
           </div>
         ) : null}
+          </div>
+          {immichArchiveLocked ? (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/70 p-6 backdrop-blur-sm">
+              <p className="max-w-sm text-center text-sm text-muted-foreground">
+                This group includes archived Immich photos. Viewing is optional and applies only to this group.
+              </p>
+              <Button type="button" onClick={() => setImmichArchivedRevealed(true)}>
+                View archived content
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </DialogContent>
     </Dialog>
   );
+}
+
+function filmstripRuns(items: ClientItem[]): { stackId: string | null; start: number; end: number }[] {
+  const runs: { stackId: string | null; start: number; end: number }[] = [];
+  items.forEach((item, index) => {
+    const stackId = item.stackId;
+    const last = runs[runs.length - 1];
+    if (last && last.stackId === stackId) last.end = index;
+    else runs.push({ stackId, start: index, end: index });
+  });
+  return runs;
+}
+
+function stackIndexById(items: ClientItem[]): Map<string, number> {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (item.stackId && !ids.includes(item.stackId)) ids.push(item.stackId);
+  }
+  return new Map(ids.map((id, index) => [id, index + 1]));
+}
+
+function stackBadgeText(item: ClientItem, indexes: Map<string, number>): string | null {
+  if (!item.stackId) return null;
+  const name = indexes.size > 1 ? `Stack ${indexes.get(item.stackId) ?? 1}` : "Stack";
+  return item.stackPrimary ? `${name} cover` : name;
+}
+
+function StackMembershipBadge({ item, groupItems }: { item: ClientItem; groupItems?: ClientItem[] }) {
+  const text = stackBadgeText(item, stackIndexById(groupItems?.length ? groupItems : [item]));
+  if (!text) return null;
+  return <Badge variant="secondary">{text}</Badge>;
 }
 
 function Player({
@@ -821,6 +927,7 @@ function Player({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="truncate font-heading text-lg">{item.name}</h3>
               {item.isPrimary ? <Badge>Best</Badge> : null}
+              <StackMembershipBadge item={item} groupItems={groupItems} />
               {!item.matched ? <Badge variant="destructive">Unmatched</Badge> : null}
               {item.flags.map((flag) => (
                 <Badge key={flag} variant="secondary">{flag}</Badge>
@@ -837,6 +944,7 @@ function Player({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <h3 className="truncate font-heading text-lg">{item.name}</h3>
             {item.isPrimary ? <Badge>Best</Badge> : null}
+            <StackMembershipBadge item={item} groupItems={groupItems} />
             {!item.matched ? <Badge variant="destructive">Unmatched</Badge> : null}
             {item.flags.map((flag) => (
               <Badge key={flag} variant="secondary">{flag}</Badge>
@@ -974,7 +1082,7 @@ function Player({
         <div className="grid shrink-0 grid-cols-6 gap-1">
           {frames.map((time, index) => (
             <button key={time} type="button" onClick={() => seekFile(time, "user")} className="overflow-hidden rounded-md bg-black">
-              <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}`} className="aspect-video w-full object-cover" />
+              <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}&priority=viewer`} className="aspect-video w-full object-cover" />
             </button>
           ))}
         </div>
@@ -1270,8 +1378,7 @@ function mediaSrc(
 }
 
 function thumbSrc(section: SectionId, item: ClientItem): string {
-  if (section === "immich" && item.assetId) return `/api/immich-thumb?id=${encodeURIComponent(item.assetId)}`;
-  return `/api/thumbs?section=server&path=${encodeURIComponent(item.path)}&kind=poster`;
+  return posterSrc(section, item);
 }
 
 function compareImageSrc(section: SectionId, filePath: string): string {

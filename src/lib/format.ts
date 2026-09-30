@@ -33,7 +33,7 @@ export function formatScanDuration(ms: number): string {
   const seconds = total % 60;
   if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
   if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  if (total > 0 && seconds === 0) return "under 1m";
+  if (total === 0) return ms > 0 ? "under 1m" : "0s";
   return `${seconds}s`;
 }
 
@@ -71,6 +71,28 @@ export function formatClock(iso: string | null): string {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function localCalendarKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/** Next scheduled run: Today/Tomorrow when applicable, else month and day. */
+export function formatNextRun(iso: string | null, now = new Date()): string {
+  if (!iso) return "Never";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Never";
+  const time = date.toLocaleString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const key = localCalendarKey(date);
+  if (key === localCalendarKey(now)) return `Today, ${time}`;
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (key === localCalendarKey(tomorrow)) return `Tomorrow, ${time}`;
+  const datePart = date.toLocaleString(undefined, { month: "short", day: "numeric" });
+  return `${datePart}, ${time}`;
 }
 
 /** Rounded thousands for large library counts, e.g. 43k or "< 1k". */

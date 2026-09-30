@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { trashImmichGroup, trashImmichItems } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
+import { loadTrashStats, trashStatsSavedTotal } from "@/lib/store";
 
 export const POST = api(async (request) => {
   const body = (await request.json()) as { groupId?: string; keepId?: string; trashIds?: string[] };
@@ -9,7 +10,7 @@ export const POST = api(async (request) => {
   const trashed = Array.isArray(body.trashIds)
     ? await trashImmichItems(body.groupId, body.trashIds)
     : await trashImmichGroup(body.groupId, requiredKeep(body.keepId));
-  return NextResponse.json({ trashed });
+  return NextResponse.json({ trashed, totalSavedBytes: trashStatsSavedTotal(await loadTrashStats()) });
 });
 
 function requiredKeep(value: string | undefined): string {
