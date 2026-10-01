@@ -432,6 +432,20 @@ export async function stackAssets(baseUrl: string, apiKey: string, assetIds: str
   return { id: "", primaryAssetId: assetIds[0] ?? "", assets: assetIds.map((id) => ({ id, originalPath: "" })) };
 }
 
+/** Pull assets out of a stack. Immich deletes the stack when fewer than two assets remain. */
+export async function removeAssetsFromStack(baseUrl: string, apiKey: string, stackId: string, assetIds: string[]): Promise<void> {
+  assertImmichId(stackId, "stack");
+  for (const assetId of assetIds) assertImmichId(assetId, "asset");
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}/assets`, {
+    method: "DELETE",
+    headers: headers(apiKey, true),
+    body: JSON.stringify({ assetIds }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (response.status === 404) return;
+  if (!response.ok) throw new Error(`Immich stack remove failed (${response.status})`);
+}
+
 export async function updateStackPrimary(
   baseUrl: string,
   apiKey: string,

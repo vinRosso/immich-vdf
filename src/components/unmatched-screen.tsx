@@ -170,7 +170,7 @@ export function UnmatchedScreen() {
           ) : null}
           <ReasonSection
             title="Outside the path map"
-            hint="The scan path does not start with any scan folder above. Mount that folder, or set IMMICH_BINDS so it sits under a mapped path, then match again."
+            hint="The scan path does not start with any scan folder above. Mount that folder so it sits under a mapped path, then match again."
             groups={noMap}
             showOriginal={false}
           />

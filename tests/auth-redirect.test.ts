@@ -13,4 +13,7 @@ test("safeLoginNext rejects open redirects", () => {
   assert.equal(safeLoginNext("//evil.test"), null);
   assert.equal(safeLoginNext("/login"), null);
   assert.equal(safeLoginNext("https://evil.test"), null);
+  assert.equal(safeLoginNext("/\\evil.test"), null);
+  assert.equal(safeLoginNext("/%5Cevil.test"), null);
+  assert.equal(safeLoginNext("/immich?tab=1"), "/immich?tab=1");
 });

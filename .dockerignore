@@ -7,7 +7,7 @@ media
 immich-library
 agent-tools
 .git
-upstream/.git
+upstream
 engine/**/bin
 engine/**/obj
 *.md

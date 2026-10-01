@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeStoredGroups } from "../src/lib/merge-groups";
+import { extractStoredGroup, mergeStoredGroups } from "../src/lib/merge-groups";
 import type { StoredGroup, StoredItem } from "../src/lib/types";
 
 function item(path: string, extra: Partial<StoredItem> = {}): StoredItem {
@@ -61,4 +61,28 @@ test("mergeStoredGroups dedupes the same path and keeps a real similarity", () =
 
 test("mergeStoredGroups refuses a drop on the same group", () => {
   assert.throws(() => mergeStoredGroups([group("a", ["/a.jpg", "/b.jpg"])], "a", "a"), /different group/);
+});
+
+test("extractStoredGroup moves the selection into a new group", () => {
+  const groups = [group("a", ["/a.jpg", "/b.jpg", "/c.jpg", "/d.jpg"])];
+  const extracted = extractStoredGroup(groups, "a", ["/b.jpg", "/d.jpg"]);
+  assert.notEqual(extracted.groupId, "a");
+  assert.deepEqual(
+    extracted.groups.map((entry) => [entry.groupId, entry.items.map((item) => item.path)]),
+    [
+      ["a", ["/a.jpg", "/c.jpg"]],
+      [extracted.groupId, ["/b.jpg", "/d.jpg"]],
+    ],
+  );
+});
+
+test("extractStoredGroup drops a single leftover file", () => {
+  const groups = [group("a", ["/a.jpg", "/b.jpg", "/c.jpg"])];
+  const extracted = extractStoredGroup(groups, "a", ["/a.jpg", "/b.jpg"]);
+  assert.equal(extracted.groups.length, 1);
+  assert.equal(extracted.groups[0].groupId, extracted.groupId);
+  assert.deepEqual(
+    extracted.groups[0].items.map((entry) => entry.path),
+    ["/a.jpg", "/b.jpg"],
+  );
 });

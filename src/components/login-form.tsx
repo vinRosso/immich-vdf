@@ -48,7 +48,7 @@ export function LoginForm() {
       router.refresh();
     } catch (err) {
       if (err instanceof TypeError) {
-        setError("Cannot reach the app. Run npm run dev and open the URL it prints (default port 47821).");
+        setError("Cannot reach the app. Run npm run dev and open the URL it prints (default port 4747).");
       } else {
         setError(err instanceof Error ? err.message : "Sign-in failed");
       }
@@ -59,9 +59,9 @@ export function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4">
-      <p className="flex items-center gap-2 text-xs tracking-[0.22em] text-primary uppercase">
+      <p className="flex items-center gap-2 text-xs tracking-wide text-primary">
         <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-        Video Duplicate Finder
+        immich-vdf
       </p>
       <h1 className="mt-2 font-heading text-5xl">Sign in</h1>
       <p className="mt-3 text-sm text-muted-foreground">

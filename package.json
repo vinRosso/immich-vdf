@@ -1,9 +1,10 @@
 {
-  "name": "vdf-web",
+  "name": "immich-vdf",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "build:cli": "tsx scripts/build-vdf-cli.ts",
+    "update-engine": "tsx scripts/update-engine.ts",
     "check-cli": "tsx scripts/check-cli-help.ts",
     "dev": "tsx scripts/ensure-vdf-cli.ts && tsx server.ts",
     "dev:web": "tsx server.ts",

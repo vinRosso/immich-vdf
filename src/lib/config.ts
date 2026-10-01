@@ -6,17 +6,13 @@ import { clampScanParallelism, maxScanParallelism, suggestScanParallelism } from
 
 export { clampScanParallelism, maxScanParallelism, suggestScanParallelism };
 
-export type ImmichBind = { containerPath: string; hostPath: string };
-
 export type AppConfig = {
   dataDir: string;
   mediaRoots: string[];
-  /** Upload library mount inside vdf-web (Compose: `${IMMICH_PATH}` → `/immich`). */
+  /** Upload library mount inside immich-vdf (Compose: `${IMMICH_PATH}` → `/immich`). */
   immichLibrary: string;
   /** Scan roots for the Immich section (upload + external libraries). */
   immichScanRoots: string[];
-  /** Container path overlays, such as `/data/library/admin` → a separate host folder. */
-  immichBinds: ImmichBind[];
   port: number;
   host: string;
   password: string;
@@ -30,18 +26,16 @@ export function loadConfig(): AppConfig {
   const cwd = process.cwd();
   const dataDir = process.env.DATA_DIR?.trim() || path.join(cwd, "data");
   const mediaRoots = splitList(process.env.MEDIA_ROOTS, path.join(cwd, "dev-media"));
-const immichLibrary =
-  process.env.IMMICH_LIBRARY?.trim() || process.env.IMMICH_PATH?.trim() || path.join(cwd, "dev-immich");
+  const immichLibrary =
+    process.env.IMMICH_LIBRARY?.trim() || process.env.IMMICH_PATH?.trim() || path.join(cwd, "dev-immich");
   const immichScanRoots = splitList(process.env.IMMICH_SCAN_ROOTS, immichLibrary);
-  const immichBinds = parseImmichBinds(process.env.IMMICH_BINDS);
   const cpuCount = Math.max(1, os.cpus().length);
   return {
     dataDir,
     mediaRoots,
     immichLibrary,
     immichScanRoots,
-    immichBinds,
-    port: Number(process.env.PORT || 47821),
+    port: Number(process.env.PORT || 4747),
     host: process.env.HOST || "0.0.0.0",
     password: process.env.APP_PASSWORD ?? "",
     production: process.env.NODE_ENV === "production",
@@ -200,21 +194,4 @@ function installedCliOverride(dataDir: string): string | null {
 function splitList(value: string | undefined, fallback: string): string[] {
   const raw = value?.trim() || fallback;
   return raw.split(",").map((entry) => entry.trim()).filter(Boolean);
-}
-
-/** `container=/host/path` entries separated by `;`. */
-export function parseImmichBinds(raw: string | undefined): ImmichBind[] {
-  if (!raw?.trim()) return [];
-  const binds: ImmichBind[] = [];
-  for (const entry of raw.split(";")) {
-    const trimmed = entry.trim();
-    if (!trimmed) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
-    const containerPath = trimmed.slice(0, eq).trim().replace(/\\/g, "/").replace(/\/+$/, "");
-    const hostPath = trimmed.slice(eq + 1).trim();
-    if (!containerPath.startsWith("/") || !hostPath) continue;
-    binds.push({ containerPath, hostPath });
-  }
-  return binds;
 }

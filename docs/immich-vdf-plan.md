@@ -1,6 +1,6 @@
-# VDF web for server and Immich
+# immich-vdf
 
-This app is a fork of [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). `engine/` holds VDF.Core and VDF.CLI from v4.1.1 (`21ec967`). Deploy stays `docker compose up -d --build`: the image compiles that CLI, then the Next.js app. Their code is AGPLv3. The image build runs `vdf-cli --help` and parses a checked-in JSON fixture through our parser, so a CLI flag or output change fails the build instead of a scan at 3 a.m.
+immich-vdf is a web app on top of [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). `engine/` holds VDF.Core and VDF.CLI from v4.1.1 (`21ec967`). Users pull the published image. The image build compiles that CLI, then the Next.js app. Their code is AGPLv3. The image build runs `vdf-cli --help` and parses a checked-in JSON fixture through our parser, so a CLI flag or output change fails the build instead of a scan at 3 a.m.
 
 Immich library is mounted on the same server (read-only). Immich deletes go through the API.
 

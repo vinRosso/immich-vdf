@@ -85,15 +85,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-30 mb-4 w-full border-b border-white/[0.06] bg-background/75 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.5)] backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-3">
           <div className="min-w-0">
-            <p className="text-[11px] font-medium tracking-[0.22em] text-primary/90 uppercase">Video Duplicate Finder</p>
-            <div className="mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1">
-              <a href="/" className="font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90">
-                VDF
+            <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+              <a
+                href="/"
+                className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
+              >
+                immich-vdf
               </a>
               {runtime && !runtime.cliAvailable ? (
                 <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
               ) : null}
-              {runtime?.cliVersion ? <span className="font-mono text-sm text-muted-foreground/80">{runtime.cliVersion}</span> : null}
+              {runtime?.cliVersion ? (
+                <span className="block font-mono text-sm leading-none text-muted-foreground/80">{runtime.cliVersion}</span>
+              ) : null}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">

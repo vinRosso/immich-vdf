@@ -50,6 +50,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# editor
+.cursor/
+
 # vendored engine build output
 engine/**/bin/
 engine/**/obj/

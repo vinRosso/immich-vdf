@@ -1,10 +1,8 @@
-# Local build of this checkout. Does not pull from Docker Hub.
-# Users who only want the published image should start from docker-compose.example.yml.
+# Copy this file to an empty directory as docker-compose.yml.
+# It pulls the image GitHub Actions publishes. It does not build the source.
 services:
   immich-vdf:
-    build: .
-    image: immich-vdf:local
-    pull_policy: build
+    image: vinrosso/immich-vdf:latest
     ports:
       - "4747:4747"
     environment:
@@ -13,7 +11,7 @@ services:
       IMMICH_SCAN_ROOTS: ${IMMICH_SCAN_ROOTS:-}
     user: "1000:100"
     volumes:
-      - vdf-data:/data
+      - ./data:/data
       - ${MEDIA_PATH:?Set MEDIA_PATH}:/media
       - ${IMMICH_PATH:?Set IMMICH_PATH}:/immich:ro
       # Extra libraries: same host:container path as Immich, read-only.

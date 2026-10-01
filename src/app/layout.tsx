@@ -8,7 +8,7 @@ const sans = Figtree({ subsets: ["latin"], variable: "--font-figtree" });
 const display = Fraunces({ subsets: ["latin"], variable: "--font-display" });
 
 export const metadata: Metadata = {
-  title: "VDF",
+  title: "immich-vdf",
   description: "Find duplicate videos in local files or an Immich library.",
 };
 

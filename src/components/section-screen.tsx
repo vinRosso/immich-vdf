@@ -6,6 +6,7 @@ import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { FolderPicker, HintWrap } from "@/components/folder-picker";
 import { ScanProfilePicker } from "@/components/scan-profile-picker";
+import { TimezonePicker } from "@/components/timezone-picker";
 import { ScanLog, useScanFeed } from "@/components/scan-log";
 import { ResultGroupCard } from "@/components/group-result-card";
 import { useGroupMergeDrag } from "@/components/use-group-merge-drag";
@@ -53,33 +54,6 @@ import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { ClientGroup, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-/** One entry per distinct clock. Paris, Berlin, and Rome share Central European time. */
-const ZONES: { id: string; label: string }[] = [
-  { id: "UTC", label: "UTC" },
-  { id: "America/Los_Angeles", label: "Los Angeles" },
-  { id: "America/Denver", label: "Denver" },
-  { id: "America/Chicago", label: "Chicago" },
-  { id: "America/New_York", label: "New York" },
-  { id: "Europe/London", label: "London" },
-  { id: "Europe/Paris", label: "Paris, Berlin, Rome" },
-  { id: "Asia/Tokyo", label: "Tokyo" },
-  { id: "Australia/Sydney", label: "Sydney" },
-];
-const ZONE_ALIASES: Record<string, string> = {
-  "Europe/Berlin": "Europe/Paris",
-  "Europe/Rome": "Europe/Paris",
-  "Europe/Amsterdam": "Europe/Paris",
-  "Europe/Brussels": "Europe/Paris",
-  "Europe/Madrid": "Europe/Paris",
-  "Europe/Zurich": "Europe/Paris",
-  "Europe/Vienna": "Europe/Paris",
-  "Europe/Stockholm": "Europe/Paris",
-  "Europe/Prague": "Europe/Paris",
-  "Europe/Warsaw": "Europe/Paris",
-  "Europe/Copenhagen": "Europe/Paris",
-  "Europe/Oslo": "Europe/Paris",
-  "Europe/Budapest": "Europe/Paris",
-};
 
 type Draft = {
   scan: ScanSettings;
@@ -395,7 +369,6 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         draft={draft}
                         settings={settings}
                         runtime={runtime}
-                        zones={zoneList(runtime?.serverTimeZone, draft.schedule.timezone)}
                         busy={busy}
                         hasActiveSchedule={draft.schedule.mode !== "off"}
                         onSave={(slice) => save(slice)}
@@ -530,14 +503,14 @@ function Results({
   const openIndex = openGroupId === null ? -1 : sortedGroups.findIndex((group) => group.groupId === openGroupId);
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
-  async function openGroupAfterRefresh(advance: boolean, fromIndex: number, groupId: string | null) {
+  async function openGroupAfterRefresh(fromIndex: number, groupId: string | null) {
     const data = await onReload();
     const groups = data.groups ? sortResultGroups(data.groups, sortId) : [];
     if (groupId && groups.some((entry) => entry.groupId === groupId)) {
       setOpenGroupId(groupId);
       return;
     }
-    if (!advance || fromIndex < 0) {
+    if (fromIndex < 0 || groups.length === 0) {
       setOpenGroupId(null);
       return;
     }
@@ -548,7 +521,7 @@ function Results({
   async function ignoreGroup(groupId: string) {
     const fromIndex = openGroupId === groupId ? openIndex : -1;
     await api("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
-    await openGroupAfterRefresh(fromIndex >= 0, fromIndex, groupId);
+    await openGroupAfterRefresh(fromIndex, groupId);
   }
 
   function requestStackAll(keepSmallest: boolean) {
@@ -815,7 +788,7 @@ function Results({
           if (next) setOpenGroupId(next.groupId);
         }}
         onClose={() => setOpenGroupId(null)}
-        onActionDone={(advance) => openGroupAfterRefresh(advance, openIndex, openGroupId)}
+        onActionDone={() => openGroupAfterRefresh(openIndex, openGroupId)}
       />
       <Dialog open={bulkConfirm !== null} onOpenChange={(open) => !open && !bulkBusy && setBulkConfirm(null)}>
         <DialogContent className="max-w-sm">
@@ -1096,7 +1069,6 @@ function ScheduleSettingsDialog({
   draft,
   settings,
   runtime,
-  zones,
   busy,
   hasActiveSchedule,
   onSave,
@@ -1107,7 +1079,6 @@ function ScheduleSettingsDialog({
   draft: Draft;
   settings: PublicSettings | null;
   runtime: RuntimeInfo | null;
-  zones: { id: string; label: string }[];
   busy: boolean;
   hasActiveSchedule: boolean;
   onSave: (slice: Pick<Draft, "schedule" | "webhookUrl" | "clearWebhook">) => Promise<void>;
@@ -1270,7 +1241,6 @@ function ScheduleSettingsDialog({
             <div className="space-y-2">
               <ScheduleTimingRow
                 schedule={local.schedule}
-                zones={zones}
                 hour={clock.hour}
                 minute={clock.minute}
                 timeError={timeError}
@@ -1374,7 +1344,6 @@ function ScheduleSettingsDialog({
 function ScheduleTimingRow({
   schedule,
   onChange,
-  zones,
   hour,
   minute,
   timeError,
@@ -1382,7 +1351,6 @@ function ScheduleTimingRow({
 }: {
   schedule: ScheduleSettings;
   onChange: (schedule: ScheduleSettings) => void;
-  zones: { id: string; label: string }[];
   hour: string;
   minute: string;
   timeError: string | null;
@@ -1392,7 +1360,6 @@ function ScheduleTimingRow({
     "h-7 rounded-md border-0 bg-transparent px-0.5 text-sm font-semibold text-foreground underline decoration-muted-foreground/50 underline-offset-4 [color-scheme:dark] hover:decoration-foreground focus-visible:decoration-foreground focus-visible:outline-none";
   const timeFieldClass =
     "h-7 w-9 border-0 bg-transparent px-0.5 text-center text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent";
-  const timezone = canonicalZone(schedule.timezone);
   return (
     <div className="space-y-1">
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -1453,16 +1420,10 @@ function ScheduleTimingRow({
       ) : null}
       <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
         Timezone
-        <select
-          className={selectClass}
-          aria-label="Timezone"
-          value={timezone}
-          onChange={(event) => onChange({ ...schedule, timezone: event.target.value })}
-        >
-          {zones.map((zone) => (
-            <option key={zone.id} value={zone.id}>{zone.label}</option>
-          ))}
-        </select>
+        <TimezonePicker
+          value={schedule.timezone || "UTC"}
+          onChange={(timezone) => onChange({ ...schedule, timezone })}
+        />
       </label>
     </div>
     {timeError ? <p className="text-xs text-destructive">{timeError}</p> : null}
@@ -1491,16 +1452,3 @@ function parseClockPart(value: string, max: number): number | null {
   return parsed;
 }
 
-function canonicalZone(zone: string): string {
-  return ZONE_ALIASES[zone] ?? zone;
-}
-
-function zoneList(serverZone: string | undefined, selected: string): { id: string; label: string }[] {
-  const zones = [...ZONES];
-  for (const zone of [serverZone, selected]) {
-    if (!zone) continue;
-    const id = canonicalZone(zone);
-    if (!zones.some((entry) => entry.id === id)) zones.push({ id, label: id.replaceAll("_", " ") });
-  }
-  return zones;
-}

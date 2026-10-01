@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mapImmichImportPathToHost, rewriteHostPathWithBinds } from "../src/lib/immich-mounts";
+import { mapImmichImportPathToHost } from "../src/lib/immich-mounts";
 import type { AppConfig } from "../src/lib/config";
 
 const baseConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
@@ -8,14 +8,13 @@ const baseConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   mediaRoots: [],
   immichLibrary: "\\\\god\\storage\\immich\\library",
   immichScanRoots: ["\\\\god\\storage\\immich\\library", "/home/user/photos1"],
-  port: 47821,
+  port: 4747,
   host: "0.0.0.0",
   password: "",
   production: false,
   vdfCli: "vdf-cli",
   trustedProxy: "",
   cpuCount: 4,
-  immichBinds: [],
   ...overrides,
 });
 
@@ -43,18 +42,5 @@ describe("mapImmichImportPathToHost", () => {
 
   it("ignores unknown container import paths", () => {
     assert.equal(mapImmichImportPathToHost("/mnt/other", "\\\\god\\storage\\immich\\library", ["admin"], baseConfig()), null);
-  });
-});
-
-describe("rewriteHostPathWithBinds", () => {
-  it("sends /data/library/admin to the overlaid host folder", () => {
-    const binds = [{ containerPath: "/data/library/admin", hostPath: "\\\\god\\storage\\kevin\\2_memories" }];
-    const rewritten = rewriteHostPathWithBinds(
-      "\\\\god\\storage\\immich\\library\\admin",
-      "\\\\god\\storage\\immich\\library",
-      ["admin"],
-      binds,
-    );
-    assert.equal(rewritten, "\\\\god\\storage\\kevin\\2_memories");
   });
 });

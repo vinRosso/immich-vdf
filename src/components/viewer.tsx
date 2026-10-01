@@ -10,7 +10,17 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { STRIP_FRAMES, TRANSCODE_FULL_HEIGHT, TRANSCODE_START_HEIGHT, sampleTimes } from "@/lib/ffmpeg-args";
 import { formatBytes, formatDuration, formatMediaDate, formatPercent } from "@/lib/format";
-import { clampImageView, fitImage, zoomImage, type ImageBounds, type ImageView } from "@/lib/image-view";
+import {
+  clampImageView,
+  DEFAULT_RELATIVE_IMAGE_VIEW,
+  fitImage,
+  relativeToView,
+  viewToRelative,
+  zoomImage,
+  type ImageBounds,
+  type ImageView,
+  type RelativeImageView,
+} from "@/lib/image-view";
 import { driftAction } from "@/lib/playback-sync";
 import { likelyDirectPlayback } from "@/lib/playback";
 import type { ImmichAlbum } from "@/lib/immich";
@@ -70,8 +80,8 @@ export function Viewer({
   onPrev: () => void;
   onNext: () => void;
   onClose: () => void;
-  /** Refresh data after an action; advance moves to the next group when the current one is gone. */
-  onActionDone: (advance: boolean) => void | Promise<void>;
+  /** Refresh results; stay on the current group when it still exists, otherwise open the next one. */
+  onActionDone: () => void | Promise<void>;
   /** When set, the group is on the ignored list and the header action restores it. */
   ignoredKey?: string | null;
 }) {
@@ -110,8 +120,15 @@ export function Viewer({
     function onKey(event: KeyboardEvent) {
       const target = event.target;
       if (target instanceof HTMLElement) {
-        const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
+        if (target.isContentEditable) return;
+        if (target instanceof HTMLInputElement) {
+          const type = target.type;
+          if (type !== "checkbox" && type !== "radio" && type !== "button" && type !== "submit" && type !== "reset") {
+            return;
+          }
+        } else if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+          return;
+        }
       }
       if (event.key === "ArrowLeft" && canPrev) {
         event.preventDefault();
@@ -138,17 +155,28 @@ export function Viewer({
   const previewItem = group?.items[previewIndex] ?? null;
 
   useEffect(() => {
+    if (!imageOnly || !group) return;
+    const ahead = [previewIndex + 1, previewIndex - 1, previewIndex + 2]
+      .filter((index) => index >= 0 && index < group.items.length)
+      .map((index) => group.items[index]);
+    for (const item of ahead) {
+      const img = new Image();
+      img.src = previewImageSrc(section, item);
+    }
+  }, [group, imageOnly, previewIndex, section]);
+
+  useEffect(() => {
     sync.reset();
   }, [group, sync]);
 
-  async function act(label: string, url: string, body: unknown, advance: boolean, method: "POST" | "DELETE" = "POST") {
+  async function act(label: string, url: string, body: unknown, method: "POST" | "DELETE" = "POST") {
     setPending(label);
     setError(null);
     try {
       const result = await api<{ totalSavedBytes?: number }>(url, { method, body: JSON.stringify(body) });
       if (typeof result.totalSavedBytes === "number") publishTrashSavedBytes(result.totalSavedBytes);
-      await onActionDone(advance);
-      if (!advance) setSelected(new Set());
+      await onActionDone();
+      setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -158,7 +186,7 @@ export function Viewer({
 
   function makeStackCover(item: ClientItem) {
     if (!group || !item.assetId || !item.stackId || item.stackPrimary) return;
-    void act("Cover", "/api/immich/stack/primary", { groupId: group.groupId, assetId: item.assetId }, false);
+    void act("Cover", "/api/immich/stack/primary", { groupId: group.groupId, assetId: item.assetId });
   }
 
   function stackPrimary(item: ClientItem | undefined) {
@@ -167,7 +195,7 @@ export function Viewer({
       setError("That file is not a matched Immich asset");
       return;
     }
-    void act("Stack", "/api/immich/stack", { groupId: group.groupId, primaryId: item.assetId }, true);
+    void act("Stack", "/api/immich/stack", { groupId: group.groupId, primaryId: item.assetId });
   }
 
   function stackChosen() {
@@ -183,7 +211,74 @@ export function Viewer({
     }
     const preferred = chosen.find((item) => item.path === bestPath);
     const primary = preferred ?? chosen[pickPrimaryIndex(chosen)];
-    stackPrimary(primary);
+    if (!primary?.assetId) return;
+    void act("Stack", "/api/immich/stack", {
+      groupId: group.groupId,
+      primaryId: primary.assetId,
+      assetIds: chosen.flatMap((item) => (item.assetId ? [item.assetId] : [])),
+    });
+  }
+
+  function removeFromStack() {
+    if (!group) return;
+    const chosen = group.items.filter((item) => selected.has(item.path));
+    const stackIds = [...new Set(chosen.flatMap((item) => (item.stackId ? [item.stackId] : [])))];
+    if (chosen.length === 0 || stackIds.length !== 1 || chosen.some((item) => !item.assetId || item.stackId !== stackIds[0])) {
+      setError("Select files from the same stack");
+      return;
+    }
+    void act("Remove from stack", "/api/immich/stack/remove", {
+      groupId: group.groupId,
+      assetIds: chosen.flatMap((item) => (item.assetId ? [item.assetId] : [])),
+    });
+  }
+
+  function addToStack() {
+    if (!group) return;
+    const loose = group.items.filter((item) => item.assetId && !item.stackId);
+    const chosen = loose.filter((item) => selected.has(item.path));
+    const targets = chosen.length > 0 ? chosen : loose;
+    const assetIds = targets.flatMap((item) => (item.assetId ? [item.assetId] : []));
+    if (assetIds.length === 0) {
+      setError("Choose a file that is not already in a stack");
+      return;
+    }
+    void act("Add to stack", "/api/immich/stack/join", { groupId: group.groupId, assetIds });
+  }
+
+  function mergeStacks() {
+    if (!group) return;
+    const stacked = group.items.filter((item) => item.stackId && item.assetId);
+    const preferred = stacked.find((item) => item.path === bestPath) ?? stacked.find((item) => item.stackPrimary) ?? stacked[0];
+    if (!preferred?.assetId) return;
+    void act("Merge stacks", "/api/immich/stack/merge", { groupId: group.groupId, primaryId: preferred.assetId });
+  }
+
+  async function extractGroup() {
+    if (!group) return;
+    const paths = group.items.filter((item) => selected.has(item.path)).map((item) => item.path);
+    if (paths.length < 2) {
+      setError("Select at least two files");
+      return;
+    }
+    if (paths.length >= group.items.length) {
+      setError("Leave at least one file in this group");
+      return;
+    }
+    setPending("Extract");
+    setError(null);
+    try {
+      const result = await api<{ groupId: string }>("/api/results/extract", {
+        method: "POST",
+        body: JSON.stringify({ section, groupId: group.groupId, paths }),
+      });
+      await onActionDone();
+      setSelected(new Set());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not extract that group");
+    } finally {
+      setPending(null);
+    }
   }
 
   function keepOne(item: ClientItem | undefined) {
@@ -196,7 +291,6 @@ export function Viewer({
       "Trash",
       section === "server" ? "/api/trash" : "/api/immich/trash",
       section === "server" ? { groupId: group.groupId, keepPath: item.path } : { groupId: group.groupId, keepId: item.assetId },
-      true,
     );
   }
 
@@ -215,7 +309,6 @@ export function Viewer({
       section === "server"
         ? { groupId: group.groupId, trashPaths: victims.map((item) => item.path) }
         : { groupId: group.groupId, trashIds: victims.map((item) => item.assetId) },
-      group.items.length - victims.length < 2,
     );
   }
 
@@ -264,9 +357,22 @@ export function Viewer({
   }
 
   const selectionBusy = Boolean(pending) || selected.size === 0 || (group !== null && selected.size === group.items.length);
+  const extractBusy = Boolean(pending) || selected.size < 2 || (group !== null && selected.size >= group.items.length);
   const immich = section === "immich";
+  const immichStackIds = group ? [...new Set(group.items.flatMap((item) => (item.stackId ? [item.stackId] : [])))] : [];
+  const immichLoose = group ? group.items.filter((item) => item.assetId && !item.stackId) : [];
   const immichStackable = Boolean(group && group.items.filter((item) => item.assetId).length >= 2);
+  const showStackAll =
+    immichStackable &&
+    (immichStackIds.length === 0 || (immichStackIds.length >= 2 && immichLoose.length > 0));
   const stackSelectionBusy = Boolean(pending) || !immichStackable || selected.size < 2;
+  const selectedItems = group ? group.items.filter((item) => selected.has(item.path)) : [];
+  const selectedStackIds = [...new Set(selectedItems.flatMap((item) => (item.stackId ? [item.stackId] : [])))];
+  const removeFromStackReady =
+    immich &&
+    selectedItems.length > 0 &&
+    selectedStackIds.length === 1 &&
+    selectedItems.every((item) => item.assetId && item.stackId === selectedStackIds[0]);
   const rankedBest = group ? group.items[pickPrimaryIndex(group.items)] : undefined;
   const bestItem = (bestPath && group?.items.find((item) => item.path === bestPath)) || rankedBest;
   const smallestItem = group ? group.items[pickSmallestIndex(group.items)] : undefined;
@@ -343,13 +449,26 @@ export function Viewer({
         >
           <Star className="size-3 fill-white text-white" />
         </button>
-        <input
-          type="checkbox"
-          checked={selected.has(item.path)}
-          onChange={() => toggleSelected(item.path)}
-          aria-label={`Select ${item.name}`}
-          className="absolute top-1.5 right-1.5 size-4 accent-primary"
-        />
+        <label
+          className="absolute top-1.5 right-1.5 z-10 flex size-[1.125rem] cursor-pointer items-center justify-center rounded-sm border-2 border-primary bg-background/90 shadow-sm"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(item.path)}
+            onChange={(event) => {
+              toggleSelected(item.path);
+              event.currentTarget.blur();
+            }}
+            aria-label={`Select ${item.name}`}
+            className="peer sr-only"
+          />
+          <span
+            className="size-3 rounded-[2px] bg-transparent peer-checked:bg-primary"
+            aria-hidden
+          />
+        </label>
       </div>
     );
   }
@@ -390,9 +509,21 @@ export function Viewer({
           <div className="flex min-w-0 flex-1 flex-wrap justify-center gap-2">
             {immich ? (
               <>
-                <Button type="button" size="sm" disabled={Boolean(pending) || !immichStackable || !bestItem?.assetId} onClick={() => stackPrimary(bestItem)}>
-                  Stack all
-                </Button>
+                {showStackAll ? (
+                  <Button type="button" size="sm" disabled={Boolean(pending) || !bestItem?.assetId} onClick={() => stackPrimary(bestItem)}>
+                    Stack all
+                  </Button>
+                ) : null}
+                {immichStackIds.length >= 2 ? (
+                  <Button type="button" size="sm" disabled={Boolean(pending)} onClick={mergeStacks}>
+                    Merge stacks
+                  </Button>
+                ) : null}
+                {immichStackIds.length === 1 && immichLoose.length > 0 ? (
+                  <Button type="button" size="sm" disabled={Boolean(pending)} onClick={addToStack}>
+                    Add to stack
+                  </Button>
+                ) : null}
                 <Button type="button" size="sm" variant="secondary" disabled={Boolean(pending) || !bestItem?.assetId} onClick={() => keepOne(bestItem)}>
                   Keep best, trash rest
                 </Button>
@@ -413,7 +544,7 @@ export function Viewer({
                 size="sm"
                 variant="outline"
                 disabled={Boolean(pending)}
-                onClick={() => void act("Restore", "/api/ignore", { section, key: ignoredKey }, true, "DELETE")}
+                onClick={() => void act("Restore", "/api/ignore", { section, key: ignoredKey }, "DELETE")}
               >
                 Restore group
               </Button>
@@ -423,7 +554,7 @@ export function Viewer({
                 size="sm"
                 variant="outline"
                 disabled={Boolean(pending) || !group}
-                onClick={() => group && void act("Ignore", "/api/ignore", { section, groupId: group.groupId }, true)}
+                onClick={() => group && void act("Ignore", "/api/ignore", { section, groupId: group.groupId })}
               >
                 Ignore group
               </Button>
@@ -447,7 +578,7 @@ export function Viewer({
                   imageCompare={{
                     referenceSrc:
                       referenceIndex !== null && group.items[referenceIndex]
-                        ? compareImageSrc(section, group.items[referenceIndex].path)
+                        ? previewImageSrc(section, group.items[referenceIndex])
                         : null,
                     referenceNumber: referenceIndex !== null && group.items[referenceIndex] ? referenceIndex + 1 : null,
                     blend,
@@ -470,13 +601,24 @@ export function Viewer({
             <div className="relative flex min-h-8 flex-wrap items-center gap-2">
               <span className="relative z-10 shrink-0 text-sm tabular-nums text-muted-foreground">
                 {selected.size > 0 ? `${selected.size} of ${group.items.length} selected` : `${group.items.length} items`}
+                {immich
+                  ? ` · ${immichStackIds.length} ${immichStackIds.length === 1 ? "stack" : "stacks"}`
+                  : null}
               </span>
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="pointer-events-auto flex flex-wrap justify-center gap-2">
                   {immich ? (
-                    <Button type="button" disabled={stackSelectionBusy} onClick={stackChosen}>
-                      Stack selected
-                    </Button>
+                    <>
+                      {removeFromStackReady ? (
+                        <Button type="button" disabled={Boolean(pending)} onClick={removeFromStack}>
+                          Remove from stack
+                        </Button>
+                      ) : (
+                        <Button type="button" disabled={stackSelectionBusy} onClick={stackChosen}>
+                          Stack selected
+                        </Button>
+                      )}
+                    </>
                   ) : (
                     <Button type="button" disabled={selectionBusy} onClick={() => trashChosen("keep")}>
                       Keep selected
@@ -484,6 +626,9 @@ export function Viewer({
                   )}
                   <Button type="button" variant="secondary" disabled={selectionBusy} onClick={() => trashChosen("trash")}>
                     Trash selected
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={extractBusy} onClick={() => void extractGroup()}>
+                    Extract group
                   </Button>
                 </div>
               </div>
@@ -499,7 +644,7 @@ export function Viewer({
                 </button>
               </div>
             </div>
-            <div className="flex items-end justify-center gap-2 overflow-x-auto px-1 py-1">
+            <div className="flex w-full min-w-0 items-end justify-[safe_center] gap-2 overflow-x-auto px-1 py-1">
               {filmstripRuns(group.items).map((run) => {
                 const thumbs = group.items.slice(run.start, run.end + 1).map((item, offset) =>
                   filmstripThumb(item, run.start + offset),
@@ -984,7 +1129,12 @@ function Player({
       <div className="relative min-h-0 flex-1">
       {item.isImage ? (
         soloImage && imageCompare ? (
-          <ImageStage key={imageCompare.resetKey} src={compareImageSrc(section, item.path)} compare={imageCompare} />
+          <ImageStage
+            key={imageCompare.resetKey}
+            src={previewImageSrc(section, item)}
+            placeholderSrc={thumbSrc(section, item)}
+            compare={imageCompare}
+          />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -1381,8 +1531,15 @@ function thumbSrc(section: SectionId, item: ClientItem): string {
   return posterSrc(section, item);
 }
 
+const BROWSER_IMAGE = /\.(avif|bmp|gif|jpe?g|png|webp)$/i;
+
 function compareImageSrc(section: SectionId, filePath: string): string {
   return `/api/media?section=${section}&path=${encodeURIComponent(filePath)}`;
+}
+
+/** Full file when the browser can decode it. HEIC and other camera formats use the JPEG poster. */
+function previewImageSrc(section: SectionId, item: ClientItem): string {
+  return BROWSER_IMAGE.test(item.path) ? compareImageSrc(section, item.path) : thumbSrc(section, item);
 }
 
 function BlendControls({ compare }: { compare: ImageCompare }) {
@@ -1411,15 +1568,16 @@ function BlendControls({ compare }: { compare: ImageCompare }) {
   );
 }
 
-function ImageStage({ src, compare }: { src: string; compare: ImageCompare }) {
+type ImageFrame = { src: string; width: number; height: number };
+
+function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholderSrc: string; compare: ImageCompare }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<ImageView>({ scale: 1, x: 0, y: 0 });
+  const relativeRef = useRef<RelativeImageView>(DEFAULT_RELATIVE_IMAGE_VIEW);
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
-  const placedRef = useRef(false);
   const dragRef = useRef<{ id: number; sx: number; sy: number; x: number; y: number } | null>(null);
   const [view, setView] = useState<ImageView>({ scale: 1, x: 0, y: 0 });
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
-  const [placed, setPlaced] = useState(false);
+  const [frame, setFrame] = useState<ImageFrame | null>(null);
   const [panning, setPanning] = useState(false);
   const [over, setOver] = useState(false);
 
@@ -1442,34 +1600,67 @@ function ImageStage({ src, compare }: { src: string; compare: ImageCompare }) {
     const clamped = box ? clampImageView(next, box) : next;
     viewRef.current = clamped;
     setView(clamped);
+    if (box) relativeRef.current = viewToRelative(clamped, box);
   }
 
-  function placeIfNeeded() {
-    if (placedRef.current) return;
-    const image = sizeRef.current;
-    const node = viewportRef.current;
-    if (!image || !node) return;
-    const rect = node.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) return;
-    commit(fitImage(rect.width, rect.height, image.width, image.height));
-    placedRef.current = true;
-    setPlaced(true);
+  function applyRelative() {
+    const box = bounds();
+    if (!box) return;
+    commit(relativeToView(relativeRef.current, box));
   }
 
   function fit() {
-    const image = sizeRef.current;
-    const node = viewportRef.current;
-    if (!image || !node) return;
-    const rect = node.getBoundingClientRect();
-    commit(fitImage(rect.width, rect.height, image.width, image.height));
-    placedRef.current = true;
-    setPlaced(true);
+    relativeRef.current = DEFAULT_RELATIVE_IMAGE_VIEW;
+    const box = bounds();
+    if (!box) return;
+    commit(fitImage(box.viewportWidth, box.viewportHeight, box.imageWidth, box.imageHeight));
   }
+
+  useEffect(() => {
+    if (frame?.src === src) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const next = { width: img.naturalWidth, height: img.naturalHeight };
+      if (next.width < 1 || next.height < 1) return;
+      sizeRef.current = next;
+      const node = viewportRef.current;
+      const rect = node?.getBoundingClientRect();
+      if (rect && rect.width >= 2 && rect.height >= 2) {
+        const placed = relativeToView(relativeRef.current, {
+          viewportWidth: rect.width,
+          viewportHeight: rect.height,
+          imageWidth: next.width,
+          imageHeight: next.height,
+        });
+        viewRef.current = placed;
+        setView(placed);
+      }
+      setFrame({ src, width: next.width, height: next.height });
+    };
+    img.onerror = () => {
+      if (!cancelled) setFrame((current) => (current?.src === src ? current : null));
+    };
+    img.src = src;
+    return () => {
+      cancelled = true;
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [src, frame?.src]);
+
+  useEffect(() => {
+    if (!frame) return;
+    applyRelative();
+  }, [frame]);
 
   useEffect(() => {
     const node = viewportRef.current;
     if (!node) return;
-    const observer = new ResizeObserver(() => placeIfNeeded());
+    const observer = new ResizeObserver(() => {
+      if (sizeRef.current) applyRelative();
+    });
     observer.observe(node);
     function onWheel(event: WheelEvent) {
       const viewport = viewportRef.current;
@@ -1482,7 +1673,6 @@ function ImageStage({ src, compare }: { src: string; compare: ImageCompare }) {
         ? { viewportWidth: rect.width, viewportHeight: rect.height, imageWidth: image.width, imageHeight: image.height }
         : undefined;
       commit(zoomImage(viewRef.current, event.clientX - rect.left, event.clientY - rect.top, factor, box));
-      placedRef.current = true;
     }
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -1490,22 +1680,6 @@ function ImageStage({ src, compare }: { src: string; compare: ImageCompare }) {
       node.removeEventListener("wheel", onWheel);
     };
   }, []);
-
-  useEffect(() => {
-    if (!placed || !size) return;
-    const box = bounds();
-    if (!box) return;
-    const clamped = clampImageView(viewRef.current, box);
-    if (clamped.x === viewRef.current.x && clamped.y === viewRef.current.y && clamped.scale === viewRef.current.scale) return;
-    commit(clamped);
-  }, [placed, size]);
-
-  function onLoad(event: SyntheticEvent<HTMLImageElement>) {
-    const next = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight };
-    sizeRef.current = next;
-    setSize(next);
-    placeIfNeeded();
-  }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -1573,37 +1747,40 @@ function ImageStage({ src, compare }: { src: string; compare: ImageCompare }) {
         onPointerCancel={onPointerUp}
         onDoubleClick={fit}
       >
-        <div
-          className="absolute top-0 left-0"
-          style={{
-            width: size?.width ?? 0,
-            height: size?.height ?? 0,
-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-            transformOrigin: "0 0",
-            background: "#000",
-            isolation: "isolate",
-            opacity: placed ? 1 : 0,
-          }}
-        >
-          {compare.referenceSrc ? (
-            // eslint-disable-next-line @next/next/no-img-element
+        {frame ? null : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img alt="" src={placeholderSrc} draggable={false} className="pointer-events-none absolute inset-0 size-full object-contain" />
+        )}
+        {frame ? (
+          <div
+            className="absolute top-0 left-0"
+            style={{
+              width: frame.width,
+              height: frame.height,
+              transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+              transformOrigin: "0 0",
+              isolation: "isolate",
+            }}
+          >
+            {compare.referenceSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt=""
+                src={compare.referenceSrc}
+                draggable={false}
+                className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
+              />
+            ) : null}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               alt=""
-              src={compare.referenceSrc}
+              src={frame.src}
               draggable={false}
               className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
+              style={{ mixBlendMode: compare.referenceSrc ? compare.blend : "normal" }}
             />
-          ) : null}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            alt=""
-            src={src}
-            draggable={false}
-            onLoad={onLoad}
-            className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
-            style={{ mixBlendMode: compare.referenceSrc ? compare.blend : "normal" }}
-          />
-        </div>
+          </div>
+        ) : null}
       </div>
       <Button type="button" variant="secondary" size="xs" className="absolute top-2 right-2 z-10" onClick={fit}>
         Fit

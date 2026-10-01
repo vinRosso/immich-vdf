@@ -12,6 +12,8 @@ import {
   fetchImmichUser,
   pingImmich,
   removeAssetsFromAlbum,
+  fetchImmichStack,
+  removeAssetsFromStack,
   stackAssets,
   trashAssets,
   updateStackPrimary,
@@ -21,14 +23,16 @@ import { groupHasImmichArchived } from "./immich-archived";
 import { forgetImmichStacks, rememberImmichStack } from "./immich-stack-sync";
 import {
   assignSelectionToStack,
+  detachAssetsFromStack,
   dropCompleteStacks,
+  orderGroupItems,
   groupIsOneCompleteStack,
   looseAssetIds,
   replaceGroup,
   setStackPrimary,
   stackIdsInGroup,
 } from "./immich-stacks";
-import { mergeStoredGroups } from "./merge-groups";
+import { extractStoredGroup, mergeStoredGroups } from "./merge-groups";
 import { pickPrimaryIndex } from "./primary";
 import { DEFAULT_RESULTS_GROUP_SORT, sortResultGroups, type ResultsGroupSortId } from "./results-sort";
 import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
@@ -82,8 +86,9 @@ export async function resultsView(section: SectionId): Promise<ResultsResponse> 
       hiddenIgnored += 1;
       continue;
     }
-    const primary = pickPrimaryIndex(group.items);
-    const items = group.items.map((item, index) => toClient(section, item, index === primary));
+    const storedItems = section === "immich" ? orderGroupItems(group.items) : group.items;
+    const primary = pickPrimaryIndex(storedItems);
+    const items = storedItems.map((item, index) => toClient(section, item, index === primary));
     unmatched += items.filter((item) => !item.matched).length;
     groups.push({ groupId: group.groupId, items });
   }
@@ -168,8 +173,9 @@ export async function ignoredGroupsView(section: SectionId): Promise<IgnoredGrou
   return entries.map((entry) => {
     const stored = byKey.get(entry.key);
     if (!stored) return { entry, group: null };
-    const primary = pickPrimaryIndex(stored.items);
-    const items = stored.items.map((item, index) => toClient(section, item, index === primary));
+    const storedItems = section === "immich" ? orderGroupItems(stored.items) : stored.items;
+    const primary = pickPrimaryIndex(storedItems);
+    const items = storedItems.map((item, index) => toClient(section, item, index === primary));
     return { entry, group: { groupId: stored.groupId, items } };
   });
 }
@@ -183,6 +189,19 @@ function toClient(section: SectionId, item: StoredItem, isPrimary: boolean): Cli
     matched: section === "server" ? true : Boolean(item.assetId),
     isPrimary,
   };
+}
+
+export async function extractResultGroup(section: SectionId, groupId: string, paths: string[]): Promise<string> {
+  let createdId = "";
+  const saved = await updateResults(section, (current) => {
+    if (!current) throw new AppError("There is no scan to act on", 404);
+    const extracted = extractStoredGroup(current.groups, groupId, paths);
+    createdId = extracted.groupId;
+    return { ...current, groups: extracted.groups };
+  });
+  if (!saved) throw new AppError("There is no scan to act on", 404);
+  await updateIgnored(section, (entries) => pruneIgnoredEntries(section, entries, saved.groups));
+  return createdId;
 }
 
 export async function mergeResultGroups(section: SectionId, sourceGroupId: string, targetGroupId: string): Promise<void> {
@@ -274,11 +293,15 @@ export async function addToImmichStack(groupId: string, assetIds?: string[]): Pr
   const matched = new Set(matchedIds(group));
   if (adding.some((id) => !matched.has(id))) throw new AppError("That file is not a matched Immich asset");
   if (adding.some((id) => !loose.has(id))) throw new AppError("That file is already in a stack");
-  const created = await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, [primary, ...adding]);
+  const members = group.items.flatMap((item) => (item.assetId && item.stackId === stackId ? [item.assetId] : []));
+  const created = await stackAssets(settings.immich.baseUrl, settings.immich.apiKey, [
+    primary,
+    ...members.filter((id) => id !== primary),
+    ...adding,
+  ]);
   if (!created.id) throw new AppError("Immich did not return the stack");
   rememberImmichStack(created);
   if (created.id !== stackId) forgetImmichStacks([stackId]);
-  const members = group.items.flatMap((item) => (item.assetId && item.stackId === stackId ? [item.assetId] : []));
   const selected = [...new Set([primary, ...members, ...adding])];
   await saveImmichStackGroup(groupId, (fresh) =>
     assignSelectionToStack(fresh, selected, created.id, created.primaryAssetId || primary),
@@ -303,6 +326,35 @@ export async function mergeImmichStacks(groupId: string, primaryId: string): Pro
   forgetImmichStacks(stacks.filter((id) => id !== created.id));
   await saveImmichStackGroup(groupId, (fresh) =>
     assignSelectionToStack(fresh, ordered, created.id, created.primaryAssetId || primaryId),
+  );
+}
+
+/** Pull selected members out of one stack so they stay in the group as loose files. */
+export async function removeFromImmichStack(groupId: string, assetIds: string[]): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const unique = [...new Set(assetIds)];
+  if (unique.length === 0) throw new AppError("Choose a file to remove from the stack");
+  const matched = new Set(matchedIds(group));
+  if (unique.some((id) => !matched.has(id))) throw new AppError("That file is not a matched Immich asset");
+  const chosen = group.items.filter((item) => item.assetId && unique.includes(item.assetId));
+  const stackIds = [...new Set(chosen.flatMap((item) => (item.stackId ? [item.stackId] : [])))];
+  if (chosen.length !== unique.length || stackIds.length !== 1 || chosen.some((item) => !item.stackId)) {
+    throw new AppError("Select files from the same stack");
+  }
+  const stackId = stackIds[0];
+  await removeAssetsFromStack(settings.immich.baseUrl, settings.immich.apiKey, stackId, unique);
+  forgetImmichStacks([stackId]);
+  const fresh = await fetchImmichStack(settings.immich.baseUrl, settings.immich.apiKey, stackId);
+  if (fresh) rememberImmichStack(fresh);
+  await saveImmichStackGroup(groupId, (current) =>
+    detachAssetsFromStack(
+      current,
+      unique,
+      fresh ? { id: fresh.id, primaryAssetId: fresh.primaryAssetId, assetIds: fresh.assets.map((asset) => asset.id) } : null,
+    ),
   );
 }
 

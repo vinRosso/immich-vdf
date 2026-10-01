@@ -1,6 +1,6 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { loadConfig, type AppConfig, type ImmichBind } from "./config";
+import { loadConfig, type AppConfig } from "./config";
 import { listImmichLibraryImportPaths } from "./immich";
 
 /** Immich media root inside the Immich container (`UPLOAD_LOCATION` is mounted at `/data`). */
@@ -18,7 +18,7 @@ export function immichMediaPrefix(children: string[]): string {
 
 export type ImmichCredentials = { baseUrl: string; apiKey: string };
 
-/** Upload library mount inside vdf-web (`${IMMICH_PATH}` → `/immich`). */
+/** Upload library mount inside immich-vdf (`${IMMICH_PATH}` → `/immich`). */
 export function immichUploadMount(config: AppConfig = loadConfig()): string {
   return config.immichLibrary;
 }
@@ -84,48 +84,16 @@ export function mapImmichImportPathToHost(
   return configured ?? null;
 }
 
-function joinHostSuffix(hostPath: string, suffix: string): string {
-  const parts = suffix.split("/").filter(Boolean);
-  const joiner = hostPath.includes("\\") ? path.win32 : path.posix;
-  return parts.reduce((current, part) => joiner.join(current, part), hostPath);
-}
-
-/** Replace a host folder with the bind-mount target when Immich overlays that container path. */
-export function rewriteHostPathWithBinds(
-  hostPath: string,
-  uploadMount: string,
-  uploadChildren: string[],
-  binds: ImmichBind[],
-): string {
-  if (binds.length === 0) return hostPath;
-  const mount = normalizeRoot(uploadMount);
-  const host = normalizeRoot(hostPath);
-  const mountKey = mount.toLowerCase();
-  const hostKey = host.toLowerCase();
-  if (hostKey !== mountKey && !hostKey.startsWith(`${mountKey}/`)) return hostPath;
-  const suffix = host.slice(mount.length);
-  const container = `${immichMediaPrefix(uploadChildren)}${suffix}`.replace(/\/{2,}/g, "/");
-  const ranked = [...binds].sort((a, b) => b.containerPath.length - a.containerPath.length);
-  const containerKey = container.toLowerCase();
-  for (const bind of ranked) {
-    const from = bind.containerPath.replace(/\/+$/, "");
-    const fromKey = from.toLowerCase();
-    if (containerKey === fromKey) return bind.hostPath;
-    if (containerKey.startsWith(`${fromKey}/`)) return joinHostSuffix(bind.hostPath, container.slice(from.length));
-  }
-  return hostPath;
-}
-
 const scanRootsCache = new Map<string, { at: number; roots: string[] }>();
 const SCAN_ROOTS_TTL_MS = 60_000;
 
-/** Host paths allowed for Immich scans (upload mount, env roots, mapped library import paths, bind targets). */
+/** Host paths allowed for Immich scans (upload mount, env roots, mapped library import paths). */
 export async function resolveImmichScanRoots(credentials?: ImmichCredentials): Promise<string[]> {
   const config = loadConfig();
   const cacheKey = `${normalizeRoot(config.immichLibrary)}\0${credentials?.baseUrl.trim() ?? ""}`;
   const hit = scanRootsCache.get(cacheKey);
   if (hit && Date.now() - hit.at < SCAN_ROOTS_TTL_MS) return hit.roots;
-  const roots = new Set<string>([config.immichLibrary, ...config.immichScanRoots, ...config.immichBinds.map((bind) => bind.hostPath)]);
+  const roots = new Set<string>([config.immichLibrary, ...config.immichScanRoots]);
   const url = credentials?.baseUrl.trim() ?? "";
   const key = credentials?.apiKey ?? "";
   if (url && key) {
@@ -133,7 +101,7 @@ export async function resolveImmichScanRoots(credentials?: ImmichCredentials): P
       const children = uploadMountChildren(config.immichLibrary);
       for (const importPath of await listImmichLibraryImportPaths(url, key)) {
         const mapped = mapImmichImportPathToHost(importPath, config.immichLibrary, children, config);
-        if (mapped) roots.add(rewriteHostPathWithBinds(mapped, config.immichLibrary, children, config.immichBinds));
+        if (mapped) roots.add(mapped);
       }
     } catch {
       // Fall back to compose/env roots.

@@ -10,9 +10,11 @@ import { ignoreKey, memberIds, pruneIgnoredEntries } from "../src/lib/ignore";
 import { isInside, resolveInside } from "../src/lib/path-jail";
 import { parseByteRange } from "../src/lib/range";
 import { redact } from "../src/lib/redact";
-import { mutationSiteAllowed, originMatchesHost } from "../src/lib/request-meta";
-import { cookieIsValid, issueToken, passwordsMatch, resetSessionRevocationForTests, revokeToken, verifyToken } from "../src/lib/session";
-import { fetchInitForRedirect, assertHttpUrl } from "../src/lib/urls";
+import { passwordIsAcceptable } from "../src/lib/password";
+import { loginAllowed, recordLoginFailure } from "../src/lib/rate-limit";
+import { mutationSiteAllowed, originMatchesHost, stripUntrustedForwarding } from "../src/lib/request-meta";
+import { cookieIsValid, issueToken, passwordsMatch, resetSessionCachesForTests, revokeToken, sessionEpoch, sessionSecret, verifyToken } from "../src/lib/session";
+import { assertFetchTarget, fetchInitForRedirect, assertHttpUrl, ipIsBlockedTarget } from "../src/lib/urls";
 import type { StoredItem } from "../src/lib/types";
 
 test("path jail follows symlinks and refuses an escape", async () => {
@@ -82,27 +84,98 @@ test("origin must match the request host when it is sent", () => {
   assert.equal(originMatchesHost("https://evil.example", "localhost:47821"), false);
   assert.equal(mutationSiteAllowed({ referer: "http://localhost:47821/immich", host: "localhost:47821" }), true);
   assert.equal(mutationSiteAllowed({ referer: "https://evil.example/immich", host: "localhost:47821" }), false);
-  assert.equal(mutationSiteAllowed({ host: "localhost:47821" }), true);
+  assert.equal(mutationSiteAllowed({ host: "localhost:47821" }), false);
 });
 
 test("logout revokes that session token", async () => {
-  const { sessionSecret } = await import("../src/lib/session");
-  const secret = await sessionSecret();
   const dir = await mkdtemp(path.join(tmpdir(), "vdf-session-"));
-  const previous = process.env.DATA_DIR;
+  const previousDir = process.env.DATA_DIR;
+  const previousPassword = process.env.APP_PASSWORD;
   process.env.DATA_DIR = dir;
-  resetSessionRevocationForTests();
+  process.env.APP_PASSWORD = "correct-horse-battery";
+  resetSessionCachesForTests();
   try {
-    const token = issueToken(secret, Date.now() + 60_000);
-    assert.equal(verifyToken(secret, token), true);
+    const secret = await sessionSecret();
+    const epoch = await sessionEpoch();
+    const token = issueToken(secret, Date.now() + 60_000, epoch);
+    assert.equal(verifyToken(secret, token, Date.now(), epoch), true);
     assert.equal(await cookieIsValid(`vdf_session=${token}`), true);
     await revokeToken(token);
     assert.equal(await cookieIsValid(`vdf_session=${token}`), false);
   } finally {
+    if (previousDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDir;
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    resetSessionCachesForTests();
+  }
+});
+
+test("changing APP_PASSWORD revokes sessions that are already signed in", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "vdf-epoch-"));
+  const previousDir = process.env.DATA_DIR;
+  const previousPassword = process.env.APP_PASSWORD;
+  process.env.DATA_DIR = dir;
+  process.env.APP_PASSWORD = "correct-horse-battery";
+  resetSessionCachesForTests();
+  try {
+    const secret = await sessionSecret();
+    const token = issueToken(secret, Date.now() + 60_000, await sessionEpoch());
+    assert.equal(await cookieIsValid(`vdf_session=${token}`), true);
+    process.env.APP_PASSWORD = "correct-horse-staple";
+    assert.equal(await cookieIsValid(`vdf_session=${token}`), false);
+  } finally {
+    if (previousDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDir;
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    resetSessionCachesForTests();
+  }
+});
+
+test("login lockout survives a new check and change-me is refused", async () => {
+  assert.equal(passwordIsAcceptable("change-me"), false);
+  assert.equal(passwordIsAcceptable("Change-Me"), false);
+  assert.equal(passwordIsAcceptable("short"), false);
+  assert.equal(passwordIsAcceptable("12345678"), true);
+  const dir = await mkdtemp(path.join(tmpdir(), "vdf-login-"));
+  const previous = process.env.DATA_DIR;
+  process.env.DATA_DIR = dir;
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) await recordLoginFailure("203.0.113.8");
+    const blocked = await loginAllowed("203.0.113.8");
+    assert.equal(blocked.ok, false);
+    assert.equal((await loginAllowed("203.0.113.9")).ok, true);
+  } finally {
     if (previous === undefined) delete process.env.DATA_DIR;
     else process.env.DATA_DIR = previous;
-    resetSessionRevocationForTests();
   }
+});
+
+test("fetch targets block loopback and metadata, and keep private LAN addresses", async () => {
+  assert.equal(ipIsBlockedTarget("127.0.0.1"), true);
+  assert.equal(ipIsBlockedTarget("169.254.169.254"), true);
+  assert.equal(ipIsBlockedTarget("10.1.2.3"), false);
+  assert.equal(ipIsBlockedTarget("192.168.1.20"), false);
+  await assert.rejects(() => assertFetchTarget("http://127.0.0.1/"), /not allowed/);
+  await assert.rejects(() => assertFetchTarget("http://2130706433/"), /not allowed/);
+  await assert.rejects(() => assertFetchTarget("http://localhost/"), /not allowed/);
+  const lan = await assertFetchTarget("http://10.1.2.3:2283/");
+  assert.equal(lan.hostname, "10.1.2.3");
+});
+
+test("forwarding headers are ignored from an untrusted peer", () => {
+  const previous = process.env.TRUSTED_PROXY_CIDR;
+  process.env.TRUSTED_PROXY_CIDR = "";
+  const request = {
+    socket: { remoteAddress: "203.0.113.5" },
+    headers: { "x-forwarded-host": "evil.example", "x-forwarded-proto": "https", host: "localhost:4747" },
+  };
+  stripUntrustedForwarding(request as never);
+  assert.equal(request.headers["x-forwarded-host"], undefined);
+  assert.equal(request.headers.host, "localhost:4747");
+  if (previous === undefined) delete process.env.TRUSTED_PROXY_CIDR;
+  else process.env.TRUSTED_PROXY_CIDR = previous;
 });
 
 test("byte ranges", () => {

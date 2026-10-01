@@ -47,6 +47,31 @@ export function mergeStoredGroups(groups: StoredGroup[], sourceGroupId: string, 
   });
 }
 
+/** Move the chosen files into a new group. A remainder of one file is dropped from the results. */
+export function extractStoredGroup(
+  groups: StoredGroup[],
+  groupId: string,
+  paths: string[],
+): { groups: StoredGroup[]; groupId: string } {
+  const source = groups.find((group) => group.groupId === groupId);
+  if (!source) throw new AppError("That group is not in the current results", 404);
+  const wanted = new Set(paths.map(slash));
+  const taken = source.items.filter((item) => wanted.has(slash(item.path)));
+  if (taken.length < 2) throw new AppError("Select at least two files");
+  if (taken.length >= source.items.length) throw new AppError("Leave at least one file in this group");
+  const remain = source.items.filter((item) => !wanted.has(slash(item.path)));
+  const nextId = `extract-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const created: StoredGroup = { groupId: nextId, items: orderGroupItems(taken) };
+  return {
+    groupId: nextId,
+    groups: groups.flatMap((group) => {
+      if (group.groupId !== groupId) return [group];
+      if (remain.length < 2) return [created];
+      return [{ groupId, items: orderGroupItems(remain) }, created];
+    }),
+  };
+}
+
 /** Same merge for the grid, so the card updates before the save finishes. */
 export function mergeClientGroups(groups: ClientGroup[], sourceGroupId: string, targetGroupId: string): ClientGroup[] {
   if (sourceGroupId === targetGroupId) return groups;

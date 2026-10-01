@@ -35,7 +35,23 @@ export function blankStackItem(path: string, originalPath: string, assetId: stri
   };
 }
 
-/** Primary first inside each stack, stacks in first-seen order, then loose files. */
+function compareByDate(a: StoredItem, b: StoredItem): number {
+  const ad = a.dateCreatedMs || 0;
+  const bd = b.dateCreatedMs || 0;
+  if (ad !== bd) return ad - bd;
+  return slash(a.path).localeCompare(slash(b.path));
+}
+
+function stackBlockSortKey(block: StoredItem[]): number {
+  let min = Number.POSITIVE_INFINITY;
+  for (const item of block) {
+    const date = item.dateCreatedMs || 0;
+    if (date > 0) min = Math.min(min, date);
+  }
+  return Number.isFinite(min) ? min : 0;
+}
+
+/** Loose files first (by date), then stacks (by earliest member date, cover first inside each stack). */
 export function orderGroupItems(items: StoredItem[]): StoredItem[] {
   const blocks: StoredItem[][] = [];
   const indexByStack = new Map<string, number>();
@@ -54,12 +70,17 @@ export function orderGroupItems(items: StoredItem[]): StoredItem[] {
     }
     blocks[index].push(item);
   }
-  const ordered: StoredItem[] = [];
+  loose.sort(compareByDate);
+  blocks.sort((a, b) => {
+    const diff = stackBlockSortKey(a) - stackBlockSortKey(b);
+    if (diff !== 0) return diff;
+    return slash(a[0]?.path ?? "").localeCompare(slash(b[0]?.path ?? ""));
+  });
+  const ordered: StoredItem[] = [...loose];
   for (const block of blocks) {
-    block.sort((a, b) => Number(Boolean(b.stackPrimary)) - Number(Boolean(a.stackPrimary)) || slash(a.path).localeCompare(slash(b.path)));
+    block.sort((a, b) => Number(Boolean(b.stackPrimary)) - Number(Boolean(a.stackPrimary)) || compareByDate(a, b));
     ordered.push(...block);
   }
-  ordered.push(...loose);
   return ordered;
 }
 
@@ -256,6 +277,29 @@ export function assignSelectionToStack(
   return { ...group, items: orderGroupItems(items) };
 }
 
+/** Drop the chosen assets out of their stack. A missing stack means Immich dissolved it, so leftovers come loose too. */
+export function detachAssetsFromStack(
+  group: StoredGroup,
+  assetIds: string[],
+  stack: { id: string; primaryAssetId: string; assetIds: string[] } | null,
+): StoredGroup {
+  const removing = new Set(assetIds);
+  const sourceStacks = new Set(
+    group.items.flatMap((item) => (item.assetId && removing.has(item.assetId) && itemStackId(item) ? [itemStackId(item)!] : [])),
+  );
+  const stillStacked = stack ? new Set(stack.assetIds) : null;
+  const items = group.items.map((item) => {
+    if (!item.assetId) return item;
+    if (removing.has(item.assetId)) return { ...item, stackId: null, stackPrimary: false };
+    if (!item.stackId || !sourceStacks.has(item.stackId)) return item;
+    if (!stillStacked || !stillStacked.has(item.assetId) || !stack) {
+      return { ...item, stackId: null, stackPrimary: false };
+    }
+    return { ...item, stackId: stack.id, stackPrimary: item.assetId === stack.primaryAssetId };
+  });
+  return { ...group, items: orderGroupItems(items) };
+}
+
 export function assignStack(group: StoredGroup, assetIds: string[], stackId: string, primaryAssetId: string): StoredGroup {
   const chosen = new Set(assetIds);
   const items = group.items.map((item) => {
@@ -269,7 +313,7 @@ export function setStackPrimary(group: StoredGroup, stackId: string, assetId: st
   const items = group.items.map((item) =>
     itemStackId(item) === stackId ? { ...item, stackPrimary: item.assetId === assetId } : item,
   );
-  return { ...group, items };
+  return { ...group, items: orderGroupItems(items) };
 }
 
 export function looseAssetIds(group: StoredGroup): string[] {

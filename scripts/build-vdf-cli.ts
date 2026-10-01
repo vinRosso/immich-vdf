@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -6,10 +7,13 @@ const outDir = path.join(root, "bin", "vdf-cli");
 const project = path.join(root, "engine", "VDF.CLI", "VDF.CLI.csproj");
 const exeName = process.platform === "win32" ? "vdf-cli.exe" : "vdf-cli";
 const cliPath = path.join(outDir, exeName);
+const version = readFileSync(path.join(root, "engine", "fork-version.txt"), "utf8").trim();
 
-const dotnet = spawnSync("dotnet", ["publish", project, "-c", "Release", "-o", outDir], {
-  stdio: "inherit",
-});
+const dotnet = spawnSync(
+  "dotnet",
+  ["publish", project, "-c", "Release", "-o", outDir, `-p:VersionPrefix=${version}`],
+  { stdio: "inherit" },
+);
 
 if (dotnet.error) {
   console.error(dotnet.error.message);

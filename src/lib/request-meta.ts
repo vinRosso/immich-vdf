@@ -26,14 +26,24 @@ function normalizeIp(ip: string): string {
   return ip.replace(/^::ffff:/, "");
 }
 
-/** Browser `Origin` or `Referer` must match the request host. Missing both is allowed for non-browser clients. */
+/** Drop forwarding headers unless the TCP peer is inside TRUSTED_PROXY_CIDR. */
+export function stripUntrustedForwarding(request: IncomingMessage): void {
+  const remote = normalizeIp(request.socket.remoteAddress || "");
+  const cidr = loadConfig().trustedProxy;
+  if (isTrustedProxyCidr(cidr) && ipInCidr(remote, cidr)) return;
+  delete request.headers["x-forwarded-host"];
+  delete request.headers["x-forwarded-proto"];
+  delete request.headers["x-forwarded-for"];
+}
+
+/** Browser `Origin` or `Referer` must match the request host. */
 export function mutationSiteAllowed(input: {
   origin?: string | null;
   referer?: string | null;
   host?: string | null;
 }): boolean {
   if (input.origin) return originMatchesHost(input.origin, input.host);
-  if (!input.referer) return true;
+  if (!input.referer) return false;
   try {
     return originMatchesHost(new URL(input.referer).origin, input.host);
   } catch {

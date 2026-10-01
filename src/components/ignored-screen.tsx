@@ -35,10 +35,17 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
     return listed;
   }
 
-  async function openGroupAfterRefresh(advance: boolean, fromIndex: number) {
+  async function openGroupAfterRefresh(fromIndex: number, groupId: string | null) {
     const listed = await load();
-    if (!advance || fromIndex < 0) return;
     const withData = listed.filter((card): card is IgnoredGroupCard & { group: ClientGroup } => card.group !== null);
+    if (groupId && withData.some((card) => card.group.groupId === groupId)) {
+      setOpenGroupId(groupId);
+      return;
+    }
+    if (fromIndex < 0 || withData.length === 0) {
+      setOpenGroupId(null);
+      return;
+    }
     const next = withData[fromIndex] ?? withData[fromIndex - 1];
     setOpenGroupId(next?.group.groupId ?? null);
   }
@@ -55,7 +62,7 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
           ? openIndex
           : -1;
       await api("/api/ignore", { method: "DELETE", body: JSON.stringify({ section, key }) });
-      await openGroupAfterRefresh(fromIndex >= 0, fromIndex);
+      await openGroupAfterRefresh(fromIndex, openGroupId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not restore");
     }
@@ -125,7 +132,7 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
           if (next) setOpenGroupId(next.group.groupId);
         }}
         onClose={() => setOpenGroupId(null)}
-        onActionDone={(advance) => openGroupAfterRefresh(advance, openIndex)}
+        onActionDone={() => openGroupAfterRefresh(openIndex, openGroupId)}
         ignoredKey={openIgnoreKey}
       />
     </AppShell>

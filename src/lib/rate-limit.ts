@@ -1,30 +1,58 @@
-type Bucket = { failures: number; resetAt: number };
+import path from "node:path";
+import { loadConfig } from "./config";
+import { exclusive, readJson, writeJson } from "./json-file";
 
-function buckets(): Map<string, Bucket> {
-  const holder = globalThis as typeof globalThis & { __vdfLoginBuckets?: Map<string, Bucket> };
-  if (!holder.__vdfLoginBuckets) holder.__vdfLoginBuckets = new Map();
-  return holder.__vdfLoginBuckets;
-}
+type Buckets = { buckets: Record<string, { failures: number; resetAt: number }> };
 
 const WINDOW_MS = 10 * 60 * 1000;
 const LIMIT = 5;
 
-export function loginAllowed(ip: string, now = Date.now()): { ok: true } | { ok: false; retryAfter: number } {
-  const bucket = buckets().get(ip);
-  if (!bucket || now > bucket.resetAt) return { ok: true };
-  if (bucket.failures >= LIMIT) {
-    return { ok: false, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+function attemptsFile(): string {
+  return path.join(loadConfig().dataDir, "login-attempts.json");
+}
+
+function prune(store: Buckets, now: number): void {
+  for (const [ip, bucket] of Object.entries(store.buckets)) {
+    if (!bucket || now > bucket.resetAt) delete store.buckets[ip];
   }
-  return { ok: true };
 }
 
-export function recordLoginFailure(ip: string, now = Date.now()): void {
-  const map = buckets();
-  const bucket = map.get(ip);
-  if (!bucket || now > bucket.resetAt) map.set(ip, { failures: 1, resetAt: now + WINDOW_MS });
-  else bucket.failures += 1;
+async function update(
+  ip: string,
+  now: number,
+  change: "check" | "fail" | "clear",
+): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  return exclusive(async () => {
+    const store = await readJson<Buckets>(attemptsFile(), { buckets: {} });
+    if (!store.buckets || typeof store.buckets !== "object") store.buckets = {};
+    prune(store, now);
+    const bucket = store.buckets[ip];
+    if (change === "clear") {
+      delete store.buckets[ip];
+      await writeJson(attemptsFile(), store);
+      return { ok: true };
+    }
+    if (change === "fail") {
+      if (!bucket) store.buckets[ip] = { failures: 1, resetAt: now + WINDOW_MS };
+      else bucket.failures += 1;
+      await writeJson(attemptsFile(), store);
+      return { ok: true };
+    }
+    if (bucket && bucket.failures >= LIMIT) {
+      return { ok: false, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+    }
+    return { ok: true };
+  });
 }
 
-export function clearLoginFailures(ip: string): void {
-  buckets().delete(ip);
+export function loginAllowed(ip: string, now = Date.now()): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  return update(ip, now, "check");
+}
+
+export function recordLoginFailure(ip: string, now = Date.now()): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  return update(ip, now, "fail");
+}
+
+export function clearLoginFailures(ip: string, now = Date.now()): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  return update(ip, now, "clear");
 }

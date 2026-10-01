@@ -18,6 +18,7 @@ import {
   readCookie,
   revokeToken,
   sessionCookie,
+  sessionEpoch,
   sessionExpiry,
   sessionSecret,
 } from "../lib/session";
@@ -129,7 +130,7 @@ function isProtected(pathname: string): boolean {
 
 async function login(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const ip = clientIp(request);
-  const limit = loginAllowed(ip);
+  const limit = await loginAllowed(ip);
   if (!limit.ok) {
     response.setHeader("Retry-After", String(limit.retryAfter));
     sendJson(response, 429, { error: "Too many sign-in attempts" });
@@ -145,12 +146,12 @@ async function login(request: IncomingMessage, response: ServerResponse): Promis
   }
   const expected = loadConfig().password;
   if (!expected || !passwordsMatch(password, expected)) {
-    recordLoginFailure(ip);
+    await recordLoginFailure(ip);
     sendJson(response, 401, { error: "Wrong password" });
     return;
   }
-  clearLoginFailures(ip);
-  const token = issueToken(await sessionSecret(), sessionExpiry());
+  await clearLoginFailures(ip);
+  const token = issueToken(await sessionSecret(), sessionExpiry(), await sessionEpoch());
   response.setHeader("Set-Cookie", sessionCookie(token, requestIsHttps(request)));
   sendJson(response, 200, { ok: true });
 }

@@ -4,6 +4,7 @@ import {
   applyChangedStackMembership,
   applyStackMembership,
   assignSelectionToStack,
+  detachAssetsFromStack,
   dropCompleteStacks,
   groupIsOneCompleteStack,
   orderGroupItems,
@@ -152,15 +153,28 @@ test("a newer stack merges separate groups and an unstacked asset is cleared", (
 
 test("stack members sit together with the primary first", () => {
   const ordered = orderGroupItems([
-    item("/mnt/loose.jpg", "l"),
-    item("/mnt/b.jpg", "b", { stackId: "s" }),
-    item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
-    item("/mnt/d.jpg", "d", { stackId: "t" }),
-    item("/mnt/c.jpg", "c", { stackId: "t", stackPrimary: true }),
+    item("/mnt/loose.jpg", "l", { dateCreatedMs: 100 }),
+    item("/mnt/b.jpg", "b", { stackId: "s", dateCreatedMs: 300 }),
+    item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true, dateCreatedMs: 200 }),
+    item("/mnt/d.jpg", "d", { stackId: "t", dateCreatedMs: 500 }),
+    item("/mnt/c.jpg", "c", { stackId: "t", stackPrimary: true, dateCreatedMs: 400 }),
   ]);
   assert.deepEqual(
     ordered.map((entry) => entry.assetId),
-    ["a", "b", "c", "d", "l"],
+    ["l", "a", "b", "c", "d"],
+  );
+});
+
+test("loose and stack blocks sort by capture date", () => {
+  const ordered = orderGroupItems([
+    item("/mnt/stack-new.jpg", "n", { stackId: "s", stackPrimary: true, dateCreatedMs: 500 }),
+    item("/mnt/loose-old.jpg", "o", { dateCreatedMs: 100 }),
+    item("/mnt/loose-new.jpg", "n2", { dateCreatedMs: 300 }),
+    item("/mnt/stack-old.jpg", "so", { stackId: "s", dateCreatedMs: 400 }),
+  ]);
+  assert.deepEqual(
+    ordered.map((entry) => entry.assetId),
+    ["o", "n2", "n", "so"],
   );
 });
 
@@ -204,6 +218,41 @@ test("stacking loose files leaves an existing stack untouched", () => {
   assert.equal(groupIsOneCompleteStack(next), false);
 });
 
+test("removing stack members leaves them loose and keeps a surviving stack", () => {
+  const next = detachAssetsFromStack(
+    group("g", [
+      item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
+      item("/mnt/b.jpg", "b", { stackId: "s" }),
+      item("/mnt/c.jpg", "c", { stackId: "s" }),
+      item("/mnt/other.jpg", "o", { stackId: "t", stackPrimary: true }),
+      item("/mnt/loose.jpg", "l"),
+    ]),
+    ["a"],
+    { id: "s", primaryAssetId: "b", assetIds: ["b", "c"] },
+  );
+  assert.equal(next.items.find((entry) => entry.assetId === "a")?.stackId ?? null, null);
+  assert.equal(next.items.find((entry) => entry.assetId === "b")?.stackPrimary, true);
+  assert.equal(next.items.find((entry) => entry.assetId === "c")?.stackId, "s");
+  assert.equal(next.items.find((entry) => entry.assetId === "o")?.stackId, "t");
+  assert.deepEqual(
+    next.items.map((entry) => entry.assetId),
+    ["a", "l", "b", "c", "o"],
+  );
+});
+
+test("a dissolved stack releases the leftover member too", () => {
+  const next = detachAssetsFromStack(
+    group("g", [
+      item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),
+      item("/mnt/b.jpg", "b", { stackId: "s" }),
+    ]),
+    ["a"],
+    null,
+  );
+  assert.equal(next.items.every((entry) => entry.stackId == null && !entry.stackPrimary), true);
+  assert.equal(groupIsOneCompleteStack(next), false);
+});
+
 test("changing the stack cover keeps thumbnail order", () => {
   const next = setStackPrimary(
     group("g", [
@@ -217,7 +266,7 @@ test("changing the stack cover keeps thumbnail order", () => {
   );
   assert.deepEqual(
     next.items.map((entry) => entry.assetId),
-    ["a", "b", "c", "l"],
+    ["l", "c", "a", "b"],
   );
   assert.equal(next.items.find((entry) => entry.assetId === "c")?.stackPrimary, true);
   assert.equal(next.items.find((entry) => entry.assetId === "a")?.stackPrimary, false);
