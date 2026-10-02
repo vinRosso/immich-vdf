@@ -1,4 +1,5 @@
-$color-scheme: dark;
+@import "./color_schemes/dark";
+
 $body-background-color: #111113;
 $body-heading-color: #f4f4f5;
 $body-text-color: #d4d4d8;
@@ -14,5 +15,3 @@ $table-background-color: #18181b;
 $search-background-color: #27272a;
 $search-result-preview-color: #d4d4d8;
 $border-color: #3f3f46;
-
-@import "./vendor/accessible-pygments/github-dark";
