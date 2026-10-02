@@ -53,7 +53,7 @@ const BLEND_MODES = [
 type BlendMode = (typeof BLEND_MODES)[number][0];
 
 type ImageCompare = {
-  referenceSrc: string | null;
+  referenceSources: string[];
   referenceNumber: number | null;
   blend: BlendMode;
   resetKey: string;
@@ -576,10 +576,10 @@ export function Viewer({
                   groupItems={group.items}
                   immichAlbumSync={immichAlbumSync}
                   imageCompare={{
-                    referenceSrc:
+                    referenceSources:
                       referenceIndex !== null && group.items[referenceIndex]
-                        ? previewImageSrc(section, group.items[referenceIndex])
-                        : null,
+                        ? viewerImageSources(section, group.items[referenceIndex])
+                        : [],
                     referenceNumber: referenceIndex !== null && group.items[referenceIndex] ? referenceIndex + 1 : null,
                     blend,
                     resetKey: group.groupId,
@@ -1131,8 +1131,7 @@ function Player({
         soloImage && imageCompare ? (
           <ImageStage
             key={imageCompare.resetKey}
-            src={previewImageSrc(section, item)}
-            placeholderSrc={thumbSrc(section, item)}
+            sources={viewerImageSources(section, item)}
             compare={imageCompare}
           />
         ) : (
@@ -1537,13 +1536,29 @@ function compareImageSrc(section: SectionId, filePath: string): string {
   return `/api/media?section=${section}&path=${encodeURIComponent(filePath)}`;
 }
 
+function immichOriginalSrc(assetId: string): string {
+  return `/api/immich-original?id=${encodeURIComponent(assetId)}`;
+}
+
+/**
+ * Best file first. Mounted originals, then the Immich original (external libraries
+ * that are not on a local mount), then the preview that is already on screen.
+ */
+function viewerImageSources(section: SectionId, item: ClientItem): string[] {
+  const sources: string[] = [];
+  if (BROWSER_IMAGE.test(item.path)) sources.push(compareImageSrc(section, item.path));
+  if (section === "immich" && item.assetId && BROWSER_IMAGE.test(item.path)) sources.push(immichOriginalSrc(item.assetId));
+  sources.push(thumbSrc(section, item));
+  return sources.filter((src, index) => sources.indexOf(src) === index);
+}
+
 /** Full file when the browser can decode it. HEIC and other camera formats use the JPEG poster. */
 function previewImageSrc(section: SectionId, item: ClientItem): string {
-  return BROWSER_IMAGE.test(item.path) ? compareImageSrc(section, item.path) : thumbSrc(section, item);
+  return viewerImageSources(section, item)[0] ?? thumbSrc(section, item);
 }
 
 function BlendControls({ compare }: { compare: ImageCompare }) {
-  if (!compare.referenceSrc || compare.referenceNumber === null) return null;
+  if (compare.referenceSources.length === 0 || compare.referenceNumber === null) return null;
   return (
     <div className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-lg border border-border bg-popover/95 px-1.5 py-1 shadow-md">
       <span className="flex size-7 items-center justify-center rounded-md bg-muted font-heading text-sm font-semibold tabular-nums">
@@ -1570,7 +1585,52 @@ function BlendControls({ compare }: { compare: ImageCompare }) {
 
 type ImageFrame = { src: string; width: number; height: number };
 
-function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholderSrc: string; compare: ImageCompare }) {
+/** First source that decodes wins, but a later preview can paint before a sharper file arrives. */
+function useBestSrc(sources: string[]): string | null {
+  const key = sources.join("\0");
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    const chain = key.split("\0").filter(Boolean);
+    if (chain.length === 0) {
+      setSrc(null);
+      return;
+    }
+    setSrc(null);
+    let cancelled = false;
+    let bestIndex = chain.length;
+    const publish = (index: number, url: string) => {
+      if (cancelled || index >= bestIndex) return;
+      bestIndex = index;
+      setSrc(url);
+    };
+    const loadAt = (index: number) => {
+      const url = chain[index];
+      const img = new Image();
+      img.onload = () => {
+        if (img.naturalWidth > 0) publish(index, url);
+      };
+      img.onerror = () => {
+        if (!cancelled && index + 1 < chain.length) loadAt(index + 1);
+      };
+      img.src = url;
+    };
+    loadAt(0);
+    const last = chain.length - 1;
+    if (last > 0) {
+      const preview = new Image();
+      preview.onload = () => {
+        if (preview.naturalWidth > 0) publish(last, chain[last]);
+      };
+      preview.src = chain[last];
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return src;
+}
+
+function ImageStage({ sources, compare }: { sources: string[]; compare: ImageCompare }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<ImageView>({ scale: 1, x: 0, y: 0 });
   const relativeRef = useRef<RelativeImageView>(DEFAULT_RELATIVE_IMAGE_VIEW);
@@ -1580,6 +1640,10 @@ function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholder
   const [frame, setFrame] = useState<ImageFrame | null>(null);
   const [panning, setPanning] = useState(false);
   const [over, setOver] = useState(false);
+  const sourceKey = sources.join("\0");
+  const referenceKey = compare.referenceSources.join("\0");
+  const referenceSrc = useBestSrc(referenceKey ? compare.referenceSources : []);
+  const placeholderSrc = sources[sources.length - 1] ?? "";
 
   function bounds(): ImageBounds | null {
     const image = sizeRef.current;
@@ -1617,13 +1681,15 @@ function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholder
   }
 
   useEffect(() => {
-    if (frame?.src === src) return;
+    const chain = sourceKey.split("\0").filter(Boolean);
+    if (chain.length === 0) return;
     let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
+    let bestIndex = chain.length;
+    const publish = (index: number, img: HTMLImageElement, url: string) => {
+      if (cancelled || index >= bestIndex) return;
       const next = { width: img.naturalWidth, height: img.naturalHeight };
       if (next.width < 1 || next.height < 1) return;
+      bestIndex = index;
       sizeRef.current = next;
       const node = viewportRef.current;
       const rect = node?.getBoundingClientRect();
@@ -1637,18 +1703,32 @@ function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholder
         viewRef.current = placed;
         setView(placed);
       }
-      setFrame({ src, width: next.width, height: next.height });
+      setFrame({ src: url, width: next.width, height: next.height });
     };
-    img.onerror = () => {
-      if (!cancelled) setFrame((current) => (current?.src === src ? current : null));
+    const loadAt = (index: number) => {
+      const url = chain[index];
+      const img = new Image();
+      img.onload = () => {
+        if (!cancelled) publish(index, img, url);
+      };
+      img.onerror = () => {
+        if (!cancelled && index + 1 < chain.length) loadAt(index + 1);
+      };
+      img.src = url;
     };
-    img.src = src;
+    loadAt(0);
+    const last = chain.length - 1;
+    if (last > 0) {
+      const preview = new Image();
+      preview.onload = () => {
+        if (!cancelled) publish(last, preview, chain[last]);
+      };
+      preview.src = chain[last];
+    }
     return () => {
       cancelled = true;
-      img.onload = null;
-      img.onerror = null;
     };
-  }, [src, frame?.src]);
+  }, [sourceKey]);
 
   useEffect(() => {
     if (!frame) return;
@@ -1762,13 +1842,13 @@ function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholder
               isolation: "isolate",
             }}
           >
-            {compare.referenceSrc ? (
+            {referenceSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 alt=""
-                src={compare.referenceSrc}
+                src={referenceSrc}
                 draggable={false}
-                className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
+                className="pointer-events-none absolute inset-0 size-full max-w-none object-fill select-none"
               />
             ) : null}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1776,8 +1856,8 @@ function ImageStage({ src, placeholderSrc, compare }: { src: string; placeholder
               alt=""
               src={frame.src}
               draggable={false}
-              className="pointer-events-none absolute top-0 left-0 max-w-none select-none"
-              style={{ mixBlendMode: compare.referenceSrc ? compare.blend : "normal" }}
+              className="pointer-events-none absolute inset-0 size-full max-w-none object-fill select-none"
+              style={{ mixBlendMode: referenceSrc ? compare.blend : "normal" }}
             />
           </div>
         ) : null}

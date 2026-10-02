@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AppError, errorText } from "../lib/errors";
-import { openImmichThumbnail } from "../lib/immich";
+import { openImmichOriginal, openImmichThumbnail } from "../lib/immich";
 import { loadConfig } from "../lib/config";
 import { PathJailError } from "../lib/path-jail";
 import { clientIp, mutationSiteAllowed, requestIsHttps } from "../lib/request-meta";
@@ -99,7 +99,11 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       return true;
     }
     if (request.method === "GET" && pathname === "/api/immich-thumb") {
-      await proxyImmichThumb(request, response, requiredQuery(url, "id"));
+      await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichThumbnail, "Immich thumbnail failed");
+      return true;
+    }
+    if (request.method === "GET" && pathname === "/api/immich-original") {
+      await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichOriginal, "Immich original failed");
       return true;
     }
   } catch (error) {
@@ -124,7 +128,8 @@ function isProtected(pathname: string): boolean {
     pathname === "/api/scan/events" ||
     pathname === "/api/media" ||
     pathname === "/api/thumbs" ||
-    pathname === "/api/immich-thumb"
+    pathname === "/api/immich-thumb" ||
+    pathname === "/api/immich-original"
   );
 }
 
@@ -199,14 +204,20 @@ function originAllowed(request: IncomingMessage): boolean {
   });
 }
 
-async function proxyImmichThumb(request: IncomingMessage, response: ServerResponse, assetId: string): Promise<void> {
+async function proxyImmichAsset(
+  request: IncomingMessage,
+  response: ServerResponse,
+  assetId: string,
+  open: (baseUrl: string, apiKey: string, assetId: string) => Promise<Response>,
+  failure: string,
+): Promise<void> {
   const membership = await resultsMembership("immich");
   if (!membership.found || !membership.assetIds.has(assetId)) throw new AppError("That asset is not in the current results", 404);
   const settings = await loadSettings();
   if (!settings.immich.baseUrl || !settings.immich.apiKey) throw new AppError("Immich is not configured");
-  const upstream = await openImmichThumbnail(settings.immich.baseUrl, settings.immich.apiKey, assetId);
+  const upstream = await open(settings.immich.baseUrl, settings.immich.apiKey, assetId);
   if (upstream.status >= 300 || !upstream.body) {
-    throw new AppError(`Immich thumbnail failed (${upstream.status})`, 502);
+    throw new AppError(`${failure} (${upstream.status})`, 502);
   }
   response.writeHead(200, {
     "Content-Type": upstream.headers.get("content-type") || "image/jpeg",

@@ -547,3 +547,12 @@ export async function openImmichThumbnail(baseUrl: string, apiKey: string, asset
     signal: AbortSignal.timeout(20_000),
   });
 }
+
+/** Original file, for compare when the path is not on a mounted folder. */
+export async function openImmichOriginal(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {
+  if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
+  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/original`, {
+    headers: { "x-api-key": apiKey, accept: "image/*" },
+    signal: AbortSignal.timeout(60_000),
+  });
+}
