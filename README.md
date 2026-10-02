@@ -6,6 +6,8 @@ Find **duplicate photos and videos** in an **[Immich](https://immich.app) librar
 
 Built on [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). [AGPL-3.0](LICENSE).
 
+> DISCLAIMER: This whole app is vibe coded. Use it locally, or behind a reverse proxy, to avoid potential security issues. Do not expose it directly to the internet.
+
 ## Run
 
 1. Install Docker.

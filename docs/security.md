@@ -12,12 +12,17 @@ nav_next_title: Usage
 
 ## On this page
 
+- [Disclaimer](#disclaimer)
 - [What a signed-in session can do](#what-a-signed-in-session-can-do)
 - [Network](#network)
 - [Container](#container)
 - [Engine license](#engine-license)
 
-immich-vdf is a single-user tool for a machine you administer. The password is the whole account.
+## Disclaimer
+
+> This whole app is vibe coded. Use it locally, or behind a reverse proxy, to avoid potential security issues. Do not expose it directly to the internet.
+> 
+> immich-vdf is a single-user tool for a machine you administer. The password is the whole account.
 
 ## What a signed-in session can do
 
