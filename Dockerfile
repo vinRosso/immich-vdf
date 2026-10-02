@@ -23,7 +23,8 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm test && npm run verify-fixture && npm run build
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0-bookworm-slim
+# .NET 10 ships Ubuntu images. Debian tags such as 10.0-bookworm-slim are not published.
+FROM mcr.microsoft.com/dotnet/runtime:10.0-noble
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
   && rm -rf /var/lib/apt/lists/*
