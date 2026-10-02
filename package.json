@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "NODE_ENV=production tsx server.ts",
     "lint": "eslint .",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "verify-fixture": "tsx scripts/verify-fixture.ts",
     "test:engine": "dotnet test engine/VDF.ForkTests/VDF.ForkTests.csproj -c Release",
     "typecheck": "tsc --noEmit"

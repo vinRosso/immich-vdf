@@ -13,9 +13,13 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
+      # Check out the commit, not refs/tags/vX.Y.Z. A shallow fetch of that tag
+      # ref fails with "Cannot fetch both <sha> and refs/tags/<tag>".
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -23,53 +27,18 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - id: version
         shell: bash
+        env:
+          IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/immich-vdf
         run: |
-          set -eu
-          image="${{ secrets.DOCKERHUB_USERNAME }}/immich-vdf"
-          version=""
-          minor=""
-          major=""
-
-          use_tag() {
-            local name=$1
-            if [[ "$name" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-              minor="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-              major="${BASH_REMATCH[1]}"
-              return 0
-            fi
-            return 1
-          }
-
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            use_tag "$GITHUB_REF_NAME" || {
-              echo "Git tag ${GITHUB_REF_NAME} must look like v0.1.0" >&2
-              exit 1
-            }
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            export RELEASE_TAG="$GITHUB_REF_NAME"
+            names=""
           else
-            while IFS= read -r candidate; do
-              if use_tag "$candidate"; then
-                break
-              fi
-            done < <(git tag -l 'v*' --sort=-v:refname)
+            names=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{print $2}' | sed 's#refs/tags/##')
           fi
-
-          {
-            echo "tags<<EOF"
-            if [[ -n "$version" ]]; then
-              echo "${image}:${version}"
-              echo "${image}:${minor}"
-              echo "${image}:${major}"
-            fi
-            echo "${image}:latest"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          if [[ -n "$version" ]]; then
-            echo "Publishing ${version}, ${minor}, ${major}, and latest"
-          else
-            echo "No vMAJOR.MINOR.PATCH git tag. Publishing latest only."
-          fi
+          tags=$(printf '%s\n' "$names" | node scripts/docker-image-tags.mjs "$IMAGE")
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
