@@ -26,7 +26,7 @@ RUN npm test && npm run verify-fixture && npm run build
 # .NET 10 ships Ubuntu images. Debian tags such as 10.0-bookworm-slim are not published.
 FROM mcr.microsoft.com/dotnet/runtime:10.0-noble
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=node:22-bookworm-slim /usr/local /usr/local
 WORKDIR /app
@@ -49,9 +49,13 @@ RUN /opt/vdf/vdf-cli --help >/dev/null \
   && node --import tsx scripts/check-cli-help.ts \
   && node --import tsx scripts/verify-fixture.ts \
   && mkdir -p /data \
-  && chmod 1777 /data
+  && chmod 1777 /data \
+  && chmod 755 /app/scripts/docker-entrypoint.sh \
+  && command -v setpriv >/dev/null
 ENV HOME=/tmp
 EXPOSE 4747
+# Docker runs HEALTHCHECK directly, not through ENTRYPOINT.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["node", "scripts/healthcheck.mjs"]
+  CMD ["/app/scripts/docker-entrypoint.sh", "node", "scripts/healthcheck.mjs"]
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
 CMD ["node", "--import", "tsx", "server.ts"]

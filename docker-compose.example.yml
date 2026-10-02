@@ -9,7 +9,9 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD}
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-}
       IMMICH_SCAN_ROOTS: ${IMMICH_SCAN_ROOTS:-}
-    user: "1000:100"
+      # Account that owns MEDIA_PATH. Startup gives ./data to this id.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-100}
     volumes:
       - ./data:/data
       - ${MEDIA_PATH:?Set MEDIA_PATH}:/media
@@ -18,6 +20,4 @@ services:
       # - /home/user/photos:/home/user/photos:ro
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     restart: unless-stopped

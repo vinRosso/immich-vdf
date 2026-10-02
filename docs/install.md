@@ -50,7 +50,7 @@ IMMICH_PATH=/path/to/immich/data/library
 
 Immich mounts that folder at `/data/library` in its own container. This app maps paths under `/data/...` onto `/immich`. What each folder is for is on [Two libraries](libraries).
 
-In Compose, `user: "1000:100"` is only a starting id. Use the account that owns `MEDIA_PATH`. It must be able to read `IMMICH_PATH` and to create `.vdf-trash/` on `MEDIA_PATH`.
+`PUID` and `PGID` are the account that owns `MEDIA_PATH`. Defaults are `1000` and `100`. That account must be able to read `IMMICH_PATH` and to create `.vdf-trash/` on `MEDIA_PATH`. On startup the container gives `./data` to the same id and, when the group or other accounts can read that folder, sets mode `700`. A folder already private to the owner is left as it is. Docker creates that host folder as root; startup changes the owner before the server listens. Leave `user:` unset in Compose.
 
 ### Optional
 
@@ -59,6 +59,8 @@ In Compose, `user: "1000:100"` is only a starting id. Use the account that owns 
 | -------------------- | -------------------------------------------------------------------------------------------- |
 | `TRUSTED_PROXY_CIDR` | The reverse proxy's address range. Leave empty on a plain LAN.                               |
 | `IMMICH_SCAN_ROOTS`  | Extra scan roots inside the container. Leave unset unless the API key cannot list libraries. |
+| `PUID`               | User id that owns `MEDIA_PATH`. Default `1000`.                                               |
+| `PGID`               | Group id for that account. Default `100`.                                                     |
 
 
 The app speaks HTTP on port `4747`. A range as wide as `0.0.0.0/0` is ignored. When the proxy is trusted and `X-Forwarded-Proto` is `https`, the session cookie is marked `Secure`. What a signed-in session can reach is on [Security](security).

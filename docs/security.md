@@ -51,7 +51,7 @@ Responses send `X-Frame-Options: DENY`, a `Content-Security-Policy` with `frame-
 
 ## Container
 
-Compose runs the container as the `user:` id in the Compose file and drops all capabilities. The process never starts as root. Set that line to the account that owns the media: it must be able to read `IMMICH_PATH` and to create `.vdf-trash/` on `MEDIA_PATH`. `/data` is writable by that id, so a new data volume does not have to be chowned first.
+Startup runs as root only long enough to give `/data` to `PUID`:`PGID` (defaults `1000`:`100`). The server and the health check then run as that user with Linux capabilities cleared, including when `PUID` is `0`. Set those ids to the account that owns the media: it must be able to read `IMMICH_PATH` and to create `.vdf-trash/` on `MEDIA_PATH`. Leave `user:` unset in Compose so startup can change the owner of the data directory Docker created as root. When the group or other accounts can read `./data`, startup sets mode `700`, so only `PUID` can open the session secret and the Immich API key. A directory that is already private to the owner is left unchanged.
 
 FFmpeg decodes the files you mount. A hostile media file is still a risk to that process. Do not point the mounts at collections you do not trust.
 
