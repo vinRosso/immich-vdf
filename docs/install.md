@@ -71,7 +71,7 @@ The app speaks HTTP on port `4747`. A range as wide as `0.0.0.0/0` is ignored. W
 docker compose up -d
 ```
 
-Open `http://<host>:4747` and sign in. The image is `vinrosso/immich-vdf:latest`. Pin a version, such as `0.1.0`, to stay on one release.
+Open `http://<host>:4747` and sign in. The image is `vinrosso/immich-vdf:latest`. `0` and `0.1` follow the newest release in that major and minor. Pin `0.1.0` to stay on one release.
 
 ## Where data lives
 
