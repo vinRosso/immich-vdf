@@ -83,6 +83,9 @@ Open `http://<host>:4747` and sign in. The image is `vinrosso/immich-vdf:latest`
 
 Immich and Files keep separate scan databases under `/data/db/immich` and `/data/db/server`.
 
+{: .warning }
+`./data` grows with how many files you scan, not with how large those files are. Each database stores a small grayscale sample of every file so later scans can compare without reading the originals again. Tens of thousands of photos are usually around 100 MB. A few hundred thousand files can reach a few GB. A save in progress can briefly keep a second copy. AI partial matching adds about 25 KB per video.
+
 ## Update
 
 ```bash

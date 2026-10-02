@@ -33,7 +33,7 @@ nav_next_title: Usage
 
 Someone who can sign in can reach the media you mounted and the Immich user that key belongs to. `APP_PASSWORD` must be at least 8 characters. `.env.example` ships `change-me`, and the server refuses to start until that value is replaced.
 
-The Immich API key and the session secret are stored on the `vdf-data` volume, not in the image and not in git. The browser receives `apiKeyConfigured`, not the key.
+The Immich API key and the session secret are stored under `/data`, not in the image and not in git. The browser receives `apiKeyConfigured`, not the key.
 
 ## Network
 
