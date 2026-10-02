@@ -1099,7 +1099,10 @@ function ScheduleSettingsDialog({
       setTimeError(null);
       return;
     }
-    const schedule = draft.schedule.mode === "off" ? { ...draft.schedule, mode: "daily" } : draft.schedule;
+    const schedule: ScheduleSettings = {
+      ...draft.schedule,
+      mode: draft.schedule.mode === "off" ? "daily" : draft.schedule.mode,
+    };
     setClock(scheduleTimeParts(schedule.time));
     setTimeError(null);
     setLocal({

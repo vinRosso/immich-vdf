@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "cn";
 import { api } from "@/components/api";
@@ -86,12 +87,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-              <a
+              <Link
                 href="/"
                 className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
               >
                 immich-vdf
-              </a>
+              </Link>
               {runtime && !runtime.cliAvailable ? (
                 <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
               ) : null}
