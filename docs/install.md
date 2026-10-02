@@ -1,3 +1,8 @@
+---
+title: Install
+nav_order: 2
+---
+
 # Install
 
 immich-vdf runs as one container. Docker pulls the image. You do not need Node.js, the .NET SDK, or the Video Duplicate Finder source.
@@ -10,7 +15,7 @@ immich-vdf runs as one container. Docker pulls the image. You do not need Node.j
 
 ## Start
 
-Create an empty directory. Copy [docker-compose.example.yml](../docker-compose.example.yml) into it as `docker-compose.yml`, and [.env.example](../.env.example) as `.env`.
+Create an empty directory. Copy [docker-compose.example.yml](https://github.com/vinRosso/immich-vdf/blob/main/docker-compose.example.yml) into it as `docker-compose.yml`, and [.env.example](https://github.com/vinRosso/immich-vdf/blob/main/.env.example) as `.env`.
 
 Edit `.env`:
 

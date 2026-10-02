@@ -1,0 +1,16 @@
+title: immich-vdf
+description: Find duplicate photos and videos in a folder or an Immich library.
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+color_scheme: immich
+search_enabled: true
+heading_anchors: true
+aux_links:
+  GitHub:
+    - https://github.com/vinRosso/immich-vdf
+aux_links_new_tab: true
+footer_content: 'Built on <a href="https://github.com/0x90d/videoduplicatefinder">Video Duplicate Finder</a>.'
+exclude:
+  - project-context.md
+  - immich-vdf-plan.md
+  - vdf-web-plan.md
+  - images/app.jpg.old

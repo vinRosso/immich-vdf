@@ -1,3 +1,8 @@
+---
+title: Usage
+nav_order: 4
+---
+
 # Using immich-vdf
 
 Sign in with `APP_PASSWORD`. The home page shows a preview of the latest Files group and the latest Immich group.

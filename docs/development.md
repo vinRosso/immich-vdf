@@ -1,3 +1,8 @@
+---
+title: Development
+nav_order: 6
+---
+
 # Development
 
 Users pull the Docker image. This page is for changing the app or the engine.
@@ -48,7 +53,7 @@ docker compose up -d
 
 `docker-compose.yml` builds `immich-vdf:local` from the local Dockerfile and sets `pull_policy: build`, so Compose does not contact Docker Hub. The Dockerfile compiles `vdf-cli` from `engine/`, runs the test suite and the fixture check, and sets the container paths. The healthcheck is on the image: it requests `/api/health` inside the container.
 
-[docker-compose.example.yml](../docker-compose.example.yml) is the file users copy. It only pulls `vinrosso/immich-vdf:latest`.
+[docker-compose.example.yml](https://github.com/vinRosso/immich-vdf/blob/main/docker-compose.example.yml) is the file users copy. It only pulls `vinrosso/immich-vdf:latest`.
 
 GitHub Actions (`.github/workflows/docker-publish.yml`) builds and pushes the image. A git tag `v0.1.0` publishes `0.1.0` and `latest`. Running the workflow by hand publishes `latest` only. The workflow needs repository secrets `DOCKERHUB_USERNAME` (`vinrosso`) and `DOCKERHUB_TOKEN`.
 
@@ -58,7 +63,7 @@ GitHub Actions (`.github/workflows/docker-publish.yml`) builds and pushes the im
 npm run update-engine -- v4.1.1
 ```
 
-See [Updating the VDF engine](../FORK.md).
+See [Updating the VDF engine](https://github.com/vinRosso/immich-vdf/blob/main/FORK.md).
 
 ## Layout
 

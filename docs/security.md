@@ -1,3 +1,8 @@
+---
+title: Security
+nav_order: 5
+---
+
 # Security
 
 immich-vdf is a single-user tool for a machine you administer. The password is the whole account.

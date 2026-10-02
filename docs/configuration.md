@@ -1,3 +1,8 @@
+---
+title: Configuration
+nav_order: 3
+---
+
 # Configuration
 
 Users change `.env`, the `user:` id, and, when needed, volume lines in their Compose file. Paths inside the container (`/media`, `/immich`, `/data`, the `vdf-cli` binary) are set in the image. The sample `user: "1000:1000"` is only a starting id. Replace it with the account that owns `MEDIA_PATH`.
