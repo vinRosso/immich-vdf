@@ -1,0 +1,14 @@
+{% if page.nav_prev or page.nav_next %}
+<nav class="page-nav" aria-label="Previous and next">
+  <span>
+    {% if page.nav_prev %}
+    <a href="{{ page.nav_prev | relative_url }}">← {{ page.nav_prev_title }}</a>
+    {% endif %}
+  </span>
+  <span>
+    {% if page.nav_next %}
+    <a href="{{ page.nav_next | relative_url }}">Next: {{ page.nav_next_title }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}

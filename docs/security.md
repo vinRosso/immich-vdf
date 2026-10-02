@@ -1,9 +1,21 @@
 ---
 title: Security
-nav_order: 5
+parent: Installation
+nav_order: 1
+nav_prev: /install
+nav_prev_title: Installation
+nav_next: /usage
+nav_next_title: Usage
 ---
 
 # Security
+
+## On this page
+
+- [What a signed-in session can do](#what-a-signed-in-session-can-do)
+- [Network](#network)
+- [Container](#container)
+- [Engine license](#engine-license)
 
 immich-vdf is a single-user tool for a machine you administer. The password is the whole account.
 

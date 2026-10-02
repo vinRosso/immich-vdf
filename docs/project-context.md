@@ -6,8 +6,8 @@ Goals and constraints for this repository. The GitHub remote is [vinRosso/immich
 
 immich-vdf is a web UI for [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder) with two modes:
 
-1. **Files** — scan media on the host, compare duplicates, stream previews, move losers to `.vdf-trash/`.
-2. **Immich** — scan a read-only library mount, map paths to assets via API key, stack or trash duplicates through Immich.
+1. **Immich** — the Immich upload library. Read-only mount, stack or trash through the API.
+2. **Files** — an external library Immich already reads. Deletes rename files into `.vdf-trash/` on that folder.
 
 Users copy `docker-compose.example.yml` and pull `vinrosso/immich-vdf`. In this checkout, `docker compose up -d` builds `immich-vdf:local` and does not pull from Docker Hub. Developers can also run `npm run dev`. A newer VDF tag is pulled into `engine/` with `npm run update-engine`. Do not download an official CLI binary. GitHub Actions publishes the Hub image.
 
@@ -15,7 +15,7 @@ Users copy `docker-compose.example.yml` and pull `vinrosso/immich-vdf`. In this 
 
 - [immich-vdf-plan.md](./immich-vdf-plan.md) — full product and architecture plan.
 - [../README.md](../README.md) — what it is, and the user quick start.
-- [install.md](./install.md), [configuration.md](./configuration.md), [usage.md](./usage.md) — user docs.
+- Sidebar sections: Installation (`install.md`, `security.md`), Usage, Development (`dev-*.md`, `code.md`).
 - [development.md](./development.md) — local build and image publish.
 - [../FORK.md](../FORK.md) — how to pull a newer upstream VDF tag.
 - [security.md](./security.md) — operator threat model.

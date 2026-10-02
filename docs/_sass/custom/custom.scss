@@ -2,3 +2,46 @@
   border: 1px solid #3f3f46;
   border-radius: 8px;
 }
+
+.page-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #3f3f46;
+}
+
+.page-nav a {
+  font-weight: 600;
+}
+
+// Kramdown's {:toc} list. The theme otherwise paints step numbers on every ordered list.
+.main-content #markdown-toc {
+  margin-top: 0.25rem;
+  padding-left: 1.25rem;
+  list-style: none;
+  counter-reset: none;
+}
+
+.main-content #markdown-toc li {
+  position: static;
+  margin: 0.15rem 0;
+}
+
+.main-content #markdown-toc > li::before,
+.main-content #markdown-toc ol > li::before,
+.main-content #markdown-toc ul > li::before {
+  content: none;
+  counter-increment: none;
+  position: static;
+}
+
+.main-content #markdown-toc ol,
+.main-content #markdown-toc ul {
+  margin-top: 0.15rem;
+  padding-left: 1.1rem;
+  list-style: none;
+  counter-reset: none;
+}

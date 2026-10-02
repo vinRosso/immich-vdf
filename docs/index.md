@@ -1,21 +1,30 @@
 ---
 title: Home
 nav_order: 1
+nav_next: /install
+nav_next_title: Installation
 ---
 
 # immich-vdf
 
-Find duplicate photos and videos in a folder or an [Immich](https://immich.app) library, compare them, and clear the ones you do not want.
+## On this page
+
+- [Users](#users)
+- [Developers](#developers)
+
+Find duplicate photos and videos, compare them, and clear the ones you do not want.
+
+**Immich** is for an Immich library. **Files** is for an external library Immich already reads.
 
 ![Duplicate groups in an Immich library](images/app.jpg)
 
-Built on [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder). Source and license: [vinRosso/immich-vdf](https://github.com/vinRosso/immich-vdf).
+## Users
 
-## Documentation
+1. [Installation](install), including configuration
+2. [Usage](usage)
 
-- [Install](install)
-- [Configuration](configuration)
-- [Usage](usage)
-- [Security](security)
-- [Development](development)
-- [Updating the engine](https://github.com/vinRosso/immich-vdf/blob/main/FORK.md)
+There are also some [Shortcuts](shortcuts) for better UX.
+
+## Developers
+
+Start at [Development](development). The module map is [Code](code).

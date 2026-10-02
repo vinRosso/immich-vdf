@@ -1,49 +1,45 @@
 ---
 title: Usage
-nav_order: 4
+nav_order: 3
+has_children: true
+nav_prev: /install
+nav_prev_title: Installation
+nav_next: /libraries
+nav_next_title: Two libraries
 ---
 
-# Using immich-vdf
+# Usage
 
-Sign in with `APP_PASSWORD`. The home page shows a preview of the latest Files group and the latest Immich group.
+## On this page
 
-## Scan
+- [Pages](#pages)
 
-Open **Files** or **Immich**, check the folders, and start a scan.
+Sign in with `APP_PASSWORD`. Home shows a preview of the latest Immich groups and the latest Files groups.
 
-A scan runs `vdf-cli scan` and then `vdf-cli compare`. If the files and the scan settings have not changed, compare is skipped and the previous groups stay. Files and Immich never share a database, so one section cannot reuse the other's hashes.
+The two pages do not share a scan database.
 
-Immich scans the signed-in user's originals under the upload mount: `library/<storage label>/`. The admin user's folder is `admin`, even when the display name is different. Generated folders (`thumbs`, `encoded-video`, `profile`, `backups`) are skipped. Immich's own thumbnail cache is not read.
+| Page | Point it at | A delete |
+| --- | --- | --- |
+| **Immich** | Immich's upload library | Stack or trash through the Immich API |
+| **Files** | An external library Immich reads | Rename the file into `.vdf-trash/` on that folder |
 
-Only one scan runs at a time.
+```mermaid
+flowchart TB
+  upload["Immich upload library"] --> immichPage["Immich page"]
+  external["External library"] --> filesPage["Files page"]
+  immichPage --> api["API"]
+  filesPage --> bin[".vdf-trash/"]
+```
 
-## Review
+> Do not scan the same files on both pages.
 
-Open a group to compare its files. Arrow keys move between groups. Playback is the original file when the browser can play it, and an ffmpeg stream otherwise. Filmstrip frames are cut from that file.
+After a Files delete, Immich still lists the asset until it scans that external library again.
 
-For a matched Immich asset, the card poster is the Immich thumbnail for that asset. Unmatched files and the filmstrip still need the mounted original.
+## Pages
 
-## Files trash
-
-Trashing a file in **Files** renames it into `.vdf-trash/` on the same mount. Restoring moves it back. The mount must be writable by the user running the container.
-
-## Immich actions
-
-These use the API key and do not change the read-only mount:
-
-- stack the selected assets
-- remove selected assets from their stack, leaving them as loose items in the group
-- set the stack cover
-- trash assets in Immich
-
-Loose items are shown before stacks. Within a stack, the cover comes first. Items are ordered by capture date.
-
-After an action the viewer stays on that group when the group still exists. It advances only when the group is gone. Closing the viewer is the action that leaves the group without changing it.
-
-## Ignore
-
-Ignoring a file keeps it out of later compares for that section. The file stays where it is.
-
-## Unmatched Immich files
-
-A file in the scan can fail to match an Immich asset when its path is outside the mounted folders, or when Immich stored a collision name (`name+1.ext`). Mount the missing folder the same way Immich does, then match again. The API key has to be able to see the asset.
+1. [Two libraries](libraries)
+2. [Immich](immich)
+3. [Files](files)
+4. [Scan](scan), then [Schedule and webhook](schedule)
+5. [Review](review), then [Photos](photos) and [Groups](groups)
+6. [Shortcuts](shortcuts)

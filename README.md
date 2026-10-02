@@ -1,6 +1,6 @@
 # immich-vdf
 
-Find duplicate photos and videos in a folder or an [Immich](https://immich.app) library, compare them, and clear the ones you do not want.
+Find **duplicate photos and videos** in an **[Immich](https://immich.app) library**, compare them, and clear the ones you do not want. It also works with **external libraries**
 
 ![Duplicate groups in an Immich library](docs/images/app.jpg)
 
@@ -8,21 +8,16 @@ Built on [Video Duplicate Finder](https://github.com/0x90d/videoduplicatefinder)
 
 ## Run
 
-Install Docker. In an empty directory, save [docker-compose.example.yml](docker-compose.example.yml) as `docker-compose.yml` and [.env.example](.env.example) as `.env`. Set `APP_PASSWORD`, `MEDIA_PATH`, and `IMMICH_PATH`.
+1. Install Docker.
+2. In an empty directory, save [docker-compose.example.yml](docker-compose.example.yml) as `docker-compose.yml`
+3. Save [.env.example](.env.example) as `.env`. Set `APP_PASSWORD`, `MEDIA_PATH`, and `IMMICH_PATH`.
+4. Run `docker compose up -d `
+5. Open `http://<host>:4747`.
 
-```bash
-docker compose up -d
-```
-
-Open `http://<host>:4747`. The rest of the setup is in [Install](https://vinrosso.github.io/immich-vdf/install).
+The rest of the setup is in [Install](https://vinrosso.github.io/immich-vdf/install).
 
 ## Documentation
 
-Hosted at **[vinrosso.github.io/immich-vdf](https://vinrosso.github.io/immich-vdf/)**.
-
-- [Install](https://vinrosso.github.io/immich-vdf/install)
-- [Configuration](https://vinrosso.github.io/immich-vdf/configuration)
+- [Installation](https://vinrosso.github.io/immich-vdf/install)
 - [Usage](https://vinrosso.github.io/immich-vdf/usage)
-- [Security](https://vinrosso.github.io/immich-vdf/security)
 - [Development](https://vinrosso.github.io/immich-vdf/development)
-- [Updating the engine](https://github.com/vinRosso/immich-vdf/blob/main/FORK.md)

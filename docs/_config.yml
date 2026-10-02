@@ -1,9 +1,18 @@
+markdown: kramdown
+kramdown:
+  input: Kramdown
+  toc_levels: 2..3
+  syntax_highlighter: rouge
 title: immich-vdf
-description: Find duplicate photos and videos in a folder or an Immich library.
+description: Find duplicate photos and videos in an Immich library or an external library Immich reads.
 remote_theme: just-the-docs/just-the-docs@v0.10.1
 color_scheme: immich
 search_enabled: true
 heading_anchors: true
+back_to_top: true
+back_to_top_text: "Back to top"
+mermaid:
+  version: "10.9.3"
 aux_links:
   GitHub:
     - https://github.com/vinRosso/immich-vdf
