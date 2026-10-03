@@ -95,6 +95,13 @@ export function groupIsOneCompleteStack(group: StoredGroup): boolean {
   return stackIds.size === 1;
 }
 
+/** Stacks that share an asset with these groups. The rest of the library stays out of the results. */
+export function stacksTouchingGroups(groups: StoredGroup[], stacks: ImmichStack[]): ImmichStack[] {
+  const assetIds = new Set(groups.flatMap((group) => group.items.flatMap((item) => (item.assetId ? [item.assetId] : []))));
+  if (assetIds.size === 0) return [];
+  return stacks.filter((stack) => stack.assets.some((asset) => assetIds.has(asset.id)));
+}
+
 /** Drop groups Immich has already resolved. Partial stacks and mixed stacks stay visible. */
 export function dropCompleteStacks(groups: StoredGroup[]): StoredGroup[] {
   return groups.filter((group) => group.items.length >= 2 && !groupIsOneCompleteStack(group));

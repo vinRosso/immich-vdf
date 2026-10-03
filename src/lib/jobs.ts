@@ -10,8 +10,8 @@ import { errorText } from "./errors";
 import { assetsForOriginalPaths } from "./immich-asset-index";
 import { attachAssets, dropImmichTrashedFromGroups, immichTrashedCredits, originalPathsForGroups } from "./immich-join";
 import { listTrashedImmichAssets } from "./immich";
+import { applyLibraryStacks, expandImmichGroups } from "./immich-stack-sync";
 import { dropCompleteStacks } from "./immich-stacks";
-import { expandImmichGroups } from "./immich-stack-sync";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
@@ -346,9 +346,15 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
             groups = attachAssets(groups, assets, maps);
             const immichTrashCredits = immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths);
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
-            groups = dropCompleteStacks(
-              await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
-            );
+            scan.addLine("[scan] Reading Immich stacks…");
+            try {
+              groups = await applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps);
+            } catch (err) {
+              scan.addLine(redact(errorText(err), secrets));
+              groups = dropCompleteStacks(
+                await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
+              );
+            }
             immichTrashCredits.push(...immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths));
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
             if (immichTrashCredits.length > 0) await creditImmichTrash(immichTrashCredits);

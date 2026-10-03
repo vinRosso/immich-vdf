@@ -49,6 +49,7 @@ import {
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
 import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, XCircle } from "lucide-react";
+import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import { defaultScan, normalizeScan } from "@/lib/scan-defaults";
 import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { ClientGroup, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
@@ -78,6 +79,8 @@ export function SectionScreen({ section }: { section: SectionId }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [matching, setMatching] = useState(false);
+  const [matchProgress, setMatchProgress] = useState<RejoinProgress | null>(null);
 
   const reload = useCallback(async () => {
     const [nextRuntime, nextSettings, nextResults, nextRuns] = await Promise.all([
@@ -133,6 +136,44 @@ export function SectionScreen({ section }: { section: SectionId }) {
       router.prefetch("/immich/unmatched");
     }
   }, [section, results?.unmatched, router]);
+
+  useEffect(() => {
+    if (!matching) return;
+    function poll() {
+      void api<RejoinProgress>("/api/immich/rejoin/progress")
+        .then((next) => {
+          if (next.running) setMatchProgress(next);
+        })
+        .catch(() => {});
+    }
+    poll();
+    const id = window.setInterval(poll, 250);
+    return () => window.clearInterval(id);
+  }, [matching]);
+
+  async function matchAgain() {
+    setMatching(true);
+    setError(null);
+    setNotice(null);
+    setMatchProgress({
+      running: true,
+      percent: 0,
+      label: "Starting",
+      detail: "Waiting for server…",
+      indeterminate: true,
+    });
+    try {
+      const result = await api<{ matched: number; warning: string | null }>("/api/immich/rejoin", { method: "POST" });
+      await reload();
+      if (result.warning) setError(result.warning);
+      else setNotice(`Matched ${result.matched} files to Immich assets.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not match files again");
+    } finally {
+      setMatching(false);
+      setMatchProgress(null);
+    }
+  }
 
   function settingsUpdateBody() {
     if (!draft) return null;
@@ -378,7 +419,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                           className="h-11 min-w-[6.5rem] px-8 text-base"
                           title={runtime && !runtime.cliAvailable ? "vdf-cli is not installed on this machine" : undefined}
                           onClick={() => void scan()}
-                          disabled={busy || feed.running || !runtime?.cliAvailable}
+                          disabled={busy || matching || feed.running || !runtime?.cliAvailable}
                         >
                           {runningHere ? "Scanning" : "Scan"}
                         </Button>
@@ -404,16 +445,48 @@ export function SectionScreen({ section }: { section: SectionId }) {
       <div className="space-y-4">
         <section className="space-y-4">
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {matching && matchProgress ? <MatchProgress progress={matchProgress} /> : null}
           <ScanLog
             lines={feed.section === section ? feed.lines : []}
             running={runningHere}
             startedAtMs={runningHere ? feed.startedAt : 0}
           />
-          <Results section={section} results={results} loading={loading} onReload={reload} />
+          <Results
+            section={section}
+            results={results}
+            loading={loading}
+            onReload={reload}
+            matching={matching}
+            matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
+            onMatchAgain={() => void matchAgain()}
+          />
         </section>
       </div>
       </div>
     </AppShell>
+  );
+}
+
+function MatchProgress({ progress }: { progress: RejoinProgress }) {
+  const percent = Math.min(100, Math.max(0, progress.percent));
+  const indeterminate = Boolean(progress.indeterminate) || (progress.running && percent < 2);
+  return (
+    <div className="space-y-2 rounded-xl bg-black/40 px-4 py-3">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-foreground">{progress.label}</span>
+        <span className="tabular-nums text-muted-foreground">{indeterminate ? "…" : `${percent}%`}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted/80">
+        {indeterminate ? (
+          <div className="relative h-full w-full overflow-hidden rounded-full bg-primary/25">
+            <div className="absolute inset-y-0 w-1/3 animate-[scan-indeterminate_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
+          </div>
+        ) : (
+          <div className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
+        )}
+      </div>
+      {progress.detail ? <p className="text-xs text-muted-foreground">{progress.detail}</p> : null}
+    </div>
   );
 }
 
@@ -422,11 +495,17 @@ function Results({
   results,
   loading,
   onReload,
+  matching,
+  matchDisabled,
+  onMatchAgain,
 }: {
   section: SectionId;
   results: ResultsResponse | null;
   loading: boolean;
   onReload: () => Promise<ResultsResponse>;
+  matching: boolean;
+  matchDisabled: boolean;
+  onMatchAgain: () => void;
 }) {
   const [sortId, setSortId] = useState<ResultsGroupSortId>(DEFAULT_RESULTS_GROUP_SORT);
   const [cardSize, setCardSize] = useState(DEFAULT_RESULTS_CARD_SIZE);
@@ -682,6 +761,25 @@ function Results({
             />
           </label>
           <div className="flex flex-wrap items-center gap-2 border-l border-border pl-4">
+            {section === "immich" ? (
+              <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <Button type="button" size="xs" disabled={matchDisabled} onClick={onMatchAgain}>
+                    {matching ? (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin" />
+                        Matching…
+                      </>
+                    ) : (
+                      "Match again"
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-sm whitespace-normal">
+                  Link these saved groups to Immich again without comparing files. This picks up stack changes for photos already in the groups. A new file still needs a scan.
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             {bulkBusy ? (
               <span className="flex items-center gap-1.5 text-muted-foreground" aria-live="polite">
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />

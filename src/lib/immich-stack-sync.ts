@@ -1,6 +1,6 @@
 import { runPool } from "./concurrency";
-import { fetchImmichStack, type ImmichStack } from "./immich";
-import { applyStackMembership, itemStackId } from "./immich-stacks";
+import { fetchImmichStack, listImmichStacks, type ImmichStack } from "./immich";
+import { applyStackMembership, dropCompleteStacks, itemStackId, stacksTouchingGroups } from "./immich-stacks";
 import type { PathMapEntry, StoredGroup } from "./types";
 
 const cache = new Map<string, { at: number; stack: ImmichStack | null }>();
@@ -43,6 +43,22 @@ export async function loadImmichStacks(
     if (stack) stacks.push(stack);
   });
   return stacks;
+}
+
+/** Mark assets that already belong to an Immich stack, then hide groups that are exactly one stack. */
+export function applyListedStacks(groups: StoredGroup[], stacks: ImmichStack[], maps: PathMapEntry[]): StoredGroup[] {
+  const touching = stacksTouchingGroups(groups, stacks);
+  if (touching.length === 0) return dropCompleteStacks(groups);
+  return dropCompleteStacks(applyStackMembership(groups, touching, maps));
+}
+
+export async function applyLibraryStacks(
+  groups: StoredGroup[],
+  baseUrl: string,
+  apiKey: string,
+  maps: PathMapEntry[],
+): Promise<StoredGroup[]> {
+  return applyListedStacks(groups, await listImmichStacks(baseUrl, apiKey), maps);
 }
 
 export async function expandImmichGroups(

@@ -408,6 +408,26 @@ export function parseImmichStack(body: unknown): ImmichStack | null {
   return { id: record.id, primaryAssetId: record.primaryAssetId, assets };
 }
 
+/** Every stack the API key can see. Metadata search omits stack membership, so this is the source for stacks that already exist. */
+export async function listImmichStacks(baseUrl: string, apiKey: string): Promise<ImmichStack[]> {
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Immich rejected the API key for stacks");
+  }
+  if (!response.ok) throw new Error(`Immich stacks failed (${response.status})`);
+  const body = await response.json();
+  if (!Array.isArray(body)) return [];
+  const stacks: ImmichStack[] = [];
+  for (const entry of body) {
+    const parsed = parseImmichStack(entry);
+    if (parsed && parsed.assets.length >= 2) stacks.push(parsed);
+  }
+  return stacks;
+}
+
 export async function fetchImmichStack(baseUrl: string, apiKey: string, stackId: string): Promise<ImmichStack | null> {
   assertImmichId(stackId, "stack");
   const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {

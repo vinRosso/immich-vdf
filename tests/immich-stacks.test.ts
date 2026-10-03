@@ -7,6 +7,7 @@ import {
   detachAssetsFromStack,
   dropCompleteStacks,
   groupIsOneCompleteStack,
+  stacksTouchingGroups,
   orderGroupItems,
   setStackPrimary,
 } from "../src/lib/immich-stacks";
@@ -41,6 +42,49 @@ function item(path: string, assetId: string | null, extra: Partial<StoredItem> =
 function group(groupId: string, items: StoredItem[]): StoredGroup {
   return { groupId, items };
 }
+
+test("search results with no stack id still hide a group Immich has already stacked", () => {
+  const groups = [group("g", [item("/mnt/a.jpg", "a"), item("/mnt/b.jpg", "b")])];
+  const stacks = [
+    {
+      id: "s",
+      primaryAssetId: "a",
+      assets: [
+        { id: "a", originalPath: "/data/a.jpg" },
+        { id: "b", originalPath: "/data/b.jpg" },
+      ],
+    },
+    {
+      id: "other",
+      primaryAssetId: "x",
+      assets: [
+        { id: "x", originalPath: "/data/x.jpg" },
+        { id: "y", originalPath: "/data/y.jpg" },
+      ],
+    },
+  ];
+  assert.equal(stacksTouchingGroups(groups, stacks).length, 1);
+  const next = dropCompleteStacks(applyStackMembership(groups, stacksTouchingGroups(groups, stacks), maps));
+  assert.equal(next.length, 0);
+});
+
+test("a stack that covers only part of a group stays visible", () => {
+  const groups = [group("g", [item("/mnt/a.jpg", "a"), item("/mnt/b.jpg", "b"), item("/mnt/c.jpg", "c")])];
+  const stacks = [
+    {
+      id: "s",
+      primaryAssetId: "a",
+      assets: [
+        { id: "a", originalPath: "/data/a.jpg" },
+        { id: "b", originalPath: "/data/b.jpg" },
+      ],
+    },
+  ];
+  const next = dropCompleteStacks(applyStackMembership(groups, stacks, maps));
+  assert.equal(next.length, 1);
+  assert.equal(next[0].items.find((file) => file.assetId === "c")?.stackId ?? null, null);
+  assert.equal(next[0].items.find((file) => file.assetId === "a")?.stackId, "s");
+});
 
 test("a group that is exactly one stack is hidden", () => {
   const stacked = group("g", [

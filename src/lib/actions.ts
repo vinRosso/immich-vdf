@@ -13,6 +13,7 @@ import {
   pingImmich,
   removeAssetsFromAlbum,
   fetchImmichStack,
+  listImmichStacks,
   removeAssetsFromStack,
   stackAssets,
   trashAssets,
@@ -20,7 +21,7 @@ import {
   type ImmichUser,
 } from "./immich";
 import { groupHasImmichArchived } from "./immich-archived";
-import { forgetImmichStacks, rememberImmichStack } from "./immich-stack-sync";
+import { applyListedStacks, expandImmichGroups, forgetImmichStacks, rememberImmichStack } from "./immich-stack-sync";
 import {
   assignSelectionToStack,
   detachAssetsFromStack,
@@ -453,7 +454,7 @@ export async function unmatchedImmichReport(): Promise<{
   return { finishedAt: view.finishedAt, pathMap, items };
 }
 
-export async function rejoinImmich(): Promise<number> {
+export async function rejoinImmich(): Promise<{ matched: number; warning: string | null }> {
   if (!tryBeginRejoin()) throw new AppError("Matching is already running", 409);
   try {
     const settings = await loadSettings();
@@ -516,13 +517,36 @@ export async function rejoinImmich(): Promise<number> {
         },
       },
     );
+    reportRejoin({ percent: 90, label: "Immich stacks", detail: "Reading stacks already in Immich…", indeterminate: true });
+    let listed: Awaited<ReturnType<typeof listImmichStacks>> | null = null;
+    let stackWarning: string | null = null;
+    try {
+      listed = await listImmichStacks(settings.immich.baseUrl, settings.immich.apiKey);
+    } catch {
+      stackWarning = "Immich stacks could not be read, so existing stacks may be missing.";
+    }
     reportRejoin({ percent: 92, label: "Saving", detail: "Updating linked assets in scan results…", indeterminate: false });
-    const saved = await updateResults("immich", (current) => {
+    const saved = await updateResults("immich", async (current) => {
       const base = current ?? results;
-      return { ...base, warning: null, groups: attachAssets(base.groups, assets, maps) };
+      const attached = attachAssets(base.groups, assets, maps);
+      const groups = listed
+        ? applyListedStacks(attached, listed, maps)
+        : dropCompleteStacks(
+            await expandImmichGroups(
+              attached,
+              settings.immich.baseUrl,
+              settings.immich.apiKey,
+              maps,
+              settings.immich.scan.parallelism,
+            ),
+          );
+      return { ...base, warning: stackWarning, groups };
     });
     reportRejoin({ percent: 100, label: "Done", detail: "Match finished" });
-    return (saved?.groups ?? []).reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0);
+    return {
+      matched: (saved?.groups ?? []).reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0),
+      warning: stackWarning,
+    };
   } finally {
     endRejoin();
   }

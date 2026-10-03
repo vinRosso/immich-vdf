@@ -88,9 +88,10 @@ export function UnmatchedScreen() {
       indeterminate: true,
     });
     try {
-      const result = await api<{ matched: number }>("/api/immich/rejoin", { method: "POST" });
+      const result = await api<{ matched: number; warning: string | null }>("/api/immich/rejoin", { method: "POST" });
       await load();
-      setNotice(`Matched ${result.matched} files to Immich assets.`);
+      if (result.warning) setError(result.warning);
+      else setNotice(`Matched ${result.matched} files to Immich assets.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not match files again");
     } finally {
