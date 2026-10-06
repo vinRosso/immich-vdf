@@ -96,6 +96,7 @@ export function fingerprintMatchingSettings(scan: ScanSettings): string {
     compareHorizontallyFlipped: scan.compareHorizontallyFlipped,
     ignoreBlackPixels: scan.ignoreBlackPixels,
     ignoreWhitePixels: scan.ignoreWhitePixels,
+    prefixSeconds: scan.prefixSeconds,
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }

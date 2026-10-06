@@ -1102,7 +1102,7 @@ function Player({
       )}
       <p className="flex shrink-0 items-baseline justify-between gap-3 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">
-          <span className="tabular-nums">{formatPercent(item.similarity)}</span>
+          <span className="tabular-nums">{item.similarity >= 0 ? formatPercent(item.similarity) : "—"}</span>
           {" · "}
           <span className={cn(compareStats && statTone(bestResolution))}>{item.resolution || "unknown size"}</span>
           {item.isImage ? (

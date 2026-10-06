@@ -23,6 +23,7 @@ export function defaultScan(section: SectionId = "server", cores?: number): Scan
     ignoreBlackPixels: false,
     ignoreWhitePixels: false,
     timeWindowDays: defaultTimeWindowDays(section),
+    prefixSeconds: 5,
   };
 }
 

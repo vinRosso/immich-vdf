@@ -26,6 +26,7 @@ namespace VDF.CLI.Commands {
 			cmd.Subcommands.Add(BuildClear());
 			cmd.Subcommands.Add(BuildExport());
 			cmd.Subcommands.Add(BuildExportGrayBytes());
+			cmd.Subcommands.Add(BuildImageTimes());
 			return cmd;
 		}
 
@@ -181,6 +182,32 @@ namespace VDF.CLI.Commands {
 					return 0;
 				}
 				Console.Error.WriteLine("Export failed.");
+				return 1;
+			});
+
+			return cmd;
+		}
+
+		static Command BuildImageTimes() {
+			var cmd = new Command("times",
+				"Write image path, capture time, and size as JSON. No hashes or thumbnails.");
+
+			var outputOpt = new Option<FileInfo>("--output", "-o") {
+				Description = "Path for the JSON file.",
+				Required = true,
+			};
+			cmd.Options.Add(outputOpt);
+			cmd.Options.Add(SharedOptions.Database);
+
+			cmd.SetAction(async (parseResult, ct) => {
+				var db = parseResult.GetValue(SharedOptions.Database);
+				if (db != null) DatabaseUtils.CustomDatabaseFolder = db;
+
+				await ScanEngine.LoadDatabase();
+				var outputPath = parseResult.GetValue(outputOpt)!;
+				bool ok = DatabaseUtils.ExportImageTimes(outputPath.FullName);
+				if (ok) return 0;
+				Console.Error.WriteLine("Image time export failed.");
 				return 1;
 			});
 

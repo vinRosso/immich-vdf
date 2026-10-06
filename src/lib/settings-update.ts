@@ -58,6 +58,7 @@ function mergeScan(
     throw new AppError("Time window must be 0 (all) or at least 1 day");
   }
   next.timeWindowDays = next.timeWindowDays === 0 ? 0 : Math.max(1, Math.round(next.timeWindowDays));
+  next.prefixSeconds = integerIn(next.prefixSeconds, 0, 86_400, "Prefix seconds");
   return next;
 }
 

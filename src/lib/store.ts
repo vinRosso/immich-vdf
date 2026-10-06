@@ -194,13 +194,25 @@ export function normalizeStoredSettings(raw: StoredSettingsFile | null | undefin
   return {
     server: {
       scan: serverScan,
-      schedule: { ...defaults.server.schedule, ...raw.server?.schedule },
+      schedule: {
+        ...defaults.server.schedule,
+        ...raw.server?.schedule,
+        scan: raw.server?.schedule?.scan
+          ? normalizeScanParallelism(defaultScan("server"), raw.server.schedule.scan, cores)
+          : undefined,
+      },
     },
     immich: {
       ...defaults.immich,
       ...raw.immich,
       scan: normalizeScanParallelism(defaults.immich.scan, raw.immich?.scan, cores),
-      schedule: { ...defaults.immich.schedule, ...raw.immich?.schedule },
+      schedule: {
+        ...defaults.immich.schedule,
+        ...raw.immich?.schedule,
+        scan: raw.immich?.schedule?.scan
+          ? normalizeScanParallelism(defaultScan("immich"), raw.immich.schedule.scan, cores)
+          : undefined,
+      },
       pathMap: raw.immich?.pathMap ?? defaults.immich.pathMap,
     },
     webhookUrl: typeof raw.webhookUrl === "string" ? raw.webhookUrl : defaults.webhookUrl,

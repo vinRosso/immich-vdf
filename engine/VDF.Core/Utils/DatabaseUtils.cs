@@ -412,6 +412,42 @@ namespace VDF.Core.Utils {
 			}
 		}
 
+		/// <summary>
+		/// Image path, capture time, and size. No hashes. Used to group bursts that are not visual duplicates.
+		/// </summary>
+		internal static bool ExportImageTimes(string jsonFile) {
+			try {
+				using var stream = File.Create(jsonFile);
+				using var writer = new Utf8JsonWriter(stream);
+				writer.WriteStartArray();
+				foreach (FileEntry entry in Database) {
+					if (!entry.IsImage || entry.IsManuallyExcluded) continue;
+					if (entry.DateCreated.Year < 1980) continue;
+					writer.WriteStartObject();
+					writer.WriteString("path", entry.Path);
+					writer.WriteString("date", ImageTimeIso(entry.DateCreated));
+					writer.WriteNumber("size", entry.FileSize);
+					writer.WriteEndObject();
+				}
+				writer.WriteEndArray();
+				writer.Flush();
+				return true;
+			}
+			catch (Exception e) {
+				Logger.Instance.Error($"Failed to export image times: {e}");
+				return false;
+			}
+		}
+
+		static string ImageTimeIso(DateTime value) {
+			DateTime clock = value.Kind switch {
+				DateTimeKind.Utc => value,
+				DateTimeKind.Local => value.ToUniversalTime(),
+				_ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+			};
+			return clock.ToString("o");
+		}
+
 		internal static bool ImportDatabaseFromJson(string jsonFile, JsonSerializerOptions options) {
 			try {
 				using var stream = File.OpenRead(jsonFile);

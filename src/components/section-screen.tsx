@@ -278,6 +278,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
         ignoreBlackPixels: defaults.ignoreBlackPixels,
         ignoreWhitePixels: defaults.ignoreWhitePixels,
         timeWindowDays: defaults.timeWindowDays,
+        prefixSeconds: defaults.prefixSeconds,
       },
     });
   }
@@ -319,6 +320,13 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         hint={timeWindowHint(draft.scan.timeWindowDays)}
                         value={draft.scan.timeWindowDays}
                         onChange={(timeWindowDays) => setDraft({ ...draft, scan: { ...draft.scan, timeWindowDays } })}
+                      />
+                      <NumberField
+                        wide
+                        label="Prefix"
+                        hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
+                        value={draft.scan.prefixSeconds}
+                        onChange={(prefixSeconds) => setDraft({ ...draft, scan: { ...draft.scan, prefixSeconds } })}
                       />
                       <NumberField
                         label="Parallel"
@@ -1230,6 +1238,7 @@ function ScheduleSettingsDialog({
       ignoreBlackPixels: defaults.ignoreBlackPixels,
       ignoreWhitePixels: defaults.ignoreWhitePixels,
       timeWindowDays: defaults.timeWindowDays,
+      prefixSeconds: defaults.prefixSeconds,
     });
   }
 
@@ -1310,6 +1319,13 @@ function ScheduleSettingsDialog({
                 <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={local.scan.threshold} onChange={(threshold) => patchScan({ threshold })} />
                 <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={local.scan.percent} onChange={(percent) => patchScan({ percent })} />
                 <NumberField wide label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
+                <NumberField
+                  wide
+                  label="Prefix"
+                  hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
+                  value={local.scan.prefixSeconds}
+                  onChange={(prefixSeconds) => patchScan({ prefixSeconds })}
+                />
                 <NumberField
                   label="Parallel"
                   hint={

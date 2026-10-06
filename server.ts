@@ -26,6 +26,10 @@ ensureRuntimeDirs(config);
 startScheduler();
 
 const dev = nextDevMode();
+if (dev && process.env.NODE_ENV === "production") {
+  // A global NODE_ENV=production with no full `next build` makes Next look for required-server-files.json.
+  process.env.NODE_ENV = "development";
+}
 const app = next({ dev, hostname: config.host, port: config.port });
 const handle = app.getRequestHandler();
 
@@ -115,15 +119,20 @@ function isPublicPage(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/_next") || pathname === "/favicon.ico";
 }
 
+function productionBuildReady(): boolean {
+  const dir = path.join(process.cwd(), ".next");
+  return existsSync(path.join(dir, "required-server-files.json")) && existsSync(path.join(dir, "BUILD_ID"));
+}
+
 function nextDevMode(): boolean {
   const lifecycle = process.env.npm_lifecycle_event;
   if (lifecycle === "dev" || lifecycle === "dev:web") return true;
-  const built = existsSync(path.join(process.cwd(), ".next", "required-server-files.json"));
-  if (!built) {
-    if (process.env.NODE_ENV === "production") {
+  if (!productionBuildReady()) {
+    if (process.env.NODE_ENV === "production" || lifecycle === "start") {
       console.warn("No Next.js production build found; using development mode. Run `npm run build` before `npm start`.");
     }
     return true;
   }
+  if (lifecycle === "start") return false;
   return process.env.NODE_ENV !== "production";
 }

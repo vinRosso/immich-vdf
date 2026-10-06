@@ -40,6 +40,7 @@ A scan runs `vdf-cli scan`, then `vdf-cli compare`. If the files and the setting
 | Threshold | Leave at 5. Lower is stricter and drops real duplicates. |
 | Percent | Let the profile set it (98 or 92). A much lower percent fills the grid with weak matches. |
 | Window | Immich defaults to 7 days, so a burst of the same event is compared. Files defaults to 0, the whole library. Raise the Immich window only when the same photo was imported months apart. |
+| Prefix | Also group images taken within this many seconds when their original file names share a prefix, even if they are not visual duplicates. Default is 5. 0 turns it off. |
 | Parallel | Use the suggested value for the CPUs inside the container. |
 | Images | Leave on unless you only care about video. |
 | pHash | Off unless you already know you want perceptual hashes instead of frame samples. |

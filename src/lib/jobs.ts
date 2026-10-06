@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildVdfCompareArgs, buildVdfScanArgs } from "./cli-args";
+import { buildVdfCompareArgs, buildVdfImageTimesArgs, buildVdfScanArgs } from "./cli-args";
 import { decideCompareRun } from "./compare-decision";
 import { buildVdfCliSettingsFile } from "./vdf-cli-settings";
 import { loadConfig, resolveVdfCli } from "./config";
@@ -16,6 +16,7 @@ import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
+import { applyPrefixClusters, imagesInScanScope, parseImageTimes, pathKey, prefixClusters, prefixItem } from "./prefix-groups";
 import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
@@ -65,6 +66,7 @@ function scanSettingsForRun(live: ScanSettings, scheduled: ScanSettings | undefi
     ignoreBlackPixels: scheduled.ignoreBlackPixels,
     ignoreWhitePixels: scheduled.ignoreWhitePixels,
     timeWindowDays: scheduled.timeWindowDays,
+    prefixSeconds: scheduled.prefixSeconds ?? live.prefixSeconds,
   };
 }
 
@@ -299,9 +301,16 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     } else {
       const raw = await readFile(paths.outputFile, "utf8");
       scan.addLine("[scan] Processing results…");
+      const parsed = await withPrefixGroups(
+        parseCliResults(raw).map(toStoredGroup),
+        paths.dbDir,
+        input.scanSettings,
+        paths.includes,
+        paths.excludes,
+      );
       const kept = await keepInside(
         section,
-        parseCliResults(raw).map(toStoredGroup),
+        parsed,
         settings,
         input.scanSettings.parallelism,
         (done, total) => {
@@ -569,6 +578,40 @@ async function keepInside(
     if (items.length >= 2) kept.push({ ...group, items });
   }
   return kept;
+}
+
+async function withPrefixGroups(
+  groups: StoredGroup[],
+  dbDir: string,
+  scanSettings: ScanSettings,
+  includes: string[],
+  excludes: string[],
+): Promise<StoredGroup[]> {
+  if (scanSettings.prefixSeconds <= 0 || !scanSettings.includeImages) return groups;
+  const scan = getScan();
+  const timesFile = path.join(loadConfig().dataDir, "tmp", `scan-times-${Date.now()}.json`);
+  scan.addLine("[scan] Grouping images by file name and time…");
+  try {
+    const listed = await spawnVdfCli(buildVdfImageTimesArgs(dbDir, timesFile));
+    if (listed.spawnFailed || listed.code !== 0) {
+      scan.addLine("[scan] Could not read image times, so prefix groups were skipped.");
+      return groups;
+    }
+    const images = imagesInScanScope(parseImageTimes(await readFile(timesFile, "utf8")), includes, excludes);
+    const clusters = prefixClusters(images, scanSettings.prefixSeconds);
+    const lookup = new Map(images.map((image) => [pathKey(image.path), prefixItem(image)]));
+    const next = applyPrefixClusters(groups, clusters, lookup);
+    const created = next.filter((group) => group.groupId.startsWith("prefix:")).length;
+    if (created > 0) {
+      scan.addLine(`[scan] ${created} name-and-time group${created === 1 ? "" : "s"}`);
+    }
+    return next;
+  } catch (error) {
+    scan.addLine(`[scan] Prefix groups skipped: ${errorText(error)}`);
+    return groups;
+  } finally {
+    await rm(timesFile, { force: true }).catch(() => undefined);
+  }
 }
 
 function toStoredGroup(group: ParsedGroup): StoredGroup {

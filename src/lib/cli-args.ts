@@ -46,6 +46,10 @@ export function buildVdfCompareArgs(scan: VdfCompareParams): string[] {
   return args;
 }
 
+export function buildVdfImageTimesArgs(dbDir: string, outputFile: string): string[] {
+  return ["db", "times", "--db", dbDir, "--output", outputFile];
+}
+
 export function buildVdfArgs(
   scan: ScanSettings & { dbDir: string; outputFile: string; settingsFile: string; includes: string[]; excludes: string[] },
 ): string[] {

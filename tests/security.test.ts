@@ -246,6 +246,7 @@ test("CLI and ffmpeg arguments keep the path out of the shell and the filter", (
     ignoreBlackPixels: false,
     ignoreWhitePixels: false,
     timeWindowDays: 0,
+    prefixSeconds: 5,
     dbDir: "/data/db/server",
     outputFile: "/data/tmp/out.json",
     settingsFile: "/data/tmp/settings.json",

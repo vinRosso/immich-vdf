@@ -16,6 +16,8 @@ export type ScanSettings = {
   ignoreWhitePixels: boolean;
   /** 0 compares the whole library. Otherwise the capture-time window length in days. */
   timeWindowDays: number;
+  /** 0 skips name-and-time groups. Otherwise images within this many seconds that share a file-name prefix are grouped. */
+  prefixSeconds: number;
 };
 
 export type ScheduleSettings = {
