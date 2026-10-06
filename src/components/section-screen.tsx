@@ -33,7 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatBytes, formatClock, formatCompactThousands, formatLatestOkRun, formatNextRun, formatScanDuration } from "@/lib/format";
+import { formatBytes, formatClock, formatCompactThousands, formatNextRun, formatScanDuration } from "@/lib/format";
 import { sectionLabel } from "@/lib/section-label";
 import { timeWindowHint } from "@/lib/time-window";
 import { mergeClientGroups } from "@/lib/merge-groups";
@@ -48,6 +48,7 @@ import {
   sortResultGroups,
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
+import { cn } from "cn";
 import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, XCircle } from "lucide-react";
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import { defaultScan, normalizeScan } from "@/lib/scan-defaults";
@@ -65,6 +66,29 @@ type Draft = {
   webhookUrl: string;
   clearWebhook: boolean;
 };
+
+function SectionHeaderLinks({
+  section,
+  trashCount,
+  className,
+}: {
+  section: SectionId;
+  trashCount: number;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex shrink-0 items-center gap-1", className)}>
+      <a href={`/ignored?section=${section}`} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+        Ignored
+      </a>
+      {section === "server" ? (
+        <a href="/trash" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+          Trash{trashCount > 0 ? ` ${trashCount}` : ""}
+        </a>
+      ) : null}
+    </div>
+  );
+}
 
 export function SectionScreen({ section }: { section: SectionId }) {
   const router = useRouter();
@@ -285,44 +309,46 @@ export function SectionScreen({ section }: { section: SectionId }) {
 
   const runningHere = feed.running && feed.section === section;
   const last = runs?.[section].last;
+  const scanLatestCaption =
+    results?.finishedAt
+      ? `Latest: ${formatClock(results.finishedAt)}${results.durationMs != null ? ` · ${formatScanDuration(results.durationMs)}` : ""}`
+      : last?.at && last.status === "ok"
+        ? `Latest: ${formatClock(last.at)}`
+        : null;
   return (
     <AppShell>
       <div className="space-y-4">
-        <div className="flex items-end justify-between gap-3">
-          <div className="flex min-w-0 flex-1 flex-wrap items-end gap-x-4 gap-y-2">
-            <h1 className="font-heading text-4xl">{sectionLabel(section)}</h1>
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
+          <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-end lg:gap-4">
+            <div className="flex items-center justify-between gap-3 lg:justify-start">
+              <h1 className="min-w-0 shrink-0 font-heading text-3xl sm:text-4xl">{sectionLabel(section)}</h1>
+              <SectionHeaderLinks section={section} trashCount={trash.length} className="lg:hidden" />
+            </div>
             {draft ? (
-              <ScanProfilePicker scan={draft.scan} onChange={(scan) => setDraft({ ...draft, scan })} />
+              <ScanProfilePicker
+                scan={draft.scan}
+                onChange={(scan) => setDraft({ ...draft, scan })}
+                className="lg:min-w-0"
+              />
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <a href={`/ignored?section=${section}`} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-              Ignored
-            </a>
-            {section === "server" ? (
-              <a href="/trash" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-                Trash{trash.length > 0 ? ` ${trash.length}` : ""}
-              </a>
-            ) : null}
-          </div>
+          <SectionHeaderLinks section={section} trashCount={trash.length} className="hidden shrink-0 lg:flex" />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
             {draft ? (
               <>
                 <div>
-                  <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-                    <div className="flex flex-wrap items-center gap-x-5">
+                  <div className="flex w-full flex-wrap items-center justify-start gap-x-4 gap-y-2 sm:gap-x-5 lg:flex-nowrap lg:justify-between lg:gap-x-4">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-5 lg:flex-nowrap lg:gap-x-3 xl:gap-x-4">
                       <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={draft.scan.threshold} onChange={(threshold) => setDraft({ ...draft, scan: { ...draft.scan, threshold } })} />
                       <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={draft.scan.percent} onChange={(percent) => setDraft({ ...draft, scan: { ...draft.scan, percent } })} />
                       <NumberField
-                        wide
                         label="Window"
                         hint={timeWindowHint(draft.scan.timeWindowDays)}
                         value={draft.scan.timeWindowDays}
                         onChange={(timeWindowDays) => setDraft({ ...draft, scan: { ...draft.scan, timeWindowDays } })}
                       />
                       <NumberField
-                        wide
                         label="Prefix"
                         hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
                         value={draft.scan.prefixSeconds}
@@ -339,7 +365,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         onChange={(parallelism) => setDraft({ ...draft, scan: { ...draft.scan, parallelism } })}
                       />
                     </div>
-                    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                    <div className="flex flex-wrap items-center justify-start gap-x-3 gap-y-1 lg:shrink-0 lg:flex-nowrap lg:overflow-x-auto">
                       <Flag label="Images" hint="Include image files as well as video." checked={draft.scan.includeImages} onChange={(includeImages) => setDraft({ ...draft, scan: { ...draft.scan, includeImages } })} />
                       <Flag label="pHash" hint="Perceptual hash instead of grayscale frame sampling." checked={draft.scan.usePhash} onChange={(usePhash) => setDraft({ ...draft, scan: { ...draft.scan, usePhash } })} />
                       <Flag
@@ -351,7 +377,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                       <Flag label="Partial clips" hint="Find a clip inside a longer file using audio fingerprints." checked={draft.scan.partialClip} onChange={(partialClip) => setDraft({ ...draft, scan: { ...draft.scan, partialClip } })} />
                       <Flag label="AI match" hint="Neural embeddings for cropped, mirrored, or heavily edited copies. Downloads about 100 MB on first use." checked={draft.scan.aiMatching} onChange={(aiMatching) => setDraft({ ...draft, scan: { ...draft.scan, aiMatching } })} />
                       <Flag label="AI partial" hint="Visual partial matches without audio. Downloads the AI components on first use." checked={draft.scan.aiPartial} onChange={(aiPartial) => setDraft({ ...draft, scan: { ...draft.scan, aiPartial } })} />
-                      <Button type="button" size="xs" variant="ghost" className="h-7 gap-1 text-muted-foreground" onClick={resetMatchingDefaults}>
+                      <Button type="button" size="xs" variant="ghost" className="h-7 shrink-0 gap-1 text-muted-foreground" onClick={resetMatchingDefaults}>
                         <RotateCcw className="size-3" />
                         Reset defaults
                       </Button>
@@ -360,9 +386,9 @@ export function SectionScreen({ section }: { section: SectionId }) {
                   <div className="flex items-center py-2" aria-hidden>
                     <div className="h-px w-full bg-border" />
                   </div>
-                  <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-x-4">
                     {section === "server" ? (
-                      <div className="min-w-0 space-y-1.5">
+                      <div className="min-w-0 w-full space-y-1.5 md:flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <FolderPicker
                             section={section}
@@ -384,18 +410,20 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         />
                       </div>
                     ) : (
-                      <ImmichConnectionFields
-                        draft={draft}
-                        setDraft={setDraft}
-                        settings={settings}
-                        busy={busy}
-                        onSave={persistDraft}
-                        onReload={reload}
-                      />
+                      <div className="min-w-0 w-full md:flex-1">
+                        <ImmichConnectionFields
+                          draft={draft}
+                          setDraft={setDraft}
+                          settings={settings}
+                          busy={busy}
+                          onSave={persistDraft}
+                          onReload={reload}
+                        />
+                      </div>
                     )}
-                    <div className="flex flex-wrap items-start gap-3">
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex w-full shrink-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between md:w-auto md:justify-end md:gap-3">
+                      <div className="flex min-w-0 flex-col gap-1 sm:items-end">
+                        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                           <p className="whitespace-nowrap text-[11px] leading-snug text-muted-foreground">
                             {runs?.[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
                           </p>
@@ -409,7 +437,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                             {draft.schedule.mode === "off" ? "Add schedule" : "Edit schedule"}
                           </Button>
                         </div>
-                        {notice ? <p className="text-right text-[11px] leading-snug text-primary">{notice}</p> : null}
+                        {notice ? <p className="text-[11px] leading-snug text-primary sm:text-right">{notice}</p> : null}
                       </div>
                       <ScheduleSettingsDialog
                         open={scheduleDialogOpen}
@@ -422,18 +450,18 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         hasActiveSchedule={draft.schedule.mode !== "off"}
                         onSave={(slice) => save(slice)}
                       />
-                      <div className="flex flex-col items-center gap-1">
+                      <div className="grid w-full gap-1 sm:w-max">
                         <Button
-                          className="h-11 min-w-[6.5rem] px-8 text-base"
+                          className="h-11 w-full min-w-[6.5rem] px-6 text-base"
                           title={runtime && !runtime.cliAvailable ? "vdf-cli is not installed on this machine" : undefined}
                           onClick={() => void scan()}
                           disabled={busy || matching || feed.running || !runtime?.cliAvailable}
                         >
                           {runningHere ? "Scanning" : "Scan"}
                         </Button>
-                        {last?.at && last.status === "ok" ? (
-                          <p className="whitespace-nowrap text-center text-[10px] leading-snug text-muted-foreground/80">
-                            {formatLatestOkRun(last.at)}
+                        {scanLatestCaption ? (
+                          <p className="text-center text-[10px] leading-snug text-muted-foreground/80 sm:whitespace-nowrap">
+                            {scanLatestCaption}
                           </p>
                         ) : null}
                         {feed.running ? (
@@ -708,7 +736,7 @@ function Results({
   }
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+      <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-4 lg:gap-y-2 text-xs">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           {results.error ? <Badge variant="destructive">Failed</Badge> : null}
           {results.warning ? <Badge variant="secondary">{results.warning}</Badge> : null}
@@ -727,7 +755,7 @@ function Results({
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span className="sr-only">Sort groups</span>
             <select
-              className="h-6 max-w-[14rem] truncate rounded-md border border-border bg-popover px-2 text-xs text-foreground [color-scheme:dark]"
+              className="h-6 max-w-full truncate rounded-md border border-border bg-popover px-2 text-xs text-foreground [color-scheme:dark] sm:max-w-[14rem]"
               value={sortId}
               onChange={(event) => {
                 const value = event.target.value;
@@ -741,18 +769,13 @@ function Results({
               ))}
             </select>
           </label>
-          <span className="text-muted-foreground">
-            Finished {formatClock(results.finishedAt)}
-            {results.durationMs != null ? ` · ${formatScanDuration(results.durationMs)}` : ""}
-          </span>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-4">
+        <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto sm:justify-end sm:gap-3 lg:gap-4">
           <label
-            className="flex items-center gap-1.5 text-muted-foreground"
+            className="flex shrink-0 items-center gap-1 text-muted-foreground"
             title="Drag to make group cards larger or smaller"
           >
             <LayoutGrid className="size-3.5 shrink-0" aria-hidden />
-            <span className="whitespace-nowrap">Card size</span>
             <input
               type="range"
               min={1}
@@ -760,7 +783,7 @@ function Results({
               step={1}
               value={cardSize}
               aria-label="Card size"
-              className="h-1.5 w-24 accent-primary"
+              className="h-1.5 w-14 accent-primary sm:w-24"
               onChange={(event) => {
                 const next = Number(event.target.value);
                 setCardSize(next);
@@ -768,7 +791,7 @@ function Results({
               }}
             />
           </label>
-          <div className="flex flex-wrap items-center gap-2 border-l border-border pl-4">
+          <div className="flex shrink-0 flex-nowrap items-center gap-1.5 border-l border-border pl-2 sm:gap-2 sm:pl-4">
             {section === "immich" ? (
               <Tooltip delayDuration={0}>
                 <TooltipTrigger asChild>
@@ -1037,10 +1060,10 @@ function ImmichConnectionFields({
 
   if (showForm) {
     return (
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-          <div className="grid grid-cols-[5.75rem_12rem] items-center gap-x-2 gap-y-2">
-            <Label htmlFor="base-url" className="text-right text-xs text-muted-foreground">Immich URL</Label>
+          <div className="grid w-full max-w-md grid-cols-1 items-center gap-x-2 gap-y-2 sm:grid-cols-[5.75rem_12rem]">
+            <Label htmlFor="base-url" className="text-xs text-muted-foreground sm:text-right">Immich URL</Label>
             <Input
               id="base-url"
               className="h-8 w-full"
@@ -1048,7 +1071,7 @@ function ImmichConnectionFields({
               onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
               placeholder="http://immich:2283"
             />
-            <Label htmlFor="api-key" className="text-right text-xs text-muted-foreground">API key</Label>
+            <Label htmlFor="api-key" className="text-xs text-muted-foreground sm:text-right">API key</Label>
             <Input
               id="api-key"
               className="h-8 w-full"
@@ -1086,11 +1109,11 @@ function ImmichConnectionFields({
   const statusError = status?.connected === false ? status.error : null;
 
   return (
-    <div className="min-w-0 flex-1 space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       {statusLoading ? (
         <ImmichConnectionSkeleton />
       ) : connected ? (
-        <div className="flex h-7 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0 text-xs text-muted-foreground">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
           <CheckCircle2 className="size-3.5 shrink-0 text-primary" aria-label="Connected" />
           <span className="truncate font-mono text-foreground/90">{displayUrl}</span>
           {status?.user ? (
@@ -1114,14 +1137,14 @@ function ImmichConnectionFields({
           ) : null}
         </div>
       ) : (
-        <div className="flex h-7 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0 text-xs text-destructive">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-destructive">
           <XCircle className="size-3.5 shrink-0" aria-hidden />
           {statusError ?? "Not connected"}
           <span className="text-muted-foreground/60">·</span>
           <span className="truncate font-mono text-foreground/90">{displayUrl}</span>
         </div>
       )}
-      <div className="flex h-7 flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" variant="outline" disabled={busy || connecting} onClick={() => setEditing(true)}>
           Edit connection
         </Button>
@@ -1134,13 +1157,13 @@ function ImmichConnectionFields({
   );
 }
 
-function NumberField({ label, hint, value, onChange, wide }: { label: string; hint: string; value: number; onChange: (value: number) => void; wide?: boolean }) {
+function NumberField({ label, hint, value, onChange }: { label: string; hint: string; value: number; onChange: (value: number) => void }) {
   return (
     <HintWrap text={hint} className="shrink-0">
       <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
         {label}
         <Input
-          className={`h-7 ${wide ? "w-16" : "w-9"} border-0 bg-transparent px-0.5 text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent`}
+          className="h-7 w-9 border-0 bg-transparent px-0.5 text-left text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent"
           type="text"
           inputMode="numeric"
           aria-label={label}
@@ -1318,9 +1341,8 @@ function ScheduleSettingsDialog({
               <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                 <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={local.scan.threshold} onChange={(threshold) => patchScan({ threshold })} />
                 <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={local.scan.percent} onChange={(percent) => patchScan({ percent })} />
-                <NumberField wide label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
+                <NumberField label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
                 <NumberField
-                  wide
                   label="Prefix"
                   hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
                   value={local.scan.prefixSeconds}

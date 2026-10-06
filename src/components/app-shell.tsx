@@ -84,24 +84,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden">
       <header className="sticky top-0 z-30 mb-4 w-full border-b border-white/[0.06] bg-background/75 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-              <Link
-                href="/"
-                className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
-              >
-                immich-vdf
-              </Link>
-              {runtime && !runtime.cliAvailable ? (
-                <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
-              ) : null}
-              {runtime?.cliVersion ? (
-                <span className="block font-mono text-sm leading-none text-muted-foreground/80">{runtime.cliVersion}</span>
-              ) : null}
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between md:gap-4">
+          <div className="flex items-center justify-between gap-3 md:min-w-0 md:flex-1 md:justify-start">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+                <Link
+                  href="/"
+                  className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
+                >
+                  immich-vdf
+                </Link>
+                {runtime && !runtime.cliAvailable ? (
+                  <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
+                ) : null}
+                {runtime?.cliVersion ? (
+                  <span className="block font-mono text-sm leading-none text-muted-foreground/80">{runtime.cliVersion}</span>
+                ) : null}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="shrink-0 rounded-full px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground md:hidden"
+            >
+              Sign out
+            </button>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 md:ml-auto md:flex-nowrap md:justify-end">
             {trashSavedBytes === null ? (
               <Skeleton className="h-8 w-[5.5rem] rounded-full" aria-label="Loading saved space" />
             ) : (
@@ -138,7 +147,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => void logout()}
-              className="rounded-full px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
+              className="hidden shrink-0 rounded-full px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground md:inline-flex"
             >
               Sign out
             </button>
@@ -147,7 +156,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
       <div
         className={cn(
-          "scrollbar-subtle mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col overflow-auto px-6 pb-4",
+          "scrollbar-subtle mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col overflow-auto px-4 pb-4 sm:px-6",
         )}
       >
         {children}

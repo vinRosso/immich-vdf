@@ -1,5 +1,6 @@
 "use client";
 
+import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SCAN_PROFILES, applyScanProfile, detectScanProfile } from "@/lib/scan-profiles";
@@ -8,14 +9,16 @@ import type { ScanSettings } from "@/lib/types";
 export function ScanProfilePicker({
   scan,
   onChange,
+  className,
 }: {
   scan: ScanSettings;
   onChange: (scan: ScanSettings) => void;
+  className?: string;
 }) {
   const active = detectScanProfile(scan);
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5 pb-0.5">
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-1.5 pb-0.5", className)}>
       {SCAN_PROFILES.map((profile) => {
         const selected = active === profile.id;
         return (
