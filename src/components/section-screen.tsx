@@ -49,7 +49,7 @@ import {
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
 import { cn } from "cn";
-import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, XCircle } from "lucide-react";
+import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, Trash2, XCircle } from "lucide-react";
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import { defaultScan, normalizeScan } from "@/lib/scan-defaults";
 import { publishTrashSavedBytes } from "@/lib/trash-events";
@@ -77,14 +77,21 @@ function SectionHeaderLinks({
   className?: string;
 }) {
   return (
-    <div className={cn("flex shrink-0 items-center gap-1", className)}>
-      <a href={`/ignored?section=${section}`} className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-        Ignored
-      </a>
-      {section === "server" ? (
-        <a href="/trash" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-          Trash{trashCount > 0 ? ` ${trashCount}` : ""}
+    <div className={cn("flex shrink-0 items-center gap-2", className)}>
+      <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 rounded-full px-3.5 font-normal">
+        <a href={`/ignored?section=${section}`}>
+          <EyeOff className="size-3.5 shrink-0 opacity-80" aria-hidden />
+          Ignored
         </a>
+      </Button>
+      {section === "server" ? (
+        <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 rounded-full px-3.5 font-normal">
+          <a href="/trash">
+            <Trash2 className="size-3.5 shrink-0 opacity-80" aria-hidden />
+            Trash
+            {trashCount > 0 ? <span className="tabular-nums text-foreground">{trashCount}</span> : null}
+          </a>
+        </Button>
       ) : null}
     </div>
   );
