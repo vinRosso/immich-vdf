@@ -16,7 +16,8 @@ import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
-import { applyPrefixClusters, imagesInScanScopeParallel, parseImageTimes, pathKey, prefixClustersParallel, prefixItem } from "./prefix-groups";
+import { applyPrefixClusters, imagesInScanScopeParallel, overlayKnownItems, parseImageTimes, pathKey, prefixClustersParallel, prefixItem, stripPrefixItems } from "./prefix-groups";
+import { PREFIX_CACHE_REVISION, loadPrefixCache, prefixCacheAction, prefixRegroupLine, savePrefixCache } from "./prefix-cache";
 import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
@@ -283,15 +284,16 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
       if (!existing) {
         error = "No saved duplicate groups to reuse.";
       } else {
-      const groups = section === "immich" ? dropCompleteStacks(existing.groups) : existing.groups;
+      const reused = await reusedGroups(section, existing, input.scanSettings, paths, input.decision.inventoryFingerprint);
       await saveResults(section, {
         ...existing,
-        groups,
+        groups: reused.groups,
         finishedAt: new Date().toISOString(),
         durationMs: pipelineDurationMs(input.startedAt),
         error: null,
+        appliedPrefixSeconds: reused.appliedPrefixSeconds,
       });
-      groupCount = await countVisibleGroups(section, groups);
+      groupCount = await countVisibleGroups(section, reused.groups);
         ok = true;
       }
     } else if (input.spawnFailed || input.code === null) {
@@ -301,13 +303,16 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     } else {
       const raw = await readFile(paths.outputFile, "utf8");
       scan.addLine("[scan] Processing results…");
-      const parsed = await withPrefixGroups(
+      const prefixed = await withPrefixGroups(
         parseCliResults(raw).map(toStoredGroup),
         paths.dbDir,
         input.scanSettings,
         paths.includes,
         paths.excludes,
+        section,
+        input.decision.inventoryFingerprint,
       );
+      const parsed = prefixed.groups;
       const kept = await keepInside(
         section,
         parsed,
@@ -387,6 +392,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
         compareInventoryFingerprint: input.decision.inventoryFingerprint,
         compareSettingsFingerprint: input.decision.settingsFingerprint,
         compareTimeWindowDays: input.scanSettings.timeWindowDays,
+        appliedPrefixSeconds: prefixed.applied ? input.scanSettings.prefixSeconds : null,
       });
       await updateIgnored(section, (ignoredRaw) => {
         const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
@@ -580,47 +586,116 @@ async function keepInside(
   return kept;
 }
 
+async function reusedGroups(
+  section: SectionId,
+  existing: { groups: StoredGroup[]; appliedPrefixSeconds?: number | null },
+  scanSettings: ScanSettings,
+  paths: ScanPaths,
+  inventoryFingerprint: string,
+): Promise<{ groups: StoredGroup[]; appliedPrefixSeconds: number | null }> {
+  const visible = section === "immich" ? dropCompleteStacks(existing.groups) : existing.groups;
+  if ((existing.appliedPrefixSeconds ?? null) === scanSettings.prefixSeconds) {
+    return { groups: visible, appliedPrefixSeconds: scanSettings.prefixSeconds };
+  }
+  const cache = await loadPrefixCache(section);
+  const base =
+    cache && cache.inventoryFingerprint === inventoryFingerprint ? cache.baseGroups : stripPrefixItems(existing.groups);
+  const refreshed = await withPrefixGroups(
+    base,
+    paths.dbDir,
+    scanSettings,
+    paths.includes,
+    paths.excludes,
+    section,
+    inventoryFingerprint,
+  );
+  if (!refreshed.applied) return { groups: visible, appliedPrefixSeconds: existing.appliedPrefixSeconds ?? null };
+  const overlaid = overlayKnownItems(existing.groups, refreshed.groups);
+  return {
+    groups: section === "immich" ? dropCompleteStacks(overlaid) : overlaid,
+    appliedPrefixSeconds: scanSettings.prefixSeconds,
+  };
+}
+
 async function withPrefixGroups(
-  groups: StoredGroup[],
+  visualGroups: StoredGroup[],
   dbDir: string,
   scanSettings: ScanSettings,
   includes: string[],
   excludes: string[],
-): Promise<StoredGroup[]> {
-  if (scanSettings.prefixSeconds <= 0 || !scanSettings.includeImages) return groups;
+  section: SectionId,
+  inventoryFingerprint: string,
+): Promise<{ groups: StoredGroup[]; applied: boolean }> {
   const scan = getScan();
-  const timesFile = path.join(loadConfig().dataDir, "tmp", `scan-times-${Date.now()}.json`);
-  scan.addLine(`[scan] Grouping images by file name and time (up to ${scanSettings.parallelism} workers, one prefix each)…`);
-  try {
-    const listed = await spawnVdfCli(buildVdfImageTimesArgs(dbDir, timesFile));
-    if (listed.spawnFailed || listed.code !== 0) {
-      scan.addLine("[scan] Could not read image times, so prefix groups were skipped.");
-      return groups;
+  const cache = await loadPrefixCache(section);
+  if (scanSettings.prefixSeconds <= 0 || !scanSettings.includeImages) {
+    if (cache && cache.inventoryFingerprint === inventoryFingerprint) {
+      await savePrefixCache(section, { ...cache, prefixSeconds: 0, clusters: [], baseGroups: visualGroups });
     }
-    const images = await imagesInScanScopeParallel(
-      parseImageTimes(await readFile(timesFile, "utf8")),
-      includes,
-      excludes,
-      scanSettings.parallelism,
-    );
-    const clusters = await prefixClustersParallel(
-      images,
-      scanSettings.prefixSeconds,
-      scanSettings.parallelism,
-      scanSettings.timeWindowDays,
-    );
+    return { groups: visualGroups, applied: true };
+  }
+  const action = prefixCacheAction(cache, {
+    inventoryFingerprint,
+    timeWindowDays: scanSettings.timeWindowDays,
+    prefixSeconds: scanSettings.prefixSeconds,
+  });
+  const timesFile = path.join(loadConfig().dataDir, "tmp", `scan-times-${Date.now()}.json`);
+  let images = cache?.images ?? [];
+  let clusters = cache?.clusters ?? [];
+  let readTimes = false;
+  try {
+    if (action === "reuse" && cache) {
+      scan.addLine(`[scan] Prefix groups reused (${scanSettings.prefixSeconds} s).`);
+    } else if (action === "regroup" && cache) {
+      scan.addLine(prefixRegroupLine(cache, scanSettings.prefixSeconds, scanSettings.timeWindowDays));
+      clusters = await prefixClustersParallel(
+        cache.images,
+        scanSettings.prefixSeconds,
+        scanSettings.parallelism,
+        scanSettings.timeWindowDays,
+      );
+    } else {
+      readTimes = true;
+      scan.addLine(`[scan] Grouping images by file name and time (up to ${scanSettings.parallelism} workers, one prefix each)…`);
+      const listed = await spawnVdfCli(buildVdfImageTimesArgs(dbDir, timesFile));
+      if (listed.spawnFailed || listed.code !== 0) {
+        scan.addLine("[scan] Could not read image times, so prefix groups were skipped.");
+        return { groups: visualGroups, applied: false };
+      }
+      images = await imagesInScanScopeParallel(
+        parseImageTimes(await readFile(timesFile, "utf8")),
+        includes,
+        excludes,
+        scanSettings.parallelism,
+      );
+      clusters = await prefixClustersParallel(
+        images,
+        scanSettings.prefixSeconds,
+        scanSettings.parallelism,
+        scanSettings.timeWindowDays,
+      );
+    }
     const lookup = new Map(images.map((image) => [pathKey(image.path), prefixItem(image)]));
-    const next = applyPrefixClusters(groups, clusters, lookup);
+    const next = applyPrefixClusters(visualGroups, clusters, lookup);
     const created = next.filter((group) => group.groupId.startsWith("prefix:")).length;
-    if (created > 0) {
+    if (created > 0 && action !== "reuse") {
       scan.addLine(`[scan] ${created} name-and-time group${created === 1 ? "" : "s"}`);
     }
-    return next;
+    await savePrefixCache(section, {
+      revision: PREFIX_CACHE_REVISION,
+      inventoryFingerprint,
+      timeWindowDays: scanSettings.timeWindowDays,
+      prefixSeconds: scanSettings.prefixSeconds,
+      images,
+      clusters,
+      baseGroups: visualGroups,
+    });
+    return { groups: next, applied: true };
   } catch (error) {
     scan.addLine(`[scan] Prefix groups skipped: ${errorText(error)}`);
-    return groups;
+    return { groups: visualGroups, applied: false };
   } finally {
-    await rm(timesFile, { force: true }).catch(() => undefined);
+    if (readTimes) await rm(timesFile, { force: true }).catch(() => undefined);
   }
 }
 

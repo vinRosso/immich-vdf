@@ -123,3 +123,24 @@ test("AI matching toggled requires compare", () => {
   assert.equal(decision.skipCompare, false);
   assert.match(decision.logMessage, /Matching settings changed/i);
 });
+
+test("changing prefix seconds reuses the visual compare", () => {
+  const scan = defaultScan();
+  const settingsFp = fingerprintMatchingSettings(scan);
+  assert.equal(fingerprintMatchingSettings({ ...scan, prefixSeconds: 2 }), settingsFp);
+  const inventoryFp = fingerprintInventory(baseInventory);
+  const combined = combinedCompareFingerprint(inventoryFp, settingsFp, scan.timeWindowDays);
+  const decision = decideCompareRun({
+    scan: { ...scan, prefixSeconds: 2 },
+    inventory: baseInventory,
+    previous: stored({
+      compareFingerprint: combined,
+      compareInventoryFingerprint: inventoryFp,
+      compareSettingsFingerprint: settingsFp,
+      compareTimeWindowDays: scan.timeWindowDays,
+    }),
+    previousInventory: baseInventory,
+  });
+  assert.equal(decision.skipCompare, true);
+  assert.match(decision.logMessage, /reusing last compare/i);
+});

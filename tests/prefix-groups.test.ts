@@ -12,11 +12,13 @@ import {
   isVideoFileName,
   imagesInScanScope,
   imagesInScanScopeParallel,
+  overlayKnownItems,
   parseImageTimes,
   pathKey,
   prefixClusters,
   prefixClustersParallel,
   prefixItem,
+  stripPrefixItems,
   PREFIX_FLAG,
   type TimedImage,
 } from "../src/lib/prefix-groups";
@@ -189,6 +191,17 @@ test("files that are not already grouped become their own group", () => {
   assert.equal(next.length, 1);
   assert.equal(next[0].groupId, "prefix:1");
   assert.equal(next[0].items.length, 2);
+});
+
+test("prefix-only files can be removed and a known asset id is kept", () => {
+  const visualItem = visual("/a/IMG_1.jpg");
+  const partner = visual("/a/IMG_1b.jpg");
+  const added = { ...prefixItem(image("/a/IMG_2.jpg", 2)), assetId: "asset-2" };
+  const stripped = stripPrefixItems([{ groupId: "g", items: [visualItem, partner, added] }]);
+  assert.deepEqual(stripped[0].items.map((item) => item.path), ["/a/IMG_1.jpg", "/a/IMG_1b.jpg"]);
+  const rebuilt = applyPrefixClusters(stripped, [["/a/IMG_1.jpg", "/a/IMG_2.jpg"]], new Map([[pathKey(added.path), prefixItem(image(added.path, 2))]]));
+  const overlaid = overlayKnownItems([{ groupId: "g", items: [visualItem, added] }], rebuilt);
+  assert.equal(overlaid[0].items.find((item) => item.path.endsWith("IMG_2.jpg"))?.assetId, "asset-2");
 });
 
 test("a file name is read from a Windows or Linux path", () => {

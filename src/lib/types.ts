@@ -122,6 +122,8 @@ export type StoredResults = {
   compareSettingsFingerprint?: string | null;
   /** Window used for the last compare. 0 is the whole library. */
   compareTimeWindowDays?: number | null;
+  /** Prefix seconds applied to `groups`. Missing on results from before prefix caching. */
+  appliedPrefixSeconds?: number | null;
 };
 
 export type IgnoredEntry = {

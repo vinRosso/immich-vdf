@@ -368,6 +368,25 @@ export function applyPrefixClusters(
     .map((group) => ({ groupId: group.groupId, items: group.items }));
 }
 
+/** Drop files that were added only by prefix grouping, so a new Prefix setting can be applied. */
+export function stripPrefixItems(groups: readonly StoredGroup[]): StoredGroup[] {
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.flags.includes(PREFIX_FLAG)) }))
+    .filter((group) => group.items.length >= 2);
+}
+
+/** Keep asset ids and resolved paths already known for a file. */
+export function overlayKnownItems(previous: readonly StoredGroup[], next: readonly StoredGroup[]): StoredGroup[] {
+  const known = new Map<string, StoredItem>();
+  for (const group of previous) {
+    for (const item of group.items) known.set(pathKey(item.path), item);
+  }
+  return next.map((group) => ({
+    ...group,
+    items: group.items.map((item) => known.get(pathKey(item.path)) ?? item),
+  }));
+}
+
 /** Slashes are folded either way. Only Windows compares paths without case. */
 export function comparePath(filePath: string, platform: NodeJS.Platform): string {
   const slashed = filePath.replace(/\\/g, "/");
