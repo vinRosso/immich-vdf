@@ -58,10 +58,26 @@ Immich mounts that folder at `/data/library` in its own container. This app maps
 | Variable             | What to put                                                                                  |
 | -------------------- | -------------------------------------------------------------------------------------------- |
 | `TRUSTED_PROXY_CIDR` | The reverse proxy's address range. Leave empty on a plain LAN.                               |
-| `IMMICH_SCAN_ROOTS`  | Extra scan roots inside the container. Leave unset unless the API key cannot list libraries. |
+| `IMMICH_SCAN_ROOTS`  | Extra scan roots inside the container. Same path strings Immich uses for external libraries. |
+| `VOLUME_BINDS`       | Local `npm run dev` only. Map container paths to host folders (see [Local app](dev-local#volume-binds)). In Docker, use Compose `volumes` instead. |
 | `PUID`               | User id that owns `MEDIA_PATH`. Default `1000`.                                               |
 | `PGID`               | Group id for that account. Default `100`.                                                     |
 
+### Extra Immich library paths
+
+Immich stores **upload** originals under `/data/library/<storage label>/`. **External** libraries use their own import paths (for example `/mnt/photos`).
+
+In **Docker**, mount each host folder at the **same container path** on both Immich and immich-vdf, then list those paths in `IMMICH_SCAN_ROOTS` if the API key cannot list libraries:
+
+```yaml
+volumes:
+  - ${IMMICH_PATH}:/immich:ro
+  - /host/photos:/mnt/photos:ro
+environment:
+  IMMICH_SCAN_ROOTS: /immich,/mnt/photos
+```
+
+On **`npm run dev`**, use `VOLUME_BINDS` in `.env` when the host layout does not match Immich’s container paths. Details and examples are on [Local app — Volume binds](dev-local#volume-binds).
 
 The app speaks HTTP on port `4747`. A range as wide as `0.0.0.0/0` is ignored. When the proxy is trusted and `X-Forwarded-Proto` is `https`, the session cookie is marked `Secure`. What a signed-in session can reach is on [Security](security).
 

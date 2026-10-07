@@ -31,6 +31,6 @@ Loose items are shown before stacks. Inside a stack, the cover comes first. Item
 
 **Match again**, on the results line, links the saved groups to Immich again without comparing files. It reads the current stacks for photos already in those groups. A new file still needs a scan. A group that is already one Immich stack is hidden. A stack that still has a loose duplicate stays visible, with the other photos from that stack pulled in. Immich's file search does not include stack membership, so this step reads the stack list directly.
 
-A file can fail to match an asset when its path is outside the mount, or when Immich stored a collision name (`name+1.ext`). Mount that folder the same way Immich does, then match again.
+A file can fail to match an asset when its path is outside the mount, or when Immich stored a collision name (`name+1.ext`). Mount that folder the same way Immich does (Compose volumes, or `VOLUME_BINDS` on [local dev](dev-local#volume-binds)), then match again.
 
 Scanning and comparing are on [Scan](scan) and [Review](review).

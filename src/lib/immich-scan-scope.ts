@@ -2,7 +2,12 @@ import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { fetchImmichUser } from "./immich";
-import { mapImmichImportPathToHost, resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
+import {
+  mapImmichImportPathToHost,
+  remapHostPathForVolumeBind,
+  resolveImmichScanRoots,
+  type ImmichCredentials,
+} from "./immich-mounts";
 import { resolveInside } from "./path-jail";
 import type { ScanSettings } from "./types";
 
@@ -156,7 +161,10 @@ export async function immichScanFolderPlan(
     storageLabel,
     userId,
   });
-  const remap = (folder: string) => mapImmichImportPathToHost(folder, config.immichLibrary, uploadChildren, config) ?? folder;
+  const remap = (folder: string) => {
+    const mapped = mapImmichImportPathToHost(folder, config.immichLibrary, uploadChildren, config) ?? folder;
+    return remapHostPathForVolumeBind(mapped, config.immichLibrary, uploadChildren, config);
+  };
   return {
     roots: immichRoots,
     includeSources: planned.includes.map(remap),

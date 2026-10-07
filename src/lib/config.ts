@@ -3,6 +3,7 @@ import { accessSync, constants, mkdirSync, readFileSync, readdirSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { clampScanParallelism, maxScanParallelism, suggestScanParallelism } from "./scan-parallelism";
+import { parseVolumeBinds, type VolumeBind } from "./volume-binds";
 
 export { clampScanParallelism, maxScanParallelism, suggestScanParallelism };
 
@@ -13,6 +14,8 @@ export type AppConfig = {
   immichLibrary: string;
   /** Scan roots for the Immich section (upload + external libraries). */
   immichScanRoots: string[];
+  /** Dev-style container→host path overrides (`VOLUME_BINDS`). */
+  volumeBinds: VolumeBind[];
   port: number;
   host: string;
   password: string;
@@ -29,12 +32,14 @@ export function loadConfig(): AppConfig {
   const immichLibrary =
     process.env.IMMICH_LIBRARY?.trim() || process.env.IMMICH_PATH?.trim() || path.join(cwd, "dev-immich");
   const immichScanRoots = splitList(process.env.IMMICH_SCAN_ROOTS, immichLibrary);
+  const volumeBinds = parseVolumeBinds(process.env.VOLUME_BINDS);
   const cpuCount = Math.max(1, os.cpus().length);
   return {
     dataDir,
     mediaRoots,
     immichLibrary,
     immichScanRoots,
+    volumeBinds,
     port: Number(process.env.PORT || 4747),
     host: process.env.HOST || "0.0.0.0",
     password: process.env.APP_PASSWORD ?? "",
@@ -59,6 +64,7 @@ export function ensureRuntimeDirs(config: AppConfig): void {
     ...config.mediaRoots,
     config.immichLibrary,
     ...config.immichScanRoots,
+    ...config.volumeBinds.map((bind) => bind.host),
   ];
   for (const dir of dirs) {
     try {

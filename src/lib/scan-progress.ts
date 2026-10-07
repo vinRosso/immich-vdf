@@ -12,6 +12,11 @@ const POST_COMPARE = [
   { test: /reusing last compare/i, label: "Reusing last compare", detail: "Library unchanged…" },
   { test: /Matching Immich library/i, label: "Matching Immich assets", detail: "Linking files to the library…" },
   { test: /Processing results/i, label: "Processing results", detail: "Reading file metadata…" },
+  {
+    test: /Grouping images by file name and time/i,
+    label: "Grouping by name and time",
+    detail: "Applying prefix and capture-time groups…",
+  },
   { test: /Finishing up/i, label: "Finishing up", detail: "Preparing your results…" },
 ] as const;
 
@@ -87,7 +92,7 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
     return {
       percent: 100,
       label: "Finishing comparison",
-      detail: "Waiting for vdf-cli to exit…",
+      detail: "Writing compare output (large libraries can take a minute)…",
       indeterminate: true,
     };
   }

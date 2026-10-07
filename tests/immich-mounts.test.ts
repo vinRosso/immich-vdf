@@ -8,6 +8,7 @@ const baseConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   mediaRoots: [],
   immichLibrary: "\\\\god\\storage\\immich\\library",
   immichScanRoots: ["\\\\god\\storage\\immich\\library", "/home/user/photos1"],
+  volumeBinds: [],
   port: 4747,
   host: "0.0.0.0",
   password: "",

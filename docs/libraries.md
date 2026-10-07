@@ -20,4 +20,6 @@ nav_next_title: Immich
 
 The Immich page scans `library/<storage label>/`. The admin folder is `admin`, even when the display name is different. Generated folders (`thumbs`, `encoded-video`, `profile`, `backups`) are skipped.
 
+External Immich libraries use separate import paths. In Docker, mount each path read-only on immich-vdf the same way as on Immich. On `npm run dev`, map those paths with `VOLUME_BINDS` ([Local app](dev-local#volume-binds)).
+
 The container user must be able to read the Immich folder and to rename files on the external library.

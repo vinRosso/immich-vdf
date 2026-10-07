@@ -71,4 +71,13 @@ test("parseScanProgress shows post-compare phases", () => {
     "[scan] Matching Immich library…",
   ]);
   assert.equal(immich.label, "Matching Immich assets");
+
+  const prefix = parseScanProgress([
+    "[ 100%] 10/10 ETA 0m00s file.jpg  (comparing duplicates)",
+    "Comparison complete",
+    "[scan] Finishing up…",
+    "[scan] Grouping images by file name and time…",
+  ]);
+  assert.equal(prefix.label, "Grouping by name and time");
+  assert.equal(prefix.indeterminate, true);
 });

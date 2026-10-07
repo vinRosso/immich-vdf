@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, type AppConfig } from "./config";
 import { listImmichLibraryImportPaths } from "./immich";
+import { hostPathForContainerMount } from "./volume-binds";
 
 /** Immich media root inside the Immich container (`UPLOAD_LOCATION` is mounted at `/data`). */
 export const IMMICH_UPLOAD_PREFIX = "/data";
@@ -68,20 +69,44 @@ export function mapImmichImportPathToHost(
   uploadChildren: string[],
   config: AppConfig = loadConfig(),
 ): string | null {
+  const bound = hostPathForContainerMount(importPath, config);
+  if (bound) return bound;
   const mediaPrefix = immichMediaPrefix(uploadChildren).replace(/\\/g, "/");
   const normalized = importPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const prefix = mediaPrefix.replace(/\/+$/, "");
   const lower = normalized.toLowerCase();
   const prefixLower = prefix.toLowerCase();
-  if (lower === prefixLower) return uploadMount;
+  if (lower === prefixLower) return remapHostPathForVolumeBind(uploadMount, uploadMount, uploadChildren, config);
   if (lower.startsWith(`${prefixLower}/`)) {
     const suffix = normalized.slice(prefix.length).replace(/^\//, "");
-    return suffix ? joinMountSuffix(uploadMount, suffix) : uploadMount;
+    const mapped = suffix ? joinMountSuffix(uploadMount, suffix) : uploadMount;
+    return remapHostPathForVolumeBind(mapped, uploadMount, uploadChildren, config);
   }
   const configured = config.immichScanRoots.find(
     (root) => normalizeRoot(root).toLowerCase() === normalizeRoot(importPath).toLowerCase(),
   );
-  return configured ?? null;
+  if (configured) {
+    return hostPathForContainerMount(configured, config) ?? configured;
+  }
+  return null;
+}
+
+/** After default upload mapping, apply `VOLUME_BINDS` (dev host overrides). */
+export function remapHostPathForVolumeBind(
+  hostPath: string,
+  uploadMount: string,
+  uploadChildren: string[],
+  config: AppConfig = loadConfig(),
+): string {
+  const direct = hostPathForContainerMount(hostPath, config);
+  if (direct) return direct;
+  const uploadNorm = uploadMount.replace(/\\/g, "/").replace(/\/+$/, "");
+  const hostNorm = hostPath.replace(/\\/g, "/");
+  if (!hostNorm.toLowerCase().startsWith(uploadNorm.toLowerCase())) return hostPath;
+  const suffix = hostNorm.slice(uploadNorm.length).replace(/^\//, "");
+  if (!suffix) return hostPath;
+  const containerPath = `${immichMediaPrefix(uploadChildren)}/${suffix}`;
+  return hostPathForContainerMount(containerPath, config) ?? hostPath;
 }
 
 const scanRootsCache = new Map<string, { at: number; roots: string[] }>();
@@ -93,7 +118,11 @@ export async function resolveImmichScanRoots(credentials?: ImmichCredentials): P
   const cacheKey = `${normalizeRoot(config.immichLibrary)}\0${credentials?.baseUrl.trim() ?? ""}`;
   const hit = scanRootsCache.get(cacheKey);
   if (hit && Date.now() - hit.at < SCAN_ROOTS_TTL_MS) return hit.roots;
-  const roots = new Set<string>([config.immichLibrary, ...config.immichScanRoots]);
+  const roots = new Set<string>([
+    config.immichLibrary,
+    ...config.immichScanRoots,
+    ...config.volumeBinds.map((bind) => bind.host),
+  ]);
   const url = credentials?.baseUrl.trim() ?? "";
   const key = credentials?.apiKey ?? "";
   if (url && key) {
@@ -101,7 +130,7 @@ export async function resolveImmichScanRoots(credentials?: ImmichCredentials): P
       const children = uploadMountChildren(config.immichLibrary);
       for (const importPath of await listImmichLibraryImportPaths(url, key)) {
         const mapped = mapImmichImportPathToHost(importPath, config.immichLibrary, children, config);
-        if (mapped) roots.add(mapped);
+        if (mapped) roots.add(remapHostPathForVolumeBind(mapped, config.immichLibrary, children, config));
       }
     } catch {
       // Fall back to compose/env roots.

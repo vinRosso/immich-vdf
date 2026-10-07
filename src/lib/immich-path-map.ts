@@ -35,6 +35,9 @@ export async function resolveImmichPathMap(credentials?: ImmichCredentials): Pro
   const uploadMount = await resolvedMount(logicalMount);
   const prefix = immichMediaPrefix(mountChildren(logicalMount));
   const maps: PathMapEntry[] = [{ from: prefix, to: uploadMount }];
+  for (const bind of config.volumeBinds) {
+    maps.push({ from: bind.mount, to: await resolvedMount(bind.host) });
+  }
   for (const mount of externalRootsFromScanRoots(scanRoots, config)) {
     maps.push({ from: mount, to: await resolvedMount(mount) });
   }
@@ -46,6 +49,9 @@ export function resolveImmichPathMapSync(): PathMapEntry[] {
   const scanRoots = immichScanRootsFromConfig(config);
   const uploadMount = immichUploadMount(config);
   const maps: PathMapEntry[] = [{ from: immichMediaPrefix(mountChildren(uploadMount)), to: uploadMount }];
+  for (const bind of config.volumeBinds) {
+    maps.push({ from: bind.mount, to: bind.host });
+  }
   for (const mount of externalRootsFromScanRoots(scanRoots, config)) {
     maps.push({ from: mount, to: mount });
   }
