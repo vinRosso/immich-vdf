@@ -357,7 +357,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                       />
                       <NumberField
                         label="Prefix"
-                        hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
+                        hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
                         value={draft.scan.prefixSeconds}
                         onChange={(prefixSeconds) => setDraft({ ...draft, scan: { ...draft.scan, prefixSeconds } })}
                       />
@@ -1351,7 +1351,7 @@ function ScheduleSettingsDialog({
                 <NumberField label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
                 <NumberField
                   label="Prefix"
-                  hint="Also group images taken within this many seconds when their original file names share a prefix. 0 turns this off."
+                  hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
                   value={local.scan.prefixSeconds}
                   onChange={(prefixSeconds) => patchScan({ prefixSeconds })}
                 />

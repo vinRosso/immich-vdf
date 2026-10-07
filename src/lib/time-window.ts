@@ -1,8 +1,6 @@
-/** Same curve as engine/VDF.Core/TimeWindow.BufferDays. 0 means the whole library. */
-export function bufferDays(windowDays: number): number {
-  if (!Number.isFinite(windowDays) || windowDays <= 0) return 0;
-  return (windowDays / 3) * (90 / (90 + windowDays));
-}
+import { bufferDays } from "./capture-window.mjs";
+
+export { bufferDays };
 
 export function timeWindowHint(windowDays: number): string {
   if (windowDays <= 0) return "All dates. Every file is compared with every other file.";

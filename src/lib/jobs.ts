@@ -16,7 +16,7 @@ import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
-import { applyPrefixClusters, imagesInScanScope, parseImageTimes, pathKey, prefixClusters, prefixItem } from "./prefix-groups";
+import { applyPrefixClusters, imagesInScanScopeParallel, parseImageTimes, pathKey, prefixClustersParallel, prefixItem } from "./prefix-groups";
 import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
@@ -590,15 +590,25 @@ async function withPrefixGroups(
   if (scanSettings.prefixSeconds <= 0 || !scanSettings.includeImages) return groups;
   const scan = getScan();
   const timesFile = path.join(loadConfig().dataDir, "tmp", `scan-times-${Date.now()}.json`);
-  scan.addLine("[scan] Grouping images by file name and time…");
+  scan.addLine(`[scan] Grouping images by file name and time (up to ${scanSettings.parallelism} workers, one prefix each)…`);
   try {
     const listed = await spawnVdfCli(buildVdfImageTimesArgs(dbDir, timesFile));
     if (listed.spawnFailed || listed.code !== 0) {
       scan.addLine("[scan] Could not read image times, so prefix groups were skipped.");
       return groups;
     }
-    const images = imagesInScanScope(parseImageTimes(await readFile(timesFile, "utf8")), includes, excludes);
-    const clusters = prefixClusters(images, scanSettings.prefixSeconds);
+    const images = await imagesInScanScopeParallel(
+      parseImageTimes(await readFile(timesFile, "utf8")),
+      includes,
+      excludes,
+      scanSettings.parallelism,
+    );
+    const clusters = await prefixClustersParallel(
+      images,
+      scanSettings.prefixSeconds,
+      scanSettings.parallelism,
+      scanSettings.timeWindowDays,
+    );
     const lookup = new Map(images.map((image) => [pathKey(image.path), prefixItem(image)]));
     const next = applyPrefixClusters(groups, clusters, lookup);
     const created = next.filter((group) => group.groupId.startsWith("prefix:")).length;

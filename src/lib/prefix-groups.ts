@@ -1,4 +1,6 @@
-import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
+import { clustersFromLists, filterInScope } from "./prefix-cluster-worker.mjs";
 import { PREFIX_FLAG } from "./prefix-flag";
 import type { StoredGroup, StoredItem } from "./types";
 
@@ -27,9 +29,73 @@ export function filenamePrefixKey(fileName: string): string | null {
  * Images that share a file-name prefix and were taken within `seconds` of the
  * previous image in that prefix. `0` disables the grouping.
  */
-export function prefixClusters(images: readonly TimedImage[], seconds: number): string[][] {
+export function prefixClusters(images: readonly TimedImage[], seconds: number, windowDays = 0): string[][] {
   if (!Number.isFinite(seconds) || seconds <= 0) return [];
+  return clustersFromLists(prefixBuckets(images), seconds * 1000, windowDays);
+}
+
+/**
+ * Put each prefix on one worker. Larger prefixes are placed first so they do not
+ * share a thread when a free worker exists. A prefix is never split.
+ */
+export function assignPrefixBuckets(lists: TimedImage[][], parallelism: number): TimedImage[][][] {
+  if (lists.length === 0) return [];
+  const slots = Math.max(1, Math.min(Math.floor(parallelism) || 1, lists.length));
+  const loads = Array.from({ length: slots }, () => ({ count: 0, lists: [] as TimedImage[][] }));
+  const ordered = [...lists].sort((a, b) => b.length - a.length);
+  for (const list of ordered) {
+    let lightest = loads[0]!;
+    for (const slot of loads) {
+      if (slot.count < lightest.count) lightest = slot;
+    }
+    lightest.lists.push(list);
+    lightest.count += list.length;
+  }
+  return loads.map((slot) => slot.lists);
+}
+
+/**
+ * Same groups as `prefixClusters`. Each prefix stays on a single worker.
+ * Different prefixes are spread across `parallelism` workers.
+ */
+export async function prefixClustersParallel(
+  images: readonly TimedImage[],
+  seconds: number,
+  parallelism: number,
+  windowDays = 0,
+): Promise<string[][]> {
+  if (!Number.isFinite(seconds) || seconds <= 0) return [];
+  const lists = prefixBuckets(images);
+  const chunks = assignPrefixBuckets(lists, parallelism);
+  if (chunks.length <= 1) return clustersFromLists(lists, seconds * 1000, windowDays);
   const windowMs = seconds * 1000;
+  const parts = await Promise.all(
+    chunks.map((chunk) => runPrefixWorker<string[][]>({ op: "window", lists: chunk, windowMs, windowDays })),
+  );
+  return parts.flat();
+}
+
+/** Include/exclude filter. Each file is independent, so slices can run together. */
+export async function imagesInScanScopeParallel(
+  images: readonly TimedImage[],
+  includes: readonly string[],
+  excludes: readonly string[],
+  parallelism: number,
+): Promise<TimedImage[]> {
+  const workers = Math.max(1, Math.floor(parallelism) || 1);
+  if (workers === 1 || images.length < 2) return imagesInScanScope(images, includes, excludes);
+  const size = Math.ceil(images.length / Math.min(workers, images.length));
+  const slices: TimedImage[][] = [];
+  for (let index = 0; index < images.length; index += size) {
+    slices.push(images.slice(index, index + size));
+  }
+  const parts = await Promise.all(
+    slices.map((slice) => runPrefixWorker<TimedImage[]>({ op: "scope", images: slice, includes, excludes })),
+  );
+  return parts.flat();
+}
+
+function prefixBuckets(images: readonly TimedImage[]): TimedImage[][] {
   const buckets = new Map<string, TimedImage[]>();
   for (const image of images) {
     if (!Number.isFinite(image.dateCreatedMs) || image.dateCreatedMs <= 0) continue;
@@ -40,21 +106,25 @@ export function prefixClusters(images: readonly TimedImage[], seconds: number): 
     if (list) list.push(image);
     else buckets.set(key, [image]);
   }
-  const clusters: string[][] = [];
-  for (const list of buckets.values()) {
-    list.sort((a, b) => a.dateCreatedMs - b.dateCreatedMs || a.path.localeCompare(b.path));
-    let run: TimedImage[] = [];
-    for (const image of list) {
-      const previous = run[run.length - 1];
-      if (previous && image.dateCreatedMs - previous.dateCreatedMs > windowMs) {
-        if (run.length >= 2) clusters.push(run.map((entry) => entry.path));
-        run = [];
-      }
-      run.push(image);
-    }
-    if (run.length >= 2) clusters.push(run.map((entry) => entry.path));
-  }
-  return clusters;
+  return [...buckets.values()];
+}
+
+function runPrefixWorker<T>(workerData: object): Promise<T> {
+  const workerFile = fileURLToPath(new URL("./prefix-cluster-worker.mjs", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerFile, { workerData });
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      settle();
+    };
+    worker.once("message", (message: T) => finish(() => resolve(message)));
+    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("exit", (code) => {
+      if (code !== 0) finish(() => reject(new Error(`Prefix grouping worker exited with code ${code}`)));
+    });
+  });
 }
 
 /** Keep images under the folders this scan includes, and drop anything under an exclude. */
@@ -63,22 +133,7 @@ export function imagesInScanScope(
   includes: readonly string[],
   excludes: readonly string[],
 ): TimedImage[] {
-  const includeRoots = includes.map((root) => path.normalize(root));
-  const excludeRoots = excludes.map((root) => path.normalize(root));
-  return images.filter((image) => {
-    const norm = path.normalize(image.path);
-    if (excludeRoots.some((root) => coveredBy(root, norm))) return false;
-    return includeRoots.some((root) => coveredBy(root, norm));
-  });
-}
-
-function coveredBy(root: string, target: string): boolean {
-  return target === root || pathIsInside(root, target);
-}
-
-function pathIsInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return filterInScope(images, includes, excludes);
 }
 
 export function parseImageTimes(raw: string): TimedImage[] {
