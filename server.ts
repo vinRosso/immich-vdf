@@ -28,7 +28,8 @@ startScheduler();
 const dev = nextDevMode();
 if (dev && process.env.NODE_ENV === "production") {
   // A global NODE_ENV=production with no full `next build` makes Next look for required-server-files.json.
-  process.env.NODE_ENV = "development";
+  // @types/node marks NODE_ENV readonly; the process still accepts the write.
+  (process.env as { NODE_ENV?: string }).NODE_ENV = "development";
 }
 const app = next({ dev, hostname: config.host, port: config.port });
 const handle = app.getRequestHandler();

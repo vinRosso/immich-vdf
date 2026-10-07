@@ -218,7 +218,7 @@ test("include folders cover the same files on Windows and Linux", () => {
     ["\\\\god\\storage\\kevin\\2_memories\\archive"],
     path.win32,
   );
-  assert.deepEqual(winKept.map((entry) => entry.path), [winInside, winHidden, winSlash]);
+  assert.deepEqual(winKept.map((entry: { path: string }) => entry.path), [winInside, winHidden, winSlash]);
 
   const linuxKept = filterInScope(
     [photo("/immich/library/IMG_1.jpg"), photo("/immich/library-old/IMG_1.jpg"), photo("/Immich/library/IMG_1.jpg")],
@@ -226,7 +226,7 @@ test("include folders cover the same files on Windows and Linux", () => {
     [],
     path.posix,
   );
-  assert.deepEqual(linuxKept.map((entry) => entry.path), ["/immich/library/IMG_1.jpg"]);
+  assert.deepEqual(linuxKept.map((entry: { path: string }) => entry.path), ["/immich/library/IMG_1.jpg"]);
 });
 
 test("prefix groups only use images inside the current includes and outside excludes", async () => {
