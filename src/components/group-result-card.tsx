@@ -5,7 +5,7 @@ import { ThumbnailSkeleton } from "@/components/skeletons";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { groupHasImmichArchived } from "@/lib/immich-archived";
-import { PREFIX_FLAG } from "@/lib/prefix-flag";
+import { BURST_LABEL, PREFIX_FLAG } from "@/lib/prefix-flag";
 import type { ClientGroup, SectionId } from "@/lib/types";
 
 export function ResultGroupCard({
@@ -126,7 +126,7 @@ export function similarityRange(group: ClientGroup): string {
   const values = group.items.map((item) => item.similarity).filter((value) => Number.isFinite(value) && value >= 0);
   if (values.length === 0) {
     const prefixOnly = group.items.length > 0 && group.items.every((item) => item.flags.includes(PREFIX_FLAG));
-    return prefixOnly ? "Prefix" : "—";
+    return prefixOnly ? BURST_LABEL : "—";
   }
   const min = Math.round(Math.min(...values));
   const max = Math.round(Math.max(...values));

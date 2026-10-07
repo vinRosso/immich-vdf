@@ -505,9 +505,34 @@ async function enrichImageBitDepth(
   }
   if (done > 0) onProgress?.(Math.min(done, images), images);
 
+  // At least 8, and never below the scan Parallel value (a setting of 15 stays 15).
+  const width = Math.max(8, Math.floor(parallelism) || 1);
+  getScan().addLine(`[scan] Reading bit depth (${width} at a time)…`);
   await runPool(
     pending,
-    parallelism,
+    width,
+    async (item) => {
+      const key = bitDepthKey(item.path, item.sizeBytes);
+      let bitDepth = 0;
+      try {
+        bitDepth = await probeImageBitDepth(item.path, { ffprobe: false });
+      } catch {
+        bitDepth = 0;
+      }
+      if (bitDepth <= 0) return;
+      depthByKey.set(key, bitDepth);
+      done += occurrences.get(key) ?? 1;
+      onProgress?.(Math.min(done, images), images);
+    },
+    shouldAbort,
+  );
+
+  if (shouldAbort?.()) return groups;
+
+  const unresolved = pending.filter((item) => !depthByKey.has(bitDepthKey(item.path, item.sizeBytes)));
+  await runPool(
+    unresolved,
+    width,
     async (item) => {
       const key = bitDepthKey(item.path, item.sizeBytes);
       let bitDepth = 0;

@@ -80,11 +80,18 @@ export function ffprobeArgs(file: string): string[] {
   return ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "--", file];
 }
 
-/** Bit depth only: first video stream, no format or extra streams. */
+/**
+ * Bit depth only. The defaults read up to 5 MB and may wait 5 seconds per file,
+ * which stays slow even when many ffprobe processes run together.
+ */
 export function ffprobeBitDepthArgs(file: string): string[] {
   return [
     "-v",
     "error",
+    "-probesize",
+    "262144",
+    "-analyzeduration",
+    "200000",
     "-select_streams",
     "v:0",
     "-show_entries",

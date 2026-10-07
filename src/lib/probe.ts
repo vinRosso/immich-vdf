@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { ffprobeArgs, ffprobeBitDepthArgs } from "./ffmpeg-args";
-import { imageBitDepthFromFfprobe } from "./image-bit-depth";
+import { bitDepthFromHeader, imageBitDepthFromFfprobe } from "./image-bit-depth";
 import { parseFfprobe, type ProbeSummary } from "./playback";
 
 export function ffmpegBin(): string {
@@ -22,26 +22,75 @@ export async function fileCacheKey(file: string): Promise<string> {
     .digest("hex");
 }
 
-export async function probeImageBitDepth(file: string): Promise<number> {
+const HEADER_CHUNK = 64 * 1024;
+const HEADER_MAX = 1024 * 1024;
+const FFPROBE_BIT_DEPTH_TIMEOUT_MS = 15_000;
+
+type CachedDepth = { dir: string; depthPath: string; depth: number | null };
+
+async function cachedBitDepth(file: string): Promise<CachedDepth> {
   const key = await fileCacheKey(file);
   const dir = path.join(loadConfig().dataDir, "probe");
   const fullPath = path.join(dir, `${key}.json`);
   const depthPath = path.join(dir, `${key}.depth.json`);
   try {
-    return imageBitDepthFromFfprobe(JSON.parse(await readFile(fullPath, "utf8")));
+    const depth = imageBitDepthFromFfprobe(JSON.parse(await readFile(fullPath, "utf8")));
+    if (depth > 0) return { dir, depthPath, depth };
   } catch {
     // Full playback probe is absent. A bit-depth sidecar is enough.
   }
   try {
     const cached = JSON.parse(await readFile(depthPath, "utf8")) as { bitDepth?: unknown };
-    if (typeof cached.bitDepth === "number" && Number.isFinite(cached.bitDepth)) return cached.bitDepth;
+    if (typeof cached.bitDepth === "number" && Number.isFinite(cached.bitDepth)) return { dir, depthPath, depth: cached.bitDepth };
   } catch {
-    // Cache miss. Probe the first video stream only.
+    // Cache miss.
   }
-  const stdout = await capture(ffprobeBin(), ffprobeBitDepthArgs(file));
-  const bitDepth = imageBitDepthFromFfprobe(JSON.parse(stdout) as unknown);
-  await mkdir(dir, { recursive: true });
-  await writeFile(depthPath, JSON.stringify({ bitDepth }));
+  return { dir, depthPath, depth: null };
+}
+
+/** JPEG, PNG, and GIF depth from the file header. No ffprobe. */
+async function bitDepthFromImageFile(file: string): Promise<number | null> {
+  const handle = await open(file, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total < HEADER_MAX) {
+      const buf = Buffer.alloc(Math.min(HEADER_CHUNK, HEADER_MAX - total));
+      const { bytesRead } = await handle.read(buf, 0, buf.length, total);
+      if (bytesRead <= 0) break;
+      chunks.push(bytesRead === buf.length ? buf : buf.subarray(0, bytesRead));
+      total += bytesRead;
+      const merged = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, total);
+      const parsed = bitDepthFromHeader(merged);
+      if (parsed === "more") continue;
+      return parsed === "unknown" ? null : parsed;
+    }
+    return null;
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function probeImageBitDepth(file: string, options?: { ffprobe?: boolean }): Promise<number> {
+  const slot = await cachedBitDepth(file);
+  if (slot.depth !== null && slot.depth > 0) return slot.depth;
+  let bitDepth = 0;
+  try {
+    bitDepth = (await bitDepthFromImageFile(file)) ?? 0;
+  } catch {
+    bitDepth = 0;
+  }
+  if (bitDepth > 0) {
+    await mkdir(slot.dir, { recursive: true });
+    await writeFile(slot.depthPath, JSON.stringify({ bitDepth }));
+    return bitDepth;
+  }
+  if (options?.ffprobe === false) return 0;
+  if (slot.depth === 0) return 0;
+  const stdout = await capture(ffprobeBin(), ffprobeBitDepthArgs(file), FFPROBE_BIT_DEPTH_TIMEOUT_MS);
+  bitDepth = imageBitDepthFromFfprobe(JSON.parse(stdout) as unknown);
+  await mkdir(slot.dir, { recursive: true });
+  await writeFile(slot.depthPath, JSON.stringify({ bitDepth }));
   return bitDepth;
 }
 
@@ -61,17 +110,32 @@ export async function probeFile(file: string): Promise<ProbeSummary> {
   return summary;
 }
 
-export function capture(command: string, args: string[]): Promise<string> {
+export function capture(command: string, args: string[], timeoutMs = 0): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
+    let settled = false;
+    const finish = (error?: Error, value?: string) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(value ?? "");
+    };
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+            finish(new Error(`${command} timed out`));
+          }, timeoutMs)
+        : undefined;
     child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    child.on("error", (error) => reject(error));
+    child.on("error", (error) => finish(error));
     child.on("close", (code) => {
-      if (code === 0) resolve(Buffer.concat(out).toString("utf8"));
-      else reject(new Error(Buffer.concat(err).toString("utf8").trim() || `${command} exited ${code}`));
+      if (code === 0) finish(undefined, Buffer.concat(out).toString("utf8"));
+      else finish(new Error(Buffer.concat(err).toString("utf8").trim() || `${command} exited ${code}`));
     });
   });
 }

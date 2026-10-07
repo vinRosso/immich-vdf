@@ -255,8 +255,8 @@ test("prefix groups only use images inside the current includes and outside excl
   assert.deepEqual(parallel.map((entry) => entry.path), [inside]);
 });
 
-test("a card says Prefix only when every item came from a name-and-time group", () => {
-  assert.equal(similarityRange(card([{ similarity: -1, flags: [PREFIX_FLAG] }, { similarity: -1, flags: [PREFIX_FLAG] }])), "Prefix");
+test("a card says Burst only when every item came from a name-and-time group", () => {
+  assert.equal(similarityRange(card([{ similarity: -1, flags: [PREFIX_FLAG] }, { similarity: -1, flags: [PREFIX_FLAG] }])), "Burst");
   assert.equal(similarityRange(card([{ similarity: Number.NaN, flags: [] }, { similarity: -1, flags: [] }])), "—");
   assert.equal(similarityRange(card([{ similarity: 90, flags: [] }, { similarity: -1, flags: [PREFIX_FLAG] }])), "90%");
 });

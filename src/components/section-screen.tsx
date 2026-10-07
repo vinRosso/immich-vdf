@@ -356,7 +356,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                         onChange={(timeWindowDays) => setDraft({ ...draft, scan: { ...draft.scan, timeWindowDays } })}
                       />
                       <NumberField
-                        label="Prefix"
+                        label="Burst"
                         hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
                         value={draft.scan.prefixSeconds}
                         onChange={(prefixSeconds) => setDraft({ ...draft, scan: { ...draft.scan, prefixSeconds } })}
@@ -1350,7 +1350,7 @@ function ScheduleSettingsDialog({
                 <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={local.scan.percent} onChange={(percent) => patchScan({ percent })} />
                 <NumberField label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
                 <NumberField
-                  label="Prefix"
+                  label="Burst"
                   hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
                   value={local.scan.prefixSeconds}
                   onChange={(prefixSeconds) => patchScan({ prefixSeconds })}

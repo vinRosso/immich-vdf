@@ -34,6 +34,7 @@ import {
 } from "@/lib/immich-album-sync";
 import { groupHasImmichArchived } from "@/lib/immich-archived";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
+import { flagLabel } from "@/lib/prefix-flag";
 import { publishTrashSavedBytes } from "@/lib/trash-events";
 import type { ClientGroup, ClientItem, MediaInfo, SectionId } from "@/lib/types";
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Star, Volume2, VolumeX, XIcon } from "lucide-react";
@@ -1075,7 +1076,7 @@ function Player({
               <StackMembershipBadge item={item} groupItems={groupItems} />
               {!item.matched ? <Badge variant="destructive">Unmatched</Badge> : null}
               {item.flags.map((flag) => (
-                <Badge key={flag} variant="secondary">{flag}</Badge>
+                <Badge key={flag} variant="secondary">{flagLabel(flag)}</Badge>
               ))}
             </div>
             {section === "immich" && item.assetId && immichAlbumSync ? (
@@ -1092,7 +1093,7 @@ function Player({
             <StackMembershipBadge item={item} groupItems={groupItems} />
             {!item.matched ? <Badge variant="destructive">Unmatched</Badge> : null}
             {item.flags.map((flag) => (
-              <Badge key={flag} variant="secondary">{flag}</Badge>
+              <Badge key={flag} variant="secondary">{flagLabel(flag)}</Badge>
             ))}
           </div>
           {section === "immich" && item.assetId && immichAlbumSync ? (
