@@ -24,20 +24,33 @@ export function clustersFromLists(lists, windowMs, windowDays = 0) {
   return clusters;
 }
 
-function coveredBy(root, target) {
-  if (target === root) return true;
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+function scopePath(filePath, pathImpl) {
+  let norm = pathImpl.normalize(filePath);
+  const root = pathImpl.parse(norm).root;
+  while (norm.length > root.length && (norm.endsWith("/") || norm.endsWith("\\"))) {
+    norm = norm.slice(0, -1);
+  }
+  return norm;
+}
+
+/** Windows paths are case-insensitive. A trailing separator must not make `photos` cover `photos-old`. */
+export function coveredBy(root, target, pathImpl = path) {
+  const fold = pathImpl.sep === "\\";
+  const left = scopePath(root, pathImpl);
+  const right = scopePath(target, pathImpl);
+  const a = fold ? left.toLowerCase() : left;
+  const b = fold ? right.toLowerCase() : right;
+  if (a === b) return true;
+  const sep = fold ? "\\" : "/";
+  const prefix = a.endsWith(sep) ? a : a + sep;
+  return b.startsWith(prefix);
 }
 
 /** Per-file include/exclude check. Images in one slice do not share a prefix constraint. */
-export function filterInScope(images, includes, excludes) {
-  const includeRoots = includes.map((root) => path.normalize(root));
-  const excludeRoots = excludes.map((root) => path.normalize(root));
+export function filterInScope(images, includes, excludes, pathImpl = path) {
   return images.filter((image) => {
-    const norm = path.normalize(image.path);
-    if (excludeRoots.some((root) => coveredBy(root, norm))) return false;
-    return includeRoots.some((root) => coveredBy(root, norm));
+    if (excludes.some((root) => coveredBy(root, image.path, pathImpl))) return false;
+    return includes.some((root) => coveredBy(root, image.path, pathImpl));
   });
 }
 

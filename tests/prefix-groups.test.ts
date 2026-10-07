@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { similarityRange } from "../src/components/group-result-card";
+import { filterInScope } from "../src/lib/prefix-cluster-worker.mjs";
 import {
   applyPrefixClusters,
   assignPrefixBuckets,
+  comparePath,
+  filenameCaptureMs,
   filenamePrefixKey,
+  isVideoFileName,
   imagesInScanScope,
   imagesInScanScopeParallel,
   parseImageTimes,
@@ -33,9 +37,64 @@ test("a trailing number is the part that may differ", () => {
   assert.equal(filenamePrefixKey("IMG_1234.jpg"), filenamePrefixKey("IMG_1235.JPG"));
   assert.equal(filenamePrefixKey("photo+1.jpg"), filenamePrefixKey("photo.jpg"));
   assert.equal(filenamePrefixKey("Vacation 01.jpg"), filenamePrefixKey("Vacation 02.jpg"));
+  assert.equal(filenamePrefixKey("IMG_1234.jpg"), filenamePrefixKey("IMG_1234_HDR.jpg"));
+  assert.equal(filenamePrefixKey("DSC_0001.COVER.jpg"), filenamePrefixKey("DSC_0002.NIGHT.MP.jpg"));
   assert.notEqual(filenamePrefixKey("IMG_1234.jpg"), filenamePrefixKey("DSC_1234.jpg"));
   assert.notEqual(filenamePrefixKey("photo.jpg"), filenamePrefixKey("photograph.jpg"));
+  assert.equal(filenamePrefixKey("my.photo.jpg"), filenamePrefixKey("my.image.png"));
   assert.equal(filenamePrefixKey("0001.jpg"), null);
+});
+
+test("library names keep the stable prefix and read a clock only when one is there", () => {
+  assert.equal(filenamePrefixKey("IMG_1798.jpg"), "img");
+  assert.equal(filenamePrefixKey("IMG_20260307_181604_952.jpg"), "img");
+  assert.equal(filenamePrefixKey("IMG_20260530_172025935_HDR.jpg"), "img");
+  assert.equal(filenamePrefixKey("IMG-20260213-WA0022.jpg"), "img");
+  assert.equal(filenamePrefixKey("DSCF3843.jpg"), "dscf");
+  assert.equal(filenamePrefixKey("9kl og italienere.jpg"), "9kl og italienere");
+  assert.equal(filenamePrefixKey("9kl og italienere.png"), filenamePrefixKey("9kl og italienere.jpg"));
+  assert.equal(filenamePrefixKey("34258669_551683031892897_2220905439615254528_o.jpg"), null);
+  assert.equal(filenameCaptureMs("IMG_1798.jpg"), null);
+  assert.equal(filenameCaptureMs("IMG-20260213-WA0022.jpg"), null);
+  assert.equal(filenameCaptureMs("DSCF3843.jpg"), null);
+  assert.equal(filenameCaptureMs("IMG_20260307_181604_952.jpg"), Date.UTC(2026, 2, 7, 18, 16, 4, 952));
+  assert.equal(filenameCaptureMs("IMG_20260530_172025935_HDR.jpg"), Date.UTC(2026, 4, 30, 17, 20, 25, 935));
+  assert.equal(isVideoFileName("my.clip.mp4"), true);
+  assert.equal(isVideoFileName("my.image.png"), false);
+});
+
+test("jpg and png with the same prefix group, and a video does not", () => {
+  const clusters = prefixClusters(
+    [image("/a/my.photo.jpg", 0), image("/a/my.image.png", 2), image("/a/my.clip.mp4", 1)],
+    5,
+  );
+  assert.deepEqual(clusters, [["/a/my.photo.jpg", "/a/my.image.png"]]);
+});
+
+test("names without a clock use the stored file time, and any tag after the number is ignored", () => {
+  assert.equal(filenameCaptureMs("IMG_1000.jpg"), null);
+  assert.equal(filenameCaptureMs("DSC_0001.COVER.jpg"), null);
+  const clusters = prefixClusters(
+    [image("/a/DSC_0001.COVER.jpg", 0), image("/a/DSC_0002_HDR.jpg", 4), image("/a/DSC_0003.jpg", 30)],
+    5,
+  );
+  assert.deepEqual(clusters, [["/a/DSC_0001.COVER.jpg", "/a/DSC_0002_HDR.jpg"]]);
+});
+
+test("a name that ends in a date and time groups on that clock, whatever the tag is", () => {
+  const names = [
+    "PXL_20260926_170115345.MP.jpg",
+    "PXL_20260926_170116518.jpg",
+    "PXL_20260926_170117328.jpg",
+    "PXL_20260926_170118483.jpg",
+  ];
+  for (const name of names) assert.equal(filenamePrefixKey(name), "pxl");
+  assert.equal(filenameCaptureMs(names[0]!), Date.UTC(2026, 8, 26, 17, 1, 15, 345));
+  assert.equal(filenameCaptureMs(names[3]!), Date.UTC(2026, 8, 26, 17, 1, 18, 483));
+  // File write times can be minutes apart even when the shutters were not.
+  const images = names.map((name, index) => image(`/memories/${name}`, index * 3600));
+  const clusters = prefixClusters(images, 5, 7).map((paths) => paths.map((file) => file.split("/").pop()).sort());
+  assert.deepEqual(clusters, [[...names].sort()]);
 });
 
 test("images within the window that share a prefix become one group", () => {
@@ -130,6 +189,44 @@ test("files that are not already grouped become their own group", () => {
   assert.equal(next.length, 1);
   assert.equal(next[0].groupId, "prefix:1");
   assert.equal(next[0].items.length, 2);
+});
+
+test("a file name is read from a Windows or Linux path", () => {
+  assert.equal(filenamePrefixKey("\\\\god\\storage\\kevin\\2_memories\\IMG_1798.jpg"), "img");
+  assert.equal(filenamePrefixKey("/immich/library/admin/IMG_1798.jpg"), "img");
+  assert.equal(filenamePrefixKey("C:\\photos\\my.image.png"), filenamePrefixKey("/photos/my.photo.jpg"));
+});
+
+test("the same file matches across slashes, and case only on Windows", () => {
+  const windows = "\\\\god\\storage\\Kevin\\2_memories\\IMG_1.JPG";
+  const slashes = "//god/storage/kevin/2_memories/IMG_1.jpg";
+  assert.equal(comparePath(windows, "win32"), comparePath(slashes, "win32"));
+  assert.notEqual(comparePath(windows, "linux"), comparePath(slashes, "linux"));
+  assert.equal(comparePath(windows, "linux"), "//god/storage/Kevin/2_memories/IMG_1.JPG");
+});
+
+test("include folders cover the same files on Windows and Linux", () => {
+  const photo = (file: string) => ({ path: file, dateCreatedMs: 1, sizeBytes: 1 });
+  const winInside = "\\\\god\\storage\\kevin\\2_memories\\2026\\IMG_1.jpg";
+  const winSibling = "\\\\god\\storage\\kevin\\2_memories-old\\IMG_1.jpg";
+  const winArchive = "\\\\god\\storage\\kevin\\2_memories\\archive\\IMG_2.jpg";
+  const winHidden = "\\\\god\\storage\\kevin\\2_memories\\..hidden.jpg";
+  const winSlash = "//god/storage/kevin/2_memories/IMG_3.jpg";
+  const winKept = filterInScope(
+    [photo(winInside), photo(winSibling), photo(winArchive), photo(winHidden), photo(winSlash)],
+    ["\\\\god\\storage\\Kevin\\2_memories\\"],
+    ["\\\\god\\storage\\kevin\\2_memories\\archive"],
+    path.win32,
+  );
+  assert.deepEqual(winKept.map((entry) => entry.path), [winInside, winHidden, winSlash]);
+
+  const linuxKept = filterInScope(
+    [photo("/immich/library/IMG_1.jpg"), photo("/immich/library-old/IMG_1.jpg"), photo("/Immich/library/IMG_1.jpg")],
+    ["/immich/library"],
+    [],
+    path.posix,
+  );
+  assert.deepEqual(linuxKept.map((entry) => entry.path), ["/immich/library/IMG_1.jpg"]);
 });
 
 test("prefix groups only use images inside the current includes and outside excludes", async () => {

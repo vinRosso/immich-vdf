@@ -97,6 +97,8 @@ export function fingerprintMatchingSettings(scan: ScanSettings): string {
     ignoreBlackPixels: scan.ignoreBlackPixels,
     ignoreWhitePixels: scan.ignoreWhitePixels,
     prefixSeconds: scan.prefixSeconds,
+    // Bump when name-and-time grouping changes, so a saved compare is not reused.
+    prefixRevision: 4,
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }

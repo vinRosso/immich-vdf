@@ -1,5 +1,7 @@
-import { Worker } from "node:worker_threads";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { clustersFromLists, filterInScope } from "./prefix-cluster-worker.mjs";
 import { PREFIX_FLAG } from "./prefix-flag";
 import type { StoredGroup, StoredItem } from "./types";
@@ -14,15 +16,81 @@ export type TimedImage = {
   fileName?: string | null;
 };
 
-/** File name used for the prefix: the original name, without an Immich `name+1` collision suffix. */
-export function filenamePrefixKey(fileName: string): string | null {
+/** Same set as VDF.Core.FileUtils video extensions. Prefix groups are images only. */
+const VIDEO_EXTENSIONS = new Set([
+  ".mp4", ".wmv", ".avi", ".mkv", ".flv", ".mov", ".mpg", ".mpeg", ".m4v", ".asf", ".f4v",
+  ".webm", ".divx", ".m2t", ".m2ts", ".mts", ".vob", ".ts", ".rmvb", ".rm",
+]);
+/** Date plus clock, with milliseconds glued (`172025935`) or separated (`181604_952`). */
+const CAPTURE_STAMP = /(\d{4})(\d{2})(\d{2})[\s._-](\d{2})(\d{2})(\d{2})(?:(\d{1,3})|[\s._-](\d{1,3}))?$/;
+/** Copy counters cameras and Immich append: `name+1`, `name (1)`, `name~2`. */
+const COPY_SUFFIX = /(?:~\d+|\+\d+|\s*\(\d+\))$/;
+/** A trailing word: `.photo`, `_HDR`, `-WA`, `.NIGHT`. Spaces are part of the name, not a separator. */
+const LETTER_TAG = /[._-][A-Za-z][A-Za-z0-9_-]*$/;
+const TRAILING_NUMBER = /[\s._-]*\d+$/;
+
+function nameStem(fileName: string): string {
   const base = fileName.replace(/\\/g, "/").split("/").pop() ?? fileName;
   const dot = base.lastIndexOf(".");
-  let stem = dot > 0 ? base.slice(0, dot) : base;
-  stem = stem.replace(/\+\d+$/, "").replace(/\s*\(\d+\)$/, "");
-  const stripped = stem.replace(/[\s._-]*\d+$/, "").replace(/[\s._-]+$/, "").trim();
-  if (!stripped) return null;
-  return stripped.toLocaleLowerCase();
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+function extensionOf(fileName: string): string {
+  const base = fileName.replace(/\\/g, "/").split("/").pop() ?? fileName;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot).toLowerCase() : "";
+}
+
+export function isVideoFileName(fileName: string): boolean {
+  return VIDEO_EXTENSIONS.has(extensionOf(fileName));
+}
+
+/** Drop copy counters and letter tags. Numbers stay, so a clock at the end can still be read. */
+function clockStem(fileName: string): string {
+  let stem = nameStem(fileName);
+  let next = stem;
+  do {
+    stem = next;
+    next = stem.replace(COPY_SUFFIX, "").replace(LETTER_TAG, "");
+  } while (next !== stem);
+  return stem;
+}
+
+/**
+ * Stable start of the name. Trailing numbers and words (`.photo`, `_HDR`, `-WA0022`)
+ * come off; a title with spaces stays whole. Empty when the name is only numbers.
+ */
+export function filenamePrefixKey(fileName: string): string | null {
+  let stem = nameStem(fileName);
+  let next = stem;
+  do {
+    stem = next;
+    next = stem.replace(COPY_SUFFIX, "").replace(LETTER_TAG, "").replace(TRAILING_NUMBER, "").replace(/[\s._-]+$/, "").trim();
+  } while (next !== stem);
+  if (!stem) return null;
+  return stem.toLocaleLowerCase();
+}
+
+/**
+ * Clock encoded in the file name, when the name has a date and a time.
+ * `IMG_1798` and `IMG-20260213-WA0022` have neither, so grouping uses the stored file time.
+ */
+export function filenameCaptureMs(fileName: string): number | null {
+  const match = clockStem(fileName).match(CAPTURE_STAMP);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const fraction = match[7] || match[8] || "";
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const millis = fraction.length === 0 ? 0 : Number(fraction.padEnd(3, "0"));
+  if (!Number.isFinite(millis) || millis > 999) return null;
+  const stamp = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+  return Number.isFinite(stamp) ? stamp : null;
 }
 
 /**
@@ -98,19 +166,41 @@ export async function imagesInScanScopeParallel(
 function prefixBuckets(images: readonly TimedImage[]): TimedImage[][] {
   const buckets = new Map<string, TimedImage[]>();
   for (const image of images) {
-    if (!Number.isFinite(image.dateCreatedMs) || image.dateCreatedMs <= 0) continue;
     const name = image.fileName?.trim() || fileNameOf(image.path);
+    if (isVideoFileName(name)) continue;
     const key = filenamePrefixKey(name);
     if (!key) continue;
+    const captured = filenameCaptureMs(name);
+    const dateCreatedMs = captured ?? image.dateCreatedMs;
+    if (!Number.isFinite(dateCreatedMs) || dateCreatedMs <= 0) continue;
+    const dated = dateCreatedMs === image.dateCreatedMs ? image : { ...image, dateCreatedMs };
     const list = buckets.get(key);
-    if (list) list.push(image);
-    else buckets.set(key, [image]);
+    if (list) list.push(dated);
+    else buckets.set(key, [dated]);
   }
   return [...buckets.values()];
 }
 
+/**
+ * Spawn the script on disk. Next copies `new URL("./….mjs", import.meta.url)`
+ * into the build without its sibling import, and that copy fails to start.
+ */
+function workerScriptReady(file: string): boolean {
+  return existsSync(file) && existsSync(path.join(path.dirname(file), "capture-window.mjs"));
+}
+
+function prefixWorkerFile(): string {
+  const fromCwd = path.join(process.cwd(), "src", "lib", "prefix-cluster-worker.mjs");
+  if (workerScriptReady(fromCwd)) return fromCwd;
+  // tsx loads this module from src/lib on both Windows and Linux. The Next build's
+  // copied worker does not sit next to capture-window.mjs, so that copy is skipped.
+  const beside = fileURLToPath(new URL("./prefix-cluster-worker.mjs", import.meta.url));
+  if (workerScriptReady(beside)) return beside;
+  throw new Error(`Prefix worker script is missing: ${fromCwd}`);
+}
+
 function runPrefixWorker<T>(workerData: object): Promise<T> {
-  const workerFile = fileURLToPath(new URL("./prefix-cluster-worker.mjs", import.meta.url));
+  const workerFile = prefixWorkerFile();
   return new Promise((resolve, reject) => {
     const worker = new Worker(workerFile, { workerData });
     let settled = false;
@@ -278,9 +368,14 @@ export function applyPrefixClusters(
     .map((group) => ({ groupId: group.groupId, items: group.items }));
 }
 
-export function pathKey(filePath: string): string {
+/** Slashes are folded either way. Only Windows compares paths without case. */
+export function comparePath(filePath: string, platform: NodeJS.Platform): string {
   const slashed = filePath.replace(/\\/g, "/");
-  return process.platform === "win32" ? slashed.toLowerCase() : slashed;
+  return platform === "win32" ? slashed.toLowerCase() : slashed;
+}
+
+export function pathKey(filePath: string): string {
+  return comparePath(filePath, process.platform);
 }
 
 function fileNameOf(filePath: string): string {
