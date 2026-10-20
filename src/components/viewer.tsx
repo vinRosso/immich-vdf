@@ -73,6 +73,7 @@ export function Viewer({
   onClose,
   onActionDone,
   ignoredKey = null,
+  neighbors = [],
 }: {
   section: SectionId;
   group: ClientGroup | null;
@@ -85,6 +86,8 @@ export function Viewer({
   onActionDone: () => void | Promise<void>;
   /** When set, the group is on the ignored list and the header action restores it. */
   ignoredKey?: string | null;
+  /** The groups before and after this one, so their first pictures can load while this one is read. */
+  neighbors?: (ClientGroup | undefined)[];
 }) {
   const [left, setLeft] = useState(0);
   const [right, setRight] = useState(1);
@@ -165,6 +168,25 @@ export function Viewer({
       img.src = previewImageSrc(section, item);
     }
   }, [group, imageOnly, previewIndex, section]);
+
+  // Once this group has had its turn, warm the next and previous ones: posters, the first photo, and the
+  // media info for videos, so stepping to them shows pictures at once.
+  const neighborKey = neighbors.map((entry) => entry?.groupId ?? "").join("|");
+  useEffect(() => {
+    if (!group) return;
+    const timer = window.setTimeout(() => {
+      for (const neighbor of neighbors) {
+        if (!neighbor) continue;
+        neighbor.items.slice(0, 6).forEach((item, position) => {
+          const img = new Image();
+          img.src = item.isImage && position === 0 ? previewImageSrc(section, item) : posterSrc(section, item);
+          if (!item.isImage && !(section === "immich" && item.assetId)) void loadMediaInfo(section, item.path).catch(() => undefined);
+        });
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group?.groupId, neighborKey, section]);
 
   useEffect(() => {
     sync.reset();

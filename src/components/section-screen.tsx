@@ -940,6 +940,7 @@ function Results({
           if (next) setOpenGroupId(next.groupId);
         }}
         onClose={() => setOpenGroupId(null)}
+        neighbors={openIndex >= 0 ? [sortedGroups[openIndex - 1], sortedGroups[openIndex + 1]] : []}
         onActionDone={() => openGroupAfterRefresh(openIndex, openGroupId)}
       />
       <Dialog open={bulkConfirm !== null} onOpenChange={(open) => !open && !bulkBusy && setBulkConfirm(null)}>
