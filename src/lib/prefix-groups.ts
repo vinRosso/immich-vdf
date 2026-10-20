@@ -143,6 +143,9 @@ export async function prefixClustersParallel(
   return parts.flat();
 }
 
+/** Below this many images, copying the list into workers costs more than filtering it here. */
+const SCOPE_WORKER_MIN_IMAGES = 200_000;
+
 /** Include/exclude filter. Each file is independent, so slices can run together. */
 export async function imagesInScanScopeParallel(
   images: readonly TimedImage[],
@@ -151,7 +154,7 @@ export async function imagesInScanScopeParallel(
   parallelism: number,
 ): Promise<TimedImage[]> {
   const workers = Math.max(1, Math.floor(parallelism) || 1);
-  if (workers === 1 || images.length < 2) return imagesInScanScope(images, includes, excludes);
+  if (workers === 1 || images.length < SCOPE_WORKER_MIN_IMAGES) return imagesInScanScope(images, includes, excludes);
   const size = Math.ceil(images.length / Math.min(workers, images.length));
   const slices: TimedImage[][] = [];
   for (let index = 0; index < images.length; index += size) {

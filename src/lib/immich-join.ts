@@ -9,16 +9,30 @@ function normalizePath(value: string): string {
   return slash(value.replace(/\\/g, "/"));
 }
 
+// Called once per item, so the sorted copy is kept for as long as the same maps array is in use.
+const orderedByTo = new WeakMap<PathMapEntry[], PathMapEntry[]>();
+const orderedByFrom = new WeakMap<PathMapEntry[], PathMapEntry[]>();
+
 function orderedMaps(maps: PathMapEntry[]): PathMapEntry[] {
-  return [...maps]
-    .filter((entry) => entry.from.trim() && entry.to.trim())
-    .sort((a, b) => slash(b.to).length - slash(a.to).length);
+  let ordered = orderedByTo.get(maps);
+  if (!ordered) {
+    ordered = [...maps]
+      .filter((entry) => entry.from.trim() && entry.to.trim())
+      .sort((a, b) => slash(b.to).length - slash(a.to).length);
+    orderedByTo.set(maps, ordered);
+  }
+  return ordered;
 }
 
 function orderedFromMaps(maps: PathMapEntry[]): PathMapEntry[] {
-  return [...maps]
-    .filter((entry) => entry.from.trim() && entry.to.trim())
-    .sort((a, b) => slash(b.from).length - slash(a.from).length);
+  let ordered = orderedByFrom.get(maps);
+  if (!ordered) {
+    ordered = [...maps]
+      .filter((entry) => entry.from.trim() && entry.to.trim())
+      .sort((a, b) => slash(b.from).length - slash(a.from).length);
+    orderedByFrom.set(maps, ordered);
+  }
+  return ordered;
 }
 
 export function cliPathToOriginal(cliPath: string, maps: PathMapEntry[]): string | null {
@@ -82,7 +96,7 @@ export function attachAssets(groups: StoredGroup[], assets: ImmichAsset[], maps:
   const byCliPath = buildCliIndex(assets, maps);
   return groups.map((group) => ({
     ...group,
-    items: group.items.map((item) => decorate(item, byCliPath, assets, maps)),
+    items: group.items.map((item) => decorate(item, byCliPath, maps)),
   }));
 }
 
@@ -133,16 +147,12 @@ export function dropImmichTrashedFromGroups(
   return kept;
 }
 
-function decorate(
-  item: StoredItem,
-  byCliPath: Map<string, ImmichAsset>,
-  assets: ImmichAsset[],
-  maps: PathMapEntry[],
-): StoredItem {
+function decorate(item: StoredItem, byCliPath: Map<string, ImmichAsset>, maps: PathMapEntry[]): StoredItem {
   const cliKey = normalizePath(item.path);
   const indexed = byCliPath.get(cliKey);
   const originalPath = indexed ? slash(indexed.originalPath) : cliPathToOriginal(item.path, maps);
-  const asset = indexed ?? matchAsset(originalPath, assets);
+  // The index also holds every asset under its own original path, so no scan over all assets is needed.
+  const asset = indexed ?? (originalPath ? byCliPath.get(normalizePath(originalPath)) : undefined);
   return {
     ...item,
     originalPath,

@@ -221,27 +221,39 @@ function parseTrashedFromSearchBody(body: unknown): { entries: { id: string; ori
 export async function listTrashedImmichAssets(baseUrl: string, apiKey: string): Promise<TrashedImmichLookup> {
   const ids = new Set<string>();
   const originalPaths = new Set<string>();
-  for (const type of ["IMAGE", "VIDEO"]) {
-    let page = 1;
-    for (let guard = 0; guard < 500; guard += 1) {
-      const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
-        method: "POST",
-        headers: headers(apiKey, true),
-        body: searchMetadataBody({ page, type, withDeleted: true, trashedAfter: TRASHED_AFTER_EPOCH }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok) throw new Error(`Immich trash search failed (${response.status})`);
-      const batch = parseTrashedFromSearchBody(await response.json());
-      for (const entry of batch.entries) {
-        ids.add(entry.id);
-        if (entry.originalPath) originalPaths.add(entry.originalPath.replace(/\\/g, "/"));
-      }
-      if (!batch.nextPage || batch.entries.length === 0) break;
-      const parsed = Number(batch.nextPage);
-      page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+  // Images and videos are separate searches, so they page side by side.
+  const byType = await Promise.all(["IMAGE", "VIDEO"].map((type) => listTrashedOfType(baseUrl, apiKey, type)));
+  for (const entries of byType) {
+    for (const entry of entries) {
+      ids.add(entry.id);
+      if (entry.originalPath) originalPaths.add(entry.originalPath.replace(/\\/g, "/"));
     }
   }
   return { ids, originalPaths };
+}
+
+async function listTrashedOfType(
+  baseUrl: string,
+  apiKey: string,
+  type: string,
+): Promise<{ id: string; originalPath: string | null }[]> {
+  const entries: { id: string; originalPath: string | null }[] = [];
+  let page = 1;
+  for (let guard = 0; guard < 500; guard += 1) {
+    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+      method: "POST",
+      headers: headers(apiKey, true),
+      body: searchMetadataBody({ page, type, withDeleted: true, trashedAfter: TRASHED_AFTER_EPOCH }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`Immich trash search failed (${response.status})`);
+    const batch = parseTrashedFromSearchBody(await response.json());
+    entries.push(...batch.entries);
+    if (!batch.nextPage || batch.entries.length === 0) break;
+    const parsed = Number(batch.nextPage);
+    page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+  }
+  return entries;
 }
 
 /** Asset ids currently in Immich trash (for filtering scan results and cache). */
@@ -252,17 +264,22 @@ export async function listTrashedImmichAssetIds(baseUrl: string, apiKey: string)
 /** Asset ids Immich marks as archived (hidden from the main timeline). */
 export async function listArchivedImmichAssetIds(baseUrl: string, apiKey: string): Promise<Set<string>> {
   const ids = new Set<string>();
-  for (const type of ["IMAGE", "VIDEO"]) {
-    let page = 1;
-    for (let guard = 0; guard < 500; guard += 1) {
-      const batch = await searchMetadataPage(baseUrl, apiKey, { page, type, isArchived: true, withArchived: true });
-      for (const asset of batch.items) {
-        if (asset.isArchived) ids.add(asset.id);
-      }
-      if (!batch.nextPage || batch.items.length === 0) break;
-      const parsed = Number(batch.nextPage);
-      page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+  const byType = await Promise.all(["IMAGE", "VIDEO"].map((type) => listArchivedOfType(baseUrl, apiKey, type)));
+  for (const found of byType) for (const id of found) ids.add(id);
+  return ids;
+}
+
+async function listArchivedOfType(baseUrl: string, apiKey: string, type: string): Promise<string[]> {
+  const ids: string[] = [];
+  let page = 1;
+  for (let guard = 0; guard < 500; guard += 1) {
+    const batch = await searchMetadataPage(baseUrl, apiKey, { page, type, isArchived: true, withArchived: true });
+    for (const asset of batch.items) {
+      if (asset.isArchived) ids.push(asset.id);
     }
+    if (!batch.nextPage || batch.items.length === 0) break;
+    const parsed = Number(batch.nextPage);
+    page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
   }
   return ids;
 }

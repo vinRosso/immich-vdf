@@ -93,8 +93,17 @@ export async function applyLibraryStacks(
   apiKey: string,
   maps: PathMapEntry[],
   parallelism: number,
+  /** The stack list when the caller already started fetching it. */
+  listed?: Promise<ImmichStack[]>,
 ): Promise<StoredGroup[]> {
-  return syncGroupsWithImmichStacks(groups, baseUrl, apiKey, maps, parallelism, await listImmichStacks(baseUrl, apiKey));
+  return syncGroupsWithImmichStacks(
+    groups,
+    baseUrl,
+    apiKey,
+    maps,
+    parallelism,
+    await (listed ?? listImmichStacks(baseUrl, apiKey)),
+  );
 }
 
 export async function expandImmichGroups(

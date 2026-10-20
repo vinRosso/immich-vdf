@@ -55,6 +55,39 @@ describe("immich path join", () => {
     assert.equal(groups[0].items[0].originalPath, "/data/clip.mkv");
   });
 
+  it("finds the asset by its original path when the scan path is another mount of the same folder", () => {
+    const overlapping = [
+      { from: "/data", to: "/mnt/immich" },
+      { from: "/data", to: "/mnt/alt" },
+    ];
+    const item = {
+      path: "/mnt/alt/clip.mkv",
+      similarity: 1,
+      sizeBytes: 1,
+      durationSeconds: 1,
+      resolution: null,
+      width: 0,
+      height: 0,
+      bitrateKbps: 0,
+      bitDepth: 0,
+      audioBitrateKbps: 0,
+      dateCreatedMs: 0,
+      flags: [],
+      partialClipOffsetSeconds: 0,
+      isImage: false,
+      format: null,
+      fps: 0,
+      assetId: null,
+      originalPath: null,
+    };
+    const [group] = attachAssets([{ groupId: "g1", items: [item] }], [{ id: "a1", originalPath: "/data/clip.mkv" }], overlapping);
+    assert.equal(group.items[0].assetId, "a1");
+    assert.equal(group.items[0].originalPath, "/data/clip.mkv");
+    const [unmatched] = attachAssets([{ groupId: "g2", items: [item] }], [{ id: "a2", originalPath: "/data/other.mkv" }], overlapping);
+    assert.equal(unmatched.items[0].assetId, null);
+    assert.equal(unmatched.items[0].originalPath, "/data/clip.mkv");
+  });
+
   it("collects original paths and reads them from the asset cache", () => {
     const paths = originalPathsForGroups(
       [

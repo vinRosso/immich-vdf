@@ -9,7 +9,7 @@ import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts"
 import { errorText } from "./errors";
 import { assetsForOriginalPaths } from "./immich-asset-index";
 import { attachAssets, dropImmichTrashedFromGroups, immichTrashedCredits, originalPathsForGroups } from "./immich-join";
-import { listTrashedImmichAssets } from "./immich";
+import { listImmichStacks, listTrashedImmichAssets } from "./immich";
 import { applyLibraryStacks, expandImmichGroups } from "./immich-stack-sync";
 import { dropCompleteStacks } from "./immich-stacks";
 import { resolveImmichPathMap } from "./immich-path-map";
@@ -43,7 +43,7 @@ import {
 } from "./store";
 import { probeImageBitDepth } from "./probe";
 import type { CompareDecision } from "./compare-decision";
-import type { ScanSettings, SectionId, Settings, StoredGroup, StoredItem } from "./types";
+import type { ScanSettings, SectionId, Settings, StoredGroup, StoredItem, StoredResults } from "./types";
 import { cancelPosterWarmup, warmSections } from "./thumb-warm";
 import { postWebhook } from "./webhook";
 
@@ -215,15 +215,18 @@ async function runScanSteps(
     return;
   }
 
-  const decision = await timer.time("Decision", async () => {
+  const { decision, previous } = await timer.time("Decision", async () => {
     const previous = await loadResults(section);
     const previousInventory = await loadStoredInventory(section);
-    return decideCompareRun({
-      scan: scanSettings,
-      inventory,
+    return {
       previous,
-      previousInventory,
-    });
+      decision: decideCompareRun({
+        scan: scanSettings,
+        inventory,
+        previous,
+        previousInventory,
+      }),
+    };
   });
   scan.addLine(decision.logMessage);
 
@@ -280,6 +283,7 @@ async function runScanSteps(
     cancelled: false,
     startedAt,
     timer,
+    previous,
   });
 }
 
@@ -314,6 +318,8 @@ type FinishInput = {
       kind: "compare";
       code: number | null;
       signal: NodeJS.Signals | null;
+      /** Results from before this run, read once for the decision. Their bit depths seed the new ones. */
+      previous: StoredResults | null;
       paths: ScanPaths;
       scanSettings: ScanSettings;
       inventory: InventoryEntry[];
@@ -430,6 +436,9 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
       error = cliFailure(input, scan.cliTail());
     } else {
       scan.addLine("[scan] Processing results…");
+      // Path map, trash list and stack list do not depend on the groups, so they load while files are read.
+      const immichFetch =
+        section === "immich" && settings.immich.baseUrl && settings.immich.apiKey ? startImmichFetch(settings) : null;
       const visualGroups = await timer.time("Parse results", async () =>
         parseCliResults(await readFile(paths.outputFile, "utf8")).map(toStoredGroup),
       );
@@ -459,12 +468,11 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           () => scan.cancelled,
         ),
       );
-      const previous = await timer.time("Load saved results", () => loadResults(section));
       let groups = await timer.time("Bit depth", () =>
         enrichImageBitDepth(
           kept,
           input.scanSettings.parallelism,
-          bitDepthsFromResults(previous),
+          bitDepthsFromResults(input.previous),
           (done, total) => {
             if (done === total || done % 200 === 0) scan.addLine(`[scan] Processing results… ${done}/${total} images`);
           },
@@ -482,9 +490,9 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           try {
             scan.addLine("[scan] Matching Immich library…");
             const creds = immichCredentials(settings);
-            const maps = await timer.time("Immich path map", () => resolveImmichPathMap(creds));
-            const trashed = await timer.time("Immich trash list", () =>
-              listTrashedImmichAssets(settings.immich.baseUrl, settings.immich.apiKey),
+            const fetched = immichFetch ?? startImmichFetch(settings);
+            const [maps, trashed] = await timer.time("Immich fetch (waited)", () =>
+              Promise.all([fetched.maps, fetched.trashed]),
             );
             const assets = await timer.time("Immich assets", () =>
               assetsForOriginalPaths(
@@ -508,7 +516,7 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
             scan.addLine("[scan] Reading Immich stacks…");
             try {
               groups = await timer.time("Immich stacks", () =>
-                applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
+                applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism, fetched.stacks),
               );
             } catch (err) {
               scan.addLine(redact(errorText(err), secrets));
@@ -557,6 +565,18 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
     ok = false;
   }
   return { ok, error, groupCount };
+}
+
+/** Immich requests that only need the connection settings. Failures surface where the result is awaited. */
+function startImmichFetch(settings: Settings) {
+  const creds = immichCredentials(settings);
+  const fetched = {
+    maps: resolveImmichPathMap(creds),
+    trashed: listTrashedImmichAssets(creds.baseUrl, creds.apiKey),
+    stacks: listImmichStacks(creds.baseUrl, creds.apiKey),
+  };
+  for (const pending of Object.values(fetched)) pending.catch(() => undefined);
+  return fetched;
 }
 
 function groupShape(groups: StoredGroup[]): string {
