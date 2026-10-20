@@ -32,6 +32,7 @@ import { runPool } from "./concurrency";
 import { cliFailure, type CliOutcome } from "./cli-failure";
 import { nativeFfmpegEnv, nativeFfmpegPlan, shouldRetryWithoutNative } from "./native-ffmpeg";
 import { PhaseTimer } from "./phase-timer";
+import { slotPatch } from "./schedule";
 import { TRASH_DIR } from "./trash-dir";
 import { redact } from "./redact";
 import { getScan } from "./scan";
@@ -420,7 +421,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
       groupCount,
       error: message,
       trigger: scan.trigger,
-      ...(scan.trigger === "schedule" ? { slotKey: scan.slotKey } : {}),
+      ...slotPatch(scan.trigger, scan.slotKey, scan.interrupted),
     });
     if (scan.trigger === "schedule" && settings?.webhookUrl) {
       try {
@@ -463,14 +464,20 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           input.capture,
         );
         const shapeBefore = groupShape(existing.groups);
-        let savedGroups = reused.groups;
+        // Trash, archive and stack changes made in Immich since the last compare.
+        const refreshed =
+          section === "immich"
+            ? await joinWithImmich(reused.groups, settings, input.scanSettings, timer)
+            : { groups: reused.groups, warning: existing.warning ?? null };
+        let savedGroups = refreshed.groups;
         await updateResults(section, (current) => {
           if (!current) return null;
           // A trash or stack action may have changed the groups while this ran. Keep its result.
           const untouched = groupShape(current.groups) === shapeBefore;
-          savedGroups = untouched ? reused.groups : current.groups;
+          savedGroups = untouched ? refreshed.groups : current.groups;
           return {
             ...current,
+            warning: untouched ? refreshed.warning : current.warning,
             groups: savedGroups,
             finishedAt: new Date().toISOString(),
             durationMs: pipelineDurationMs(input.startedAt),
@@ -535,54 +542,9 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
       } else {
       let warning: string | null = null;
       if (section === "immich") {
-        if (!settings.immich.baseUrl || !settings.immich.apiKey) {
-          warning = "Save the Immich URL and API key to match files to assets.";
-        } else {
-          try {
-            scan.addLine("[scan] Matching Immich library…");
-            const creds = immichCredentials(settings);
-            const fetched = immichFetch ?? startImmichFetch(settings);
-            const [maps, trashed] = await timer.time("Immich fetch (waited)", () =>
-              Promise.all([fetched.maps, fetched.trashed]),
-            );
-            const assets = await timer.time("Immich assets", () =>
-              assetsForOriginalPaths(
-                settings.immich.baseUrl,
-                settings.immich.apiKey,
-                originalPathsForGroups(groups, maps),
-                input.scanSettings.includeImages,
-                input.scanSettings.parallelism,
-                {
-                  onSearch: (done, total) => {
-                    if (done === total || done % 200 === 0) scan.addLine(`[scan] Matching Immich library… ${done}/${total} assets`);
-                  },
-                  onLibraryFallback: () => scan.addLine("[scan] Matching Immich library… reading every asset"),
-                },
-                trashed.ids,
-              ),
-            );
-            groups = attachAssets(groups, assets, maps);
-            const immichTrashCredits = immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths);
-            groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
-            scan.addLine("[scan] Reading Immich stacks…");
-            try {
-              groups = await timer.time("Immich stacks", () =>
-                applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism, fetched.stacks),
-              );
-            } catch (err) {
-              scan.addLine(redact(errorText(err), secrets));
-              groups = dropCompleteStacks(
-                await expandImmichGroups(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
-              );
-            }
-            immichTrashCredits.push(...immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths));
-            groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
-            if (immichTrashCredits.length > 0) await creditImmichTrash(immichTrashCredits);
-          } catch (err) {
-            warning = "The scan finished, but Immich assets could not be listed, so nothing can be stacked or trashed yet.";
-            scan.addLine(redact(errorText(err), secrets));
-          }
-        }
+        const joined = await joinWithImmich(groups, settings, input.scanSettings, timer, immichFetch);
+        groups = joined.groups;
+        warning = joined.warning;
       }
       if (scan.cancelled) {
         error = stoppedText();
@@ -618,6 +580,68 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
     ok = false;
   }
   return { ok, error, groupCount };
+}
+
+/**
+ * Match groups to Immich assets, drop what Immich has trashed and apply its stacks. Failures leave the groups as
+ * they were and come back as a warning. A reused compare runs this too, so changes made in Immich show up.
+ */
+async function joinWithImmich(
+  groups: StoredGroup[],
+  settings: Settings,
+  scanSettings: ScanSettings,
+  timer: PhaseTimer,
+  prefetched?: ReturnType<typeof startImmichFetch> | null,
+): Promise<{ groups: StoredGroup[]; warning: string | null }> {
+  const scan = getScan();
+  const secrets = secretValues(settings);
+  if (!settings.immich.baseUrl || !settings.immich.apiKey) {
+    return { groups, warning: "Save the Immich URL and API key to match files to assets." };
+  }
+  try {
+    scan.addLine("[scan] Matching Immich library…");
+    const creds = immichCredentials(settings);
+    const fetched = prefetched ?? startImmichFetch(settings);
+    const [maps, trashed] = await timer.time("Immich fetch (waited)", () => Promise.all([fetched.maps, fetched.trashed]));
+    const assets = await timer.time("Immich assets", () =>
+      assetsForOriginalPaths(
+        settings.immich.baseUrl,
+        settings.immich.apiKey,
+        originalPathsForGroups(groups, maps),
+        scanSettings.includeImages,
+        scanSettings.parallelism,
+        {
+          onSearch: (done, total) => {
+            if (done === total || done % 200 === 0) scan.addLine(`[scan] Matching Immich library… ${done}/${total} assets`);
+          },
+          onLibraryFallback: () => scan.addLine("[scan] Matching Immich library… reading every asset"),
+        },
+        trashed.ids,
+      ),
+    );
+    let joined = attachAssets(groups, assets, maps);
+    const immichTrashCredits = immichTrashedCredits(joined, trashed.ids, maps, trashed.originalPaths);
+    joined = dropImmichTrashedFromGroups(joined, trashed.ids, maps, trashed.originalPaths);
+    scan.addLine("[scan] Reading Immich stacks…");
+    try {
+      joined = await timer.time("Immich stacks", () =>
+        applyLibraryStacks(joined, creds.baseUrl, creds.apiKey, maps, scanSettings.parallelism, fetched.stacks),
+      );
+    } catch (err) {
+      scan.addLine(redact(errorText(err), secrets));
+      joined = dropCompleteStacks(await expandImmichGroups(joined, creds.baseUrl, creds.apiKey, maps, scanSettings.parallelism));
+    }
+    immichTrashCredits.push(...immichTrashedCredits(joined, trashed.ids, maps, trashed.originalPaths));
+    joined = dropImmichTrashedFromGroups(joined, trashed.ids, maps, trashed.originalPaths);
+    if (immichTrashCredits.length > 0) await creditImmichTrash(immichTrashCredits);
+    return { groups: joined, warning: null };
+  } catch (err) {
+    scan.addLine(redact(errorText(err), secrets));
+    return {
+      groups,
+      warning: "The scan finished, but Immich assets could not be listed, so nothing can be stacked or trashed yet.",
+    };
+  }
 }
 
 /** Capture dates for the inventory: Immich first, then the files themselves. */
@@ -1032,10 +1056,11 @@ export async function recordSkipped(section: SectionId, slotKey: string): Promis
   const settings = await loadSettings();
   await patchRun(section, {
     slotKey,
+    pendingSlot: null,
     at: new Date().toISOString(),
     status: "skipped",
     groupCount: 0,
-    error: "A scan was already running",
+    error: "Missed: the server was busy or switched off for a day",
     trigger: "schedule",
     phases: undefined,
   });
