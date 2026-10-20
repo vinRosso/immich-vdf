@@ -16,7 +16,13 @@ test("vdf-cli settings file uses VDF.Core field names", () => {
     CompareHorizontallyFlipped: true,
     IgnoreBlackPixels: true,
     IgnoreWhitePixels: false,
+    HddMaxDegreeOfParallelism: scan.parallelism,
   });
+});
+
+test("slow drives are read at the user's Parallel value, at least 1", () => {
+  assert.equal(buildVdfCliSettingsFile({ ...defaultScan(), parallelism: 15 }).HddMaxDegreeOfParallelism, 15);
+  assert.equal(buildVdfCliSettingsFile({ ...defaultScan(), parallelism: 0 }).HddMaxDegreeOfParallelism, 1);
 });
 
 test("vdf-cli settings file carries the folder scope for compare", () => {
@@ -85,4 +91,24 @@ test("buildVdfExifArgs lists the files and sets the parallelism", () => {
     "exif", "--paths", "/tmp/list.txt", "--output", "/tmp/out.json", "--parallelism", "4",
   ]);
   assert.equal(buildVdfExifArgs("a", "b", 0).at(-1), "1");
+});
+
+test("scan-and-compare passes the capture dates only when the window is on, and native only when asked", () => {
+  const base = {
+    ...defaultScan(),
+    includes: ["/media/a"],
+    excludes: ["/media/a/skip"],
+    dbDir: "/data/db/server",
+    outputFile: "/data/tmp/out.json",
+    settingsFile: "/data/tmp/settings.json",
+    timesFile: "/data/tmp/times.json",
+  };
+  const windowed = buildVdfArgs({ ...base, timeWindowDays: 7, nativeFfmpeg: true });
+  assert.equal(windowed[0], "scan-and-compare");
+  assert.equal(windowed[windowed.indexOf("--times") + 1], "/data/tmp/times.json");
+  assert.equal(windowed.includes("--native-ffmpeg"), true);
+  assert.equal(windowed[windowed.indexOf("--include") + 1], "/media/a");
+  const plain = buildVdfArgs({ ...base, timeWindowDays: 0 });
+  assert.equal(plain.includes("--times"), false);
+  assert.equal(plain.includes("--native-ffmpeg"), false);
 });

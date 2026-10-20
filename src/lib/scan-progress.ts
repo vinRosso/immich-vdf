@@ -73,6 +73,29 @@ function serverPhase(lines: string[]): ScanProgressInfo | null {
   return null;
 }
 
+/** The stage the CLI prints in parentheses at the end of a progress line, with its own counter when it has one. */
+const STAGE_RE = /\s{2}\(([A-Za-z][^()]*?)(?:\s+(\d+)\/(\d+))?\)\s*$/;
+
+/**
+ * Engine stages that are not plain file hashing. Without these, a stage that counts 1 of 1 (computing AI
+ * embeddings) looked like a stuck "Hashing files" bar. Texts are the English ones in VDF.Core/Assets/Locales/en.json.
+ */
+const STAGES = [
+  { test: /^computing AI embeddings$/i, label: "Computing AI embeddings", detail: "Finishing the AI frames…" },
+  { test: /^validating duplicate groups$/i, label: "Checking duplicate groups", detail: null },
+  { test: /^comparing partial clips$/i, label: "Comparing partial clips", detail: null },
+  { test: /^verifying partial clips$/i, label: "Verifying partial clips", detail: null },
+  { test: /^AI partial: /i, label: "Finding partial clips with AI", detail: null },
+] as const;
+
+type StageInfo = { text: string; current: number; total: number };
+
+function stageOf(line: string): StageInfo | null {
+  const match = line.match(STAGE_RE);
+  if (!match) return null;
+  return { text: match[1].trim(), current: Number(match[2] ?? 0), total: Number(match[3] ?? 0) };
+}
+
 /** Parse vdf-cli stderr progress lines into UI state. */
 export function parseScanProgress(lines: string[]): ScanProgressInfo {
   const fromServer = serverPhase(lines);
@@ -82,9 +105,14 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
   let max = 0;
   let comparing = false;
   let enumerationDone = false;
+  let hashingDoneAt = -1;
+  let lastProgressAt = -1;
+  let stage: StageInfo | null = null;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (line.includes("File enumeration complete")) enumerationDone = true;
+    if (line.includes("Hashing complete")) hashingDoneAt = i;
     if (line.includes("Comparison complete")) {
       percent = 100;
       comparing = true;
@@ -99,9 +127,34 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
       percent = Number(match[1]);
       current = Number(match[2]);
       max = Number(match[3]);
+      lastProgressAt = i;
+      stage = stageOf(line);
       if (/comparing/i.test(line)) comparing = true;
       break;
     }
+  }
+
+  const comparingDuplicates = stage !== null && /comparing duplicates/i.test(stage.text);
+  // Hashing is over and the compare has not printed any progress yet: loading files and building the list.
+  if (hashingDoneAt >= 0 && hashingDoneAt >= lastProgressAt && !comparingDuplicates && !lines.some((line) => line.includes("Comparison complete"))) {
+    return {
+      percent: 0,
+      label: "Preparing comparison",
+      detail: "Checking files and building the compare list…",
+      indeterminate: true,
+    };
+  }
+
+  const known = stage ? STAGES.find((candidate) => candidate.test.test(stage!.text)) : undefined;
+  if (known && stage) {
+    const counted = max > 1;
+    const stageDetail = stage.text.replace(/^AI partial:\s*/i, "");
+    const detail = counted
+      ? `${current.toLocaleString()} of ${max.toLocaleString()}`
+      : known.label === "Finding partial clips with AI"
+        ? stageDetail
+        : known.detail;
+    return { percent: counted ? Math.min(100, Math.max(0, percent)) : 0, label: known.label, detail, indeterminate: !counted };
   }
 
   let label = "Starting scan…";

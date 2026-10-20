@@ -76,6 +76,8 @@ async function bitDepthFromImageFile(file: string): Promise<number | null> {
 export async function probeImageBitDepth(file: string, options?: { ffprobe?: boolean }): Promise<number> {
   const slot = await cachedBitDepth(file);
   if (slot.depth !== null && slot.depth > 0) return slot.depth;
+  // Saved as unreadable for this size and modified time: opening the file again, over a network share, finds nothing new.
+  if (slot.depth === 0) return 0;
   let bitDepth = 0;
   try {
     bitDepth = (await bitDepthFromImageFile(file)) ?? 0;
@@ -88,7 +90,6 @@ export async function probeImageBitDepth(file: string, options?: { ffprobe?: boo
     return bitDepth;
   }
   if (options?.ffprobe === false) return 0;
-  if (slot.depth === 0) return 0;
   const stdout = await probeQueue().run("background", () =>
     capture(ffprobeBin(), ffprobeBitDepthArgs(file), FFPROBE_BIT_DEPTH_TIMEOUT_MS),
   ).promise;

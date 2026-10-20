@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildVdfCompareArgs, buildVdfExifArgs, buildVdfImageTimesArgs, buildVdfScanArgs } from "./cli-args";
+import { buildVdfArgs, buildVdfExifArgs, buildVdfImageTimesArgs } from "./cli-args";
 import {
   applyCaptureDates,
   applyCaptureDatesToImages,
@@ -27,7 +27,7 @@ import { parseCliResults, type ParsedGroup } from "./parse-results";
 import { applyPrefixClusters, imagesInScanScopeParallel, overlayKnownItems, parseImageTimes, pathKey, prefixClustersParallel, prefixItem, stripPrefixItems } from "./prefix-groups";
 import { PREFIX_CACHE_REVISION, loadPrefixCache, prefixCacheAction, prefixRegroupLine, savePrefixCache } from "./prefix-cache";
 import { parseResolution } from "./primary";
-import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
+import { createBatchResolver, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
 import { cliFailure, type CliOutcome } from "./cli-failure";
 import { nativeFfmpegEnv, nativeFfmpegPlan, shouldRetryWithoutNative } from "./native-ffmpeg";
@@ -275,40 +275,19 @@ async function runScanSteps(
 
   // Decoding inside vdf-cli is several times faster than one ffmpeg program per frame, when the libraries exist.
   const native = nativeFfmpegPlan();
-  const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths, nativeFfmpeg: native.enabled });
-  let scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs, nativeFfmpegEnv(native)));
-  if (shouldRetryWithoutNative(native, scanResult, scan.cancelled)) {
-    scan.addLine("[scan] Native FFmpeg could not be used. Scanning again with the ffmpeg program.");
-    const plainArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
-    scanResult = await timer.time("CLI scan (ffmpeg program)", () => spawnVdfCli(plainArgs));
-  }
-  if (scan.cancelled) {
-    await cancelled();
-    return;
-  }
-  if (scanResult.spawnFailed || scanResult.code !== 0) {
-    await finishScan(section, {
-      kind: "error",
-      code: scanResult.code,
-      signal: scanResult.signal,
-      paths,
-      scanSettings,
-      spawnFailed: scanResult.spawnFailed,
-      cancelled: false,
-      startedAt,
-      timer,
-    });
-    return;
-  }
-
   const sendDates = capture !== null && scanSettings.timeWindowDays > 0;
   if (capture && sendDates) await writeFile(paths.timesFile, JSON.stringify(Object.fromEntries(capture.times)));
-  const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths, timesFile: sendDates ? paths.timesFile : undefined });
-  const compareResult = await timer.time("CLI compare", () => spawnVdfCli(compareArgs));
+  const cliParams = { ...scanSettings, ...paths, timesFile: sendDates ? paths.timesFile : undefined };
+  let cliResult = await runScanAndCompare(buildVdfArgs({ ...cliParams, nativeFfmpeg: native.enabled }), nativeFfmpegEnv(native), timer);
+  if (shouldRetryWithoutNative(native, cliResult, scan.cancelled)) {
+    scan.addLine("[scan] Native FFmpeg could not be used. Scanning again with the ffmpeg program.");
+    cliResult = await runScanAndCompare(buildVdfArgs(cliParams), undefined, timer, " (ffmpeg program)");
+  }
   if (scan.cancelled) {
     await cancelled();
     return;
   }
+  const compareResult = cliResult;
   await finishScan(section, {
     kind: "compare",
     code: compareResult.code,
@@ -324,6 +303,35 @@ async function runScanSteps(
     timer,
     previous,
   });
+}
+
+/**
+ * Runs `scan-and-compare` as one process and times its two halves by the CLI's own "Hashing complete" line, so the run
+ * keeps showing how long scanning and comparing each took.
+ */
+async function runScanAndCompare(
+  args: string[],
+  env: NodeJS.ProcessEnv | undefined,
+  timer: PhaseTimer,
+  suffix = "",
+): Promise<CliOutcome> {
+  const scan = getScan();
+  const started = Date.now();
+  let scanDoneAt = null as number | null;
+  const unsubscribe = scan.subscribe((event) => {
+    if (event.event === "log" && scanDoneAt === null && event.line.includes("[scan] Hashing complete.")) {
+      scanDoneAt = Date.now();
+      timer.add(`CLI scan${suffix}`, scanDoneAt - started);
+    }
+  });
+  try {
+    return await spawnVdfCli(args, env);
+  } finally {
+    unsubscribe();
+    const finished = Date.now();
+    if (scanDoneAt === null) timer.add(`CLI scan${suffix}`, finished - started);
+    else timer.add(`CLI compare${suffix}`, finished - scanDoneAt);
+  }
 }
 
 function spawnVdfCli(args: string[], env?: NodeJS.ProcessEnv): Promise<CliOutcome> {
@@ -857,6 +865,7 @@ async function keepInside(
       unique.push(item.path);
     }
   }
+  const resolveOne = createBatchResolver(resolvedRoots);
   const resolved = new Map<string, string>();
   let done = 0;
   onProgress?.(0, unique.length);
@@ -865,7 +874,7 @@ async function keepInside(
     parallelism,
     async (filePath) => {
       try {
-        resolved.set(filePath, await resolveAgainstRoots(resolvedRoots, filePath));
+        resolved.set(filePath, await resolveOne(filePath));
       } catch {
         // Drop paths that are missing or that resolve outside the mount.
       }

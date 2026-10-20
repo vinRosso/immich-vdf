@@ -18,6 +18,7 @@ using System.CommandLine;
 using VDF.CLI.Actions;
 using VDF.CLI.Output;
 using VDF.Core;
+using VDF.Core.Utils;
 
 namespace VDF.CLI.Commands {
 	internal static class ScanAndCompareCommand {
@@ -39,6 +40,10 @@ namespace VDF.CLI.Commands {
 				Description = "Permanently delete marked files. WARNING: irreversible."
 			};
 
+			var timesOpt = new Option<FileInfo?>("--times") {
+				Description = "JSON file of {path: ISO date}. The capture-time window uses these dates instead of each file's creation date.",
+			};
+			cmd.Options.Add(timesOpt);
 			cmd.Options.Add(actionOpt);
 			cmd.Options.Add(dryRunOpt);
 			cmd.Options.Add(deleteOpt);
@@ -58,6 +63,15 @@ namespace VDF.CLI.Commands {
 					return 1;
 				}
 
+				var timesFile = parseResult.GetValue(timesOpt);
+				if (timesFile != null) {
+					if (!timesFile.Exists) {
+						Console.Error.WriteLine($"Error: {timesFile.FullName} does not exist.");
+						return 1;
+					}
+					engine.CaptureTimeOverrides = CaptureTimeReader.ReadJson(timesFile.FullName);
+					Console.Error.WriteLine($"Capture dates given for {engine.CaptureTimeOverrides.Count:N0} files.");
+				}
 				ScanRunner.WireProgress(engine);
 
 				await ScanRunner.EnsureAiComponentsAsync(engine.Settings, ct);

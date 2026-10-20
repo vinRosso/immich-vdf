@@ -61,14 +61,29 @@ export function buildVdfImageTimesArgs(dbDir: string, outputFile: string): strin
   return ["db", "times", "--db", dbDir, "--output", outputFile];
 }
 
+/**
+ * Scan and compare in one process. Compare then keeps the database and the file checks the scan just made, instead of
+ * loading the database again and checking every file on disk a second time, which took an hour over a network share.
+ */
 export function buildVdfArgs(
-  scan: ScanSettings & { dbDir: string; outputFile: string; settingsFile: string; includes: string[]; excludes: string[] },
+  scan: ScanSettings & {
+    dbDir: string;
+    outputFile: string;
+    settingsFile: string;
+    includes: string[];
+    excludes: string[];
+    /** JSON of scan path to capture date. Passed only when the capture-time window is on. */
+    timesFile?: string;
+    nativeFfmpeg?: boolean;
+  },
 ): string[] {
   const args = ["scan-and-compare"];
   for (const include of scan.includes) args.push("--include", include);
   for (const exclude of scan.excludes) args.push("--exclude", exclude);
   appendMatchFlags(args, scan);
+  if (scan.nativeFfmpeg) args.push("--native-ffmpeg");
   args.push("--db", scan.dbDir, "--format", "json", "--output", scan.outputFile, "--settings", scan.settingsFile);
+  if (scan.timesFile && scan.timeWindowDays > 0) args.push("--times", scan.timesFile);
   return args;
 }
 
@@ -91,6 +106,8 @@ export const REQUIRED_CLI_SCAN_HELP = [
 ] as const;
 
 /** Flags that must appear in `vdf-cli compare --help`. */
+export const REQUIRED_CLI_COMBINED_HELP = ["scan-and-compare", "--times", "--native-ffmpeg"] as const;
+
 export const REQUIRED_CLI_COMPARE_HELP = [
   "compare",
   "--threshold",

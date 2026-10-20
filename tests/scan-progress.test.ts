@@ -133,3 +133,51 @@ test("parseScanProgress names the capture date step", () => {
   assert.equal(info.label, "Reading capture dates");
   assert.equal(info.indeterminate, true);
 });
+
+test("parseScanProgress shows the AI embedding stage instead of a stuck 1 of 1 hashing bar", () => {
+  const info = parseScanProgress([
+    "[scan] File enumeration complete.",
+    "[ 99%] 35340/35349  ETA 0m03s  ...x.jpg    ",
+    "[100%] 1/1  ETA ...    (computing AI embeddings)    ",
+  ]);
+  assert.equal(info.label, "Computing AI embeddings");
+  assert.equal(info.indeterminate, true);
+});
+
+test("parseScanProgress says the comparison is being prepared once hashing is over", () => {
+  const preparing = parseScanProgress([
+    "[scan] File enumeration complete.",
+    "[100%] 1/1  ETA ...    (computing AI embeddings)    [scan] Hashing complete.",
+  ]);
+  assert.equal(preparing.label, "Preparing comparison");
+  assert.equal(preparing.indeterminate, true);
+
+  const comparing = parseScanProgress([
+    "[100%] 1/1  ETA ...    (computing AI embeddings)    [scan] Hashing complete.",
+    "[  0%] 0/34846  ETA ...    (comparing duplicates)    ",
+  ]);
+  assert.equal(comparing.label, "Comparing duplicates");
+});
+
+test("parseScanProgress names the partial clip stages and counts them", () => {
+  const info = parseScanProgress([
+    "[100%] 34846/34846  ETA ...    (comparing duplicates)    ",
+    "[ 10%] 5/50  ETA 1m00s    (AI partial: sampling keyframes)    ",
+  ]);
+  assert.equal(info.label, "Finding partial clips with AI");
+  assert.equal(info.detail, "5 of 50");
+  assert.equal(info.indeterminate, false);
+  assert.equal(info.percent, 10);
+
+  const validating = parseScanProgress(["[ 50%] 10/20  ETA 0m05s    (validating duplicate groups)    "]);
+  assert.equal(validating.label, "Checking duplicate groups");
+});
+
+test("parseScanProgress is not fooled by a file name in parentheses", () => {
+  const info = parseScanProgress([
+    "[scan] File enumeration complete.",
+    "[ 40%] 8/20  ETA 0m04s  ...holiday (1).mp4  (sampling frames 2/5)    ",
+  ]);
+  assert.equal(info.label, "Hashing files");
+  assert.equal(info.detail, "8 of 20");
+});
