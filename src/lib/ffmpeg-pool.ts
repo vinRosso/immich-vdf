@@ -3,6 +3,8 @@ import { maxScanParallelism } from "./scan-parallelism";
 
 type Job = () => Promise<void>;
 
+export type EncodeLane = "thumb" | "strip" | "playback" | "viewer" | "thumbnail" | "idle";
+
 type Queued = {
   priority: number;
   run: () => void;
@@ -16,6 +18,8 @@ type PoolState = {
 
 /** Matches encodePriority("playback"). Thumb work yields one slot when more than one is allowed. */
 const PLAYBACK_PRIORITY = 0;
+/** Background warm-up. Starts only when nothing else is queued or running. */
+const IDLE_PRIORITY = 4;
 
 function state(): PoolState {
   const holder = globalThis as typeof globalThis & { __vdfPool?: PoolState };
@@ -49,7 +53,7 @@ export function ffmpegSlots(limit: number): number {
 export function enqueueFfmpeg(
   limit: number,
   job: Job,
-  options?: { priority?: "thumb" | "strip" | "playback" | "viewer" | "thumbnail"; signal?: AbortSignal },
+  options?: { priority?: EncodeLane; signal?: AbortSignal },
 ): Promise<void> {
   const pool = state();
   const priority = encodePriority(options?.priority);
@@ -107,8 +111,9 @@ export function enqueueFfmpeg(
   });
 }
 
-function encodePriority(priority: "thumb" | "strip" | "playback" | "viewer" | "thumbnail" | undefined): number {
+function encodePriority(priority: EncodeLane | undefined): number {
   if (priority === "playback") return PLAYBACK_PRIORITY;
+  if (priority === "idle") return IDLE_PRIORITY;
   if (priority === "thumb" || priority === "viewer") return 1;
   if (priority === "strip") return 2;
   return 3;
@@ -122,6 +127,8 @@ function pump(limit: number): void {
     const next = pool.queue[0];
     if (!next) break;
     if (next.priority !== PLAYBACK_PRIORITY && pool.thumbs >= thumbCap) break;
+    // Warm-up never competes: it waits for an empty pool, and only one such job runs at a time.
+    if (next.priority === IDLE_PRIORITY && pool.active > 0) break;
     pool.queue.shift();
     next.run();
   }

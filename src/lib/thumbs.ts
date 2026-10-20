@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { ffmpegBin, fileCacheKey, probeFile, runProcess } from "./probe";
-import { enqueueFfmpeg } from "./ffmpeg-pool";
+import { enqueueFfmpeg, type EncodeLane } from "./ffmpeg-pool";
 import { filmstripBatchArgs, posterArgs, posterTime, sampleTimes, STRIP_FRAMES, viewArgs } from "./ffmpeg-args";
 import { loadSettings } from "./store";
 import type { SectionId } from "./types";
@@ -39,7 +39,7 @@ export class ThumbnailCancelled extends Error {
 }
 
 type ThumbRender = {
-  priority?: "thumb" | "strip" | "viewer" | "thumbnail";
+  priority?: EncodeLane;
   signal?: AbortSignal;
 };
 

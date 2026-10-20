@@ -131,6 +131,30 @@ test("one ffmpeg slot stays free for playback while thumbnails run", async () =>
   await cover;
 });
 
+test("idle work starts only when the pool is empty and never ahead of other work", async () => {
+  resetFfmpegPoolForTests();
+  let releaseFirst: (() => void) | undefined;
+  const first = enqueueFfmpeg(
+    2,
+    () =>
+      new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      }),
+    { priority: "thumbnail" },
+  );
+  const order: string[] = [];
+  const idle = enqueueFfmpeg(2, async () => void order.push("idle"), { priority: "idle" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(order.length, 0);
+  const card = enqueueFfmpeg(2, async () => void order.push("card"), { priority: "thumbnail" });
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFirst?.();
+  await first;
+  await card;
+  await idle;
+  assert.deepEqual(order, ["card", "idle"]);
+});
+
 test("an aborted playback leaves the queue without starting", async () => {
   resetFfmpegPoolForTests();
   let releaseFirst: (() => void) | undefined;

@@ -6,7 +6,7 @@ import path from "node:path";
 import { realResultPath } from "../lib/actions";
 import { AppError } from "../lib/errors";
 import { TRANSCODE_FULL_HEIGHT, TRANSCODE_START_HEIGHT, transcodeArgs } from "../lib/ffmpeg-args";
-import { enqueueFfmpeg } from "../lib/ffmpeg-pool";
+import { enqueueFfmpeg, type EncodeLane } from "../lib/ffmpeg-pool";
 import { playbackMode } from "../lib/playback";
 import { claimPlayback } from "../lib/playback-sessions";
 import { ffmpegBin, probeFile } from "../lib/probe";
@@ -187,7 +187,7 @@ export async function thumbnailFile(
   filePath: string,
   kind: string,
   index: number,
-  options?: { priority?: "thumb" | "strip" | "viewer" | "thumbnail"; signal?: AbortSignal },
+  options?: { priority?: EncodeLane; signal?: AbortSignal },
 ): Promise<string> {
   const real = await realResultPath(section, filePath);
   const parallelism = await sectionParallelism(section);

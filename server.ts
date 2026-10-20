@@ -13,6 +13,7 @@ import { startScheduler } from "./src/lib/scheduler";
 import { loginUrlForPath, safeLoginNext } from "./src/lib/auth-redirect";
 import { cookieIsValid } from "./src/lib/session";
 import { loadSettings, secretValues } from "./src/lib/store";
+import { warmSections } from "./src/lib/thumb-warm";
 import { handleRaw } from "./src/server/raw";
 
 loadEnvConfig(process.cwd());
@@ -86,6 +87,8 @@ httpServer.on("upgrade", (request, socket, head) => {
 
 httpServer.listen(config.port, config.host, () => {
   console.log(`immich-vdf listening on http://${config.host}:${config.port}`);
+  // Finish any posters, probes and filmstrips a scan or an earlier run left undone.
+  void warmSections(["immich", "server"]).catch(() => undefined);
 });
 }
 

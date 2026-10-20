@@ -40,7 +40,7 @@ import {
 import { probeImageBitDepth } from "./probe";
 import type { CompareDecision } from "./compare-decision";
 import type { ScanSettings, SectionId, Settings, StoredGroup, StoredItem } from "./types";
-import { cancelPosterWarmup, warmPosters } from "./thumb-warm";
+import { cancelPosterWarmup, warmSections } from "./thumb-warm";
 import { postWebhook } from "./webhook";
 
 type ScanPaths = {
@@ -438,7 +438,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     }
   }
   scan.finish(ok && !scan.cancelled, message, groupCount);
-  if (ok && !scan.cancelled) void warmPosters(section, input.scanSettings.parallelism).catch(() => undefined);
+  if (ok && !scan.cancelled) void warmSections([section]).catch(() => undefined);
 }
 
 /** Wall clock from scan button to saved results (index, hash, compare, Immich join). */

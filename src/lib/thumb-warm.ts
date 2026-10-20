@@ -1,20 +1,30 @@
-import { ensurePoster } from "./thumbs";
-import { loadResults } from "./store";
+import { ensurePoster, ensureStrip } from "./thumbs";
+import { probeFile } from "./probe";
+import { loadResults, loadSettings } from "./store";
 import type { SectionId, StoredResults } from "./types";
 
-/** Best item of every group first, so the grid is ready before the viewer's other files. */
-export function posterWarmOrder(section: SectionId, results: Pick<StoredResults, "groups">): string[] {
-  const covers: string[] = [];
-  const rest: string[] = [];
+export type WarmTask = { kind: "poster" | "probe" | "strip"; path: string };
+
+/**
+ * What to prepare after a scan, in the order the UI needs it: every group's cover poster, then each
+ * video's probe and filmstrip, then the remaining posters. Matched Immich assets get their poster from
+ * the Immich API, not ffmpeg, so they are skipped.
+ */
+export function warmPlan(section: SectionId, results: Pick<StoredResults, "groups">): WarmTask[] {
+  const covers: WarmTask[] = [];
+  const videos: WarmTask[] = [];
+  const rest: WarmTask[] = [];
   for (const group of results.groups) {
     const best = group.items.find((item) => item.stackPrimary) ?? group.items[0];
     for (const item of group.items) {
-      // Matched Immich assets get their poster from the Immich API, not ffmpeg.
-      if (section === "immich" && item.assetId) continue;
-      (item === best ? covers : rest).push(item.path);
+      const servedByImmich = section === "immich" && Boolean(item.assetId);
+      if (!servedByImmich) (item === best ? covers : rest).push({ kind: "poster", path: item.path });
+      if (!item.isImage) {
+        videos.push({ kind: "probe", path: item.path }, { kind: "strip", path: item.path });
+      }
     }
   }
-  return [...covers, ...rest];
+  return [...covers, ...videos, ...rest];
 }
 
 let generation = 0;
@@ -25,30 +35,32 @@ export function cancelPosterWarmup(): void {
 }
 
 /**
- * Render card posters in the background at the lowest ffmpeg priority, so the first scroll after a scan
- * finds them on disk. A newer call or `cancelPosterWarmup` stops this one.
+ * Prepare posters, probes and filmstrips in the background so opening a group finds them ready. It runs
+ * one task at a time on the idle lanes, so it never delays a request from the UI. Finished outputs are
+ * skipped, which makes it safe to run again after a restart. A newer call or `cancelPosterWarmup` stops it.
  */
-export async function warmPosters(section: SectionId, parallelism: number): Promise<void> {
+export async function warmSections(sections: SectionId[]): Promise<void> {
   const mine = ++generation;
-  const results = await loadResults(section);
-  if (!results || mine !== generation) return;
-  const { realResultPath } = await import("./actions");
-  const queue = posterWarmOrder(section, results);
   const control = new AbortController();
-  const workers = Math.max(1, Math.min(parallelism, 4));
-  const run = async () => {
-    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+  const { realResultPath } = await import("./actions");
+  const settings = await loadSettings();
+  for (const section of sections) {
+    const results = await loadResults(section);
+    if (!results) continue;
+    const parallelism = settings[section].scan.parallelism;
+    for (const task of warmPlan(section, results)) {
       if (mine !== generation) {
         control.abort();
         return;
       }
       try {
-        const real = await realResultPath(section, path);
-        await ensurePoster(real, parallelism, { priority: "thumbnail", signal: control.signal });
+        const real = await realResultPath(section, task.path);
+        if (task.kind === "probe") await probeFile(real, "background");
+        else if (task.kind === "strip") await ensureStrip(real, 0, parallelism, { priority: "idle", signal: control.signal });
+        else await ensurePoster(real, parallelism, { priority: "idle", signal: control.signal });
       } catch {
-        // A missing or unreadable file only costs its own poster.
+        // A missing or unreadable file only costs its own output.
       }
     }
-  };
-  await Promise.all(Array.from({ length: workers }, run));
+  }
 }

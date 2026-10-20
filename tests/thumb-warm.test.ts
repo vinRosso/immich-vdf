@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { posterWarmOrder } from "../src/lib/thumb-warm";
+import { warmPlan } from "../src/lib/thumb-warm";
 import type { StoredItem } from "../src/lib/types";
 
 function item(path: string, assetId: string | null = null, stackPrimary = false): StoredItem {
@@ -27,16 +27,29 @@ function item(path: string, assetId: string | null = null, stackPrimary = false)
   };
 }
 
-test("poster warm-up renders every group's cover before the other files", () => {
+const posters = (tasks: { kind: string; path: string }[]) => tasks.filter((task) => task.kind === "poster").map((task) => task.path);
+
+test("warm-up renders every group's cover poster first, then videos, then the other posters", () => {
   const groups = [
     { groupId: "a", items: [item("a1"), item("a2", null, true)] },
-    { groupId: "b", items: [item("b1"), item("b2")] },
+    { groupId: "b", items: [{ ...item("b1"), isImage: false }, item("b2")] },
   ];
-  assert.deepEqual(posterWarmOrder("server", { groups }), ["a2", "b1", "a1", "b2"]);
+  const plan = warmPlan("server", { groups });
+  assert.deepEqual(
+    plan.map((task) => `${task.kind}:${task.path}`),
+    ["poster:a2", "poster:b1", "probe:b1", "strip:b1", "poster:a1", "poster:b2"],
+  );
 });
 
-test("poster warm-up skips Immich assets, whose posters come from the Immich API", () => {
-  const groups = [{ groupId: "a", items: [item("a1", "asset-1"), item("a2")] }];
-  assert.deepEqual(posterWarmOrder("immich", { groups }), ["a2"]);
-  assert.deepEqual(posterWarmOrder("server", { groups }), ["a1", "a2"]);
+test("warm-up skips Immich assets, whose posters come from the Immich API, but not their videos", () => {
+  const groups = [
+    { groupId: "a", items: [item("a1", "asset-1"), item("a2")] },
+    { groupId: "b", items: [{ ...item("v1", "asset-2"), isImage: false }] },
+  ];
+  assert.deepEqual(posters(warmPlan("immich", { groups })), ["a2"]);
+  assert.deepEqual(posters(warmPlan("server", { groups })), ["a1", "v1", "a2"]);
+  assert.deepEqual(
+    warmPlan("immich", { groups }).filter((task) => task.path === "v1").map((task) => task.kind),
+    ["probe", "strip"],
+  );
 });
