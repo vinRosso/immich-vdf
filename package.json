@@ -6,6 +6,7 @@
     "build:cli": "tsx scripts/build-vdf-cli.ts",
     "update-engine": "tsx scripts/update-engine.ts",
     "check-cli": "tsx scripts/check-cli-help.ts",
+    "install-ffmpeg": "tsx scripts/install-ffmpeg.ts",
     "dev": "tsx scripts/ensure-vdf-cli.ts && tsx server.ts",
     "dev:web": "tsx server.ts",
     "build": "next build",

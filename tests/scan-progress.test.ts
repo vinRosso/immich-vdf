@@ -181,3 +181,18 @@ test("parseScanProgress is not fooled by a file name in parentheses", () => {
   assert.equal(info.label, "Hashing files");
   assert.equal(info.detail, "8 of 20");
 });
+
+test("parseScanProgress shows the one-time FFmpeg download with its megabytes", () => {
+  const starting = parseScanProgress(["[scan] Native FFmpeg libraries not found. Downloading them once (about 90 MB, checked against the published checksum)."]);
+  assert.equal(starting.label, "Setting up native FFmpeg");
+  assert.equal(starting.indeterminate, true);
+
+  const downloading = parseScanProgress([
+    "[scan] Native FFmpeg libraries not found. Downloading them once (about 90 MB).",
+    "[scan] Downloading FFmpeg... 45/90 MB",
+  ]);
+  assert.equal(downloading.label, "Setting up native FFmpeg");
+  assert.equal(downloading.detail, "45 of 90 MB");
+  assert.equal(downloading.percent, 50);
+  assert.equal(downloading.indeterminate, false);
+});

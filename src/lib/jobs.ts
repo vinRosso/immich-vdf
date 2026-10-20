@@ -30,7 +30,7 @@ import { parseResolution } from "./primary";
 import { createBatchResolver, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
 import { cliFailure, type CliOutcome } from "./cli-failure";
-import { nativeFfmpegEnv, nativeFfmpegPlan, shouldRetryWithoutNative } from "./native-ffmpeg";
+import { nativeFfmpegEnv, resolveNativeFfmpeg, shouldRetryWithoutNative } from "./native-ffmpeg";
 import { PhaseTimer } from "./phase-timer";
 import { slotPatch } from "./schedule";
 import { TRASH_DIR } from "./trash-dir";
@@ -273,8 +273,23 @@ async function runScanSteps(
     return;
   }
 
-  // Decoding inside vdf-cli is several times faster than one ffmpeg program per frame, when the libraries exist.
-  const native = nativeFfmpegPlan();
+  // Decoding inside vdf-cli is several times faster than one ffmpeg program per frame. The libraries are found, or
+  // downloaded once, and a scan that cannot have them uses the ffmpeg program.
+  const native = await timer.time("Native FFmpeg check", () =>
+    resolveNativeFfmpeg({
+      probe: async () => (await runCliQuietly(["ffmpeg", "status"])) === 0,
+      install: async () => {
+        const installed = await spawnVdfCli(["ffmpeg", "install"]);
+        return !installed.spawnFailed && installed.code === 0;
+      },
+      log: (line) => scan.addLine(line),
+      cancelled: () => scan.cancelled,
+    }),
+  );
+  if (scan.cancelled) {
+    await cancelled();
+    return;
+  }
   const sendDates = capture !== null && scanSettings.timeWindowDays > 0;
   if (capture && sendDates) await writeFile(paths.timesFile, JSON.stringify(Object.fromEntries(capture.times)));
   const cliParams = { ...scanSettings, ...paths, timesFile: sendDates ? paths.timesFile : undefined };
@@ -332,6 +347,22 @@ async function runScanAndCompare(
     if (scanDoneAt === null) timer.add(`CLI scan${suffix}`, finished - started);
     else timer.add(`CLI compare${suffix}`, finished - scanDoneAt);
   }
+}
+
+/** A short vdf-cli call whose output is not wanted in the scan log. Resolves with the exit code, or null when it did not run. */
+function runCliQuietly(args: string[], timeoutMs = 60_000): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn(resolveVdfCli(), args, { shell: false, stdio: "ignore" });
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
 }
 
 function spawnVdfCli(args: string[], env?: NodeJS.ProcessEnv): Promise<CliOutcome> {

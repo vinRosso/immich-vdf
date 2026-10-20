@@ -16,6 +16,11 @@ const SERVER_PHASES = [
     detail: "Looking for new or changed files…",
   },
   {
+    test: /Native FFmpeg libraries not found|Downloading FFmpeg|Checking the FFmpeg download|Installing the FFmpeg/i,
+    label: "Setting up native FFmpeg",
+    detail: "Downloading the FFmpeg libraries once...",
+  },
+  {
     test: /Reading capture dates/i,
     label: "Reading capture dates",
     detail: "Dates from Immich, then from the files…",
@@ -37,12 +42,13 @@ const CLI_MARKER_RE = /File enumeration complete|Hashing complete|Comparison com
 
 const REUSE_RE = /reusing last compare/i;
 
-const PROGRESS_COUNT_RE = /(\d+)\s*\/\s*(\d+)\s+(paths|images|assets)\b/i;
+const PROGRESS_COUNT_RE = /(\d+)\s*\/\s*(\d+)\s+(paths|images|assets|MB)\b/i;
 
 function progressCount(line: string): { current: number; total: number; noun: string } | null {
   const count = line.match(PROGRESS_COUNT_RE);
   if (!count) return null;
-  return { current: Number(count[1]), total: Number(count[2]), noun: count[3].toLowerCase() };
+  const noun = count[3].toUpperCase() === "MB" ? "MB" : count[3].toLowerCase();
+  return { current: Number(count[1]), total: Number(count[2]), noun };
 }
 
 function progressCountDetail(line: string, fallback: string): string {

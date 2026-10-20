@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildVdfScanArgs } from "../src/lib/cli-args";
-import { nativeFfmpegEnv, nativeFfmpegPlan, shouldRetryWithoutNative } from "../src/lib/native-ffmpeg";
+import {
+  nativeFfmpegEnv,
+  nativeFfmpegMode,
+  resolveNativeFfmpeg,
+  shouldRetryWithoutNative,
+  type NativeFfmpegDeps,
+  type NativeState,
+} from "../src/lib/native-ffmpeg";
 import { defaultScan } from "../src/lib/scan-defaults";
 
 const libs = [
@@ -18,22 +25,116 @@ function folderWith(files: string[]) {
   return (file: string) => files.some((name) => file.replace(/\\/g, "/") === `/opt/ffmpeg/lib/${name}`);
 }
 
-test("native mode is off unless asked for or shipped", () => {
-  assert.deepEqual(nativeFfmpegPlan({}, () => false), { enabled: false, libDir: null });
-  assert.equal(nativeFfmpegPlan({ VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" }, folderWith([])).enabled, false);
+test("the default is automatic", () => {
+  assert.deepEqual(nativeFfmpegMode({}, () => false), { kind: "auto", libDir: null });
+  assert.equal(nativeFfmpegMode({ VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" }, folderWith([])).kind, "auto");
 });
 
-test("the image's libraries turn it on only when every one is there", () => {
+test("the image's libraries turn it on without a check only when every one is there", () => {
   const env = { VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" };
-  assert.deepEqual(nativeFfmpegPlan(env, folderWith(libs)), { enabled: true, libDir: "/opt/ffmpeg/lib" });
-  assert.equal(nativeFfmpegPlan(env, folderWith(libs.slice(1))).enabled, false);
+  assert.deepEqual(nativeFfmpegMode(env, folderWith(libs)), { kind: "on", libDir: "/opt/ffmpeg/lib" });
+  assert.equal(nativeFfmpegMode(env, folderWith(libs.slice(1))).kind, "auto");
 });
 
-test("VDF_NATIVE_FFMPEG overrides what was found", () => {
+test("VDF_NATIVE_FFMPEG turns it off or forces it on", () => {
   const env = { VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" };
-  assert.equal(nativeFfmpegPlan({ ...env, VDF_NATIVE_FFMPEG: "0" }, folderWith(libs)).enabled, false);
-  assert.equal(nativeFfmpegPlan({ VDF_NATIVE_FFMPEG: "1" }, () => false).enabled, true);
-  assert.equal(nativeFfmpegPlan({ VDF_NATIVE_FFMPEG: " On " }, () => false).enabled, true);
+  assert.equal(nativeFfmpegMode({ ...env, VDF_NATIVE_FFMPEG: "0" }, folderWith(libs)).kind, "off");
+  assert.equal(nativeFfmpegMode({ VDF_NATIVE_FFMPEG: "false" }, () => false).kind, "off");
+  assert.equal(nativeFfmpegMode({ VDF_NATIVE_FFMPEG: "1" }, () => false).kind, "on");
+  assert.equal(nativeFfmpegMode({ VDF_NATIVE_FFMPEG: " On " }, () => false).kind, "on");
+});
+
+function fakeDeps(options: { available: boolean; installs?: boolean; installedAvailable?: boolean }) {
+  const calls = { probe: 0, install: 0, log: [] as string[] };
+  let installed = false;
+  const deps: NativeFfmpegDeps = {
+    probe: async () => {
+      calls.probe += 1;
+      return installed ? (options.installedAvailable ?? true) : options.available;
+    },
+    install: async () => {
+      calls.install += 1;
+      installed = options.installs ?? true;
+      return options.installs ?? true;
+    },
+    log: (line) => calls.log.push(line),
+  };
+  return { deps, calls };
+}
+
+const fresh = (): NativeState => ({ available: false, failedAt: null });
+
+test("an explicit setting never checks or downloads", async () => {
+  const off = fakeDeps({ available: false });
+  assert.deepEqual(await resolveNativeFfmpeg(off.deps, { VDF_NATIVE_FFMPEG: "0" }, () => false, fresh()), { enabled: false, libDir: null });
+  const forced = fakeDeps({ available: false });
+  assert.deepEqual(await resolveNativeFfmpeg(forced.deps, { VDF_NATIVE_FFMPEG: "1" }, () => false, fresh()), { enabled: true, libDir: null });
+  assert.equal(off.calls.probe + off.calls.install + forced.calls.probe + forced.calls.install, 0);
+});
+
+test("libraries that are already there are used and not downloaded", async () => {
+  const { deps, calls } = fakeDeps({ available: true });
+  const state = fresh();
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, true);
+  assert.equal(calls.install, 0);
+  // Remembered, so later scans do not start a process to ask again.
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, true);
+  assert.equal(calls.probe, 1);
+});
+
+test("missing libraries are downloaded once and then used", async () => {
+  const { deps, calls } = fakeDeps({ available: false });
+  const plan = await resolveNativeFfmpeg(deps, {}, () => false, fresh());
+  assert.equal(plan.enabled, true);
+  assert.equal(calls.install, 1);
+  assert.equal(calls.probe, 2);
+  assert.ok(calls.log.some((line) => /Downloading them once/.test(line)));
+  assert.ok(calls.log.some((line) => /is installed/.test(line)));
+});
+
+test("a failed download falls back to the ffmpeg program and is not retried for hours", async () => {
+  let clock = 1_000_000;
+  const { deps, calls } = fakeDeps({ available: false, installs: false });
+  deps.now = () => clock;
+  const state = fresh();
+
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, false);
+  assert.equal(calls.install, 1);
+  assert.ok(calls.log.some((line) => /could not be installed/.test(line)));
+
+  clock += 60 * 60 * 1000;
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, false);
+  assert.equal(calls.install, 1, "no second download within the waiting time");
+  assert.ok(calls.log.some((line) => /the last download failed/.test(line)));
+
+  clock += 6 * 60 * 60 * 1000;
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, false);
+  assert.equal(calls.install, 2, "tried again after the waiting time");
+});
+
+test("a download that gives libraries that still cannot load falls back", async () => {
+  const { deps, calls } = fakeDeps({ available: false, installs: true, installedAvailable: false });
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, fresh())).enabled, false);
+  assert.equal(calls.install, 1);
+});
+
+test("libraries put in place by hand are picked up even after a failed download", async () => {
+  let present = false;
+  const { deps, calls } = fakeDeps({ available: false, installs: false });
+  deps.probe = async () => present;
+  const state = fresh();
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, false);
+  present = true;
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, true);
+  assert.equal(calls.install, 1);
+});
+
+test("a cancelled scan does not count as a failed download", async () => {
+  const { deps } = fakeDeps({ available: false, installs: false });
+  deps.cancelled = () => true;
+  const state = fresh();
+  assert.equal((await resolveNativeFfmpeg(deps, {}, () => false, state)).enabled, false);
+  assert.equal(state.failedAt, null);
 });
 
 test("only the scan process sees the FFmpeg 8 libraries", () => {

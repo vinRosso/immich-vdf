@@ -24,25 +24,97 @@ export type NativeFfmpegPlan = {
   libDir: string | null;
 };
 
+/** After a failed download, wait this long before trying again, so an offline machine is not asked on every scan. */
+const RETRY_AFTER_FAILURE_MS = 6 * 60 * 60 * 1000;
+
 function libraryFileNames(): string[] {
   return LIBRARIES.map(([name, major]) => `lib${name}.so.${major}`);
 }
 
+export type NativeFfmpegMode =
+  /** `VDF_NATIVE_FFMPEG=0`. */
+  | { kind: "off"; libDir: string | null }
+  /** `VDF_NATIVE_FFMPEG=1`, or the Docker image's own libraries are all there. No check, no download. */
+  | { kind: "on"; libDir: string | null }
+  /** The default: use native decoding when the libraries can be loaded, and fetch them when they cannot. */
+  | { kind: "auto"; libDir: string | null };
+
 /**
- * `VDF_NATIVE_FFMPEG=1` turns it on and `0` turns it off. When unset it is on exactly when
- * `VDF_FFMPEG_LIBS` names a folder that holds all the libraries, which is how the Docker image ships them.
- * The CLI refuses to scan when asked for native mode without the libraries, so it is never guessed.
+ * `VDF_NATIVE_FFMPEG=0` keeps the ffmpeg program and `1` forces native mode. Unset is the default: automatic.
+ * `VDF_FFMPEG_LIBS` names the folder the Docker image keeps the libraries in; when all of them are there, native mode is
+ * used without further checks. The CLI refuses to scan when asked for native mode without the libraries, so an
+ * unchecked "on" only comes from the setting or from that folder.
  */
-export function nativeFfmpegPlan(
+export function nativeFfmpegMode(
   env: Env = process.env,
   exists: (file: string) => boolean = existsSync,
-): NativeFfmpegPlan {
+): NativeFfmpegMode {
   const setting = env.VDF_NATIVE_FFMPEG?.trim().toLowerCase();
   const libDir = env.VDF_FFMPEG_LIBS?.trim() || null;
-  if (setting === "0" || setting === "false" || setting === "off") return { enabled: false, libDir };
-  if (setting === "1" || setting === "true" || setting === "on") return { enabled: true, libDir };
+  if (setting === "0" || setting === "false" || setting === "off") return { kind: "off", libDir };
+  if (setting === "1" || setting === "true" || setting === "on") return { kind: "on", libDir };
   const shipped = libDir !== null && libraryFileNames().every((file) => exists(path.join(libDir, file)));
-  return { enabled: shipped, libDir };
+  return shipped ? { kind: "on", libDir } : { kind: "auto", libDir };
+}
+
+export type NativeFfmpegDeps = {
+  /** True when vdf-cli can load the FFmpeg 8 libraries. */
+  probe: () => Promise<boolean>;
+  /** Download and install them next to vdf-cli. True when that worked. */
+  install: () => Promise<boolean>;
+  log: (line: string) => void;
+  /** The scan was cancelled, so a failed install says nothing about the network. */
+  cancelled?: () => boolean;
+  now?: () => number;
+};
+
+export type NativeState = { available: boolean; failedAt: number | null };
+
+function sharedState(): NativeState {
+  const holder = globalThis as typeof globalThis & { __vdfNativeFfmpeg?: NativeState };
+  if (!holder.__vdfNativeFfmpeg) holder.__vdfNativeFfmpeg = { available: false, failedAt: null };
+  return holder.__vdfNativeFfmpeg;
+}
+
+/**
+ * Decide, for one scan, whether to decode inside vdf-cli. Automatic mode uses the libraries when they load, downloads
+ * them once when they do not, and falls back to the ffmpeg program when that fails, trying again only after a while.
+ */
+export async function resolveNativeFfmpeg(
+  deps: NativeFfmpegDeps,
+  env: Env = process.env,
+  exists: (file: string) => boolean = existsSync,
+  state: NativeState = sharedState(),
+): Promise<NativeFfmpegPlan> {
+  const mode = nativeFfmpegMode(env, exists);
+  if (mode.kind === "off") return { enabled: false, libDir: mode.libDir };
+  if (mode.kind === "on") return { enabled: true, libDir: mode.libDir };
+  const on = { enabled: true, libDir: mode.libDir };
+  const off = { enabled: false, libDir: mode.libDir };
+  const now = deps.now ?? Date.now;
+
+  if (state.available) return on;
+  if (await deps.probe()) {
+    state.available = true;
+    return on;
+  }
+  if (state.failedAt !== null && now() - state.failedAt < RETRY_AFTER_FAILURE_MS) {
+    deps.log("[scan] Native FFmpeg is not installed (the last download failed). Scanning with the ffmpeg program.");
+    return off;
+  }
+  deps.log("[scan] Native FFmpeg libraries not found. Downloading them once (about 90 MB, checked against the published checksum).");
+  const installed = await deps.install();
+  if (installed && (await deps.probe())) {
+    state.available = true;
+    state.failedAt = null;
+    deps.log("[scan] Native FFmpeg is installed. Scanning with it.");
+    return on;
+  }
+  if (!deps.cancelled?.()) {
+    state.failedAt = now();
+    deps.log("[scan] Native FFmpeg could not be installed. Scanning with the ffmpeg program. It will try again in a few hours.");
+  }
+  return off;
 }
 
 /** Environment for the scan process, so only vdf-cli sees the FFmpeg 8 libraries and not the distro's ffmpeg. */

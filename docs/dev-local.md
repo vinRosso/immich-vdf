@@ -37,13 +37,15 @@ On Windows the binary is `./bin/vdf-cli/vdf-cli.exe`.
 
 ### Faster scans
 
-By default a scan starts one `ffmpeg` program for every frame it reads. With the FFmpeg 8 shared libraries next to `vdf-cli`, it decodes inside the process instead, which was about four times faster on a test library of 300 images and 40 videos, with the same similarity scores. Download a `win64-gpl-shared` 8.x build (for example from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)), copy its `bin/*.dll` files next to `vdf-cli.exe`, and set this in `.env`:
+By default a scan starts one `ffmpeg` program for every frame it reads. With the FFmpeg 8 shared libraries it decodes inside `vdf-cli` instead, which was about four to five times faster on a test library of 300 images and 40 videos, with the same similarity scores.
+
+You do not have to set anything up. Native decoding turns on by itself whenever the libraries can be loaded. When they cannot, the first scan downloads the matching build once (about 90 MB, checked against the published checksum) into the `vdf-cli` folder and uses it from then on. This works on Windows, Linux and macOS, for x64 and ARM. On Linux the download is a `.tar.xz`, so the `xz` tool (package `xz-utils`) must be installed; without it the scan skips the download and says so. If the download fails, for example offline, the scan uses the `ffmpeg` program and tries again a few hours later. To fetch the libraries ahead of time:
 
 ```bash
-VDF_NATIVE_FFMPEG=1
+npm run install-ffmpeg
 ```
 
-Leave it unset to keep using the `ffmpeg` program. If the libraries are missing or fail to load, the scan runs again without them.
+Set `VDF_NATIVE_FFMPEG=0` in `.env` to always use the `ffmpeg` program and never download. `VDF_NATIVE_FFMPEG=1` forces native mode without checking.
 
 ## Run
 

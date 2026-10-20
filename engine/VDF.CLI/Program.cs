@@ -24,4 +24,5 @@ root.Subcommands.Add(CompareCommand.Build());
 root.Subcommands.Add(MarkCommand.Build());
 root.Subcommands.Add(DatabaseCommand.Build());
 root.Subcommands.Add(ExifCommand.Build());
+root.Subcommands.Add(FfmpegCommand.Build());
 return await root.Parse(args).InvokeAsync();
