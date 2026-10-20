@@ -181,13 +181,14 @@ function expandGroup(group: StoredGroup, stacks: ImmichStack[], maps: PathMapEnt
     if (!stackIds.has(stack.id) && !stack.assets.some((asset) => assetIds.has(asset.id))) continue;
     for (const asset of stack.assets) {
       if (assetIds.has(asset.id)) continue;
-      const cli = originalPathToCli(asset.originalPath, maps);
-      if (!cli) continue;
-      const key = slash(cli);
+      const original = slash(asset.originalPath);
+      // Prefer the scan mount path; fall back to Immich's path so the member still appears in the group.
+      const path = originalPathToCli(asset.originalPath, maps) ?? original;
+      const key = slash(path);
       if (present.has(key)) continue;
       present.add(key);
       assetIds.add(asset.id);
-      items.push(blankStackItem(cli, slash(asset.originalPath), asset.id, stack.id, asset.id === stack.primaryAssetId));
+      items.push(blankStackItem(path, original, asset.id, stack.id, asset.id === stack.primaryAssetId));
     }
   }
   return { ...group, items };

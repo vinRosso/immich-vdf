@@ -156,6 +156,50 @@ test("missing stack members are inserted and groups that share one are merged", 
   assert.equal(Number.isFinite(applied[0].items.find((entry) => entry.assetId === "b")?.similarity), false);
 });
 
+test("stack members whose Immich path is outside the map still join the group", () => {
+  const applied = applyStackMembership(
+    [group("g", [item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }), item("/mnt/loose.jpg", "x")])],
+    [
+      {
+        id: "s",
+        primaryAssetId: "a",
+        assets: [
+          { id: "a", originalPath: "/data/a.jpg" },
+          { id: "b", originalPath: "/other/b.jpg" },
+        ],
+      },
+    ],
+    maps,
+  );
+  assert.equal(applied.length, 1);
+  const outsider = applied[0].items.find((entry) => entry.assetId === "b");
+  assert.equal(outsider?.path, "/other/b.jpg");
+  assert.equal(outsider?.stackId, "s");
+  assert.equal(Number.isFinite(outsider?.similarity), false);
+});
+
+test("a stack id on one asset pulls every listed member into the group", () => {
+  const applied = applyStackMembership(
+    [group("g", [item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }), item("/mnt/loose.jpg", "x")])],
+    [
+      {
+        id: "s",
+        primaryAssetId: "a",
+        assets: [
+          { id: "a", originalPath: "/data/a.jpg" },
+          { id: "b", originalPath: "/data/b.jpg" },
+          { id: "c", originalPath: "/data/c.jpg" },
+        ],
+      },
+    ],
+    maps,
+  );
+  assert.deepEqual(
+    applied[0].items.map((entry) => entry.assetId).sort(),
+    ["a", "b", "c", "x"],
+  );
+});
+
 test("groups that share a stack merge even when their paths use different slashes", () => {
   const applied = applyChangedStackMembership(
     [

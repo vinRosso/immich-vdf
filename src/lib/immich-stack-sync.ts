@@ -45,7 +45,42 @@ export async function loadImmichStacks(
   return stacks;
 }
 
-/** Mark assets that already belong to an Immich stack, then hide groups that are exactly one stack. */
+function stackIdsInGroups(groups: StoredGroup[]): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      const stackId = itemStackId(item);
+      if (!stackId || seen.has(stackId)) continue;
+      seen.add(stackId);
+      ids.push(stackId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Annotate from Immich's stack list (search often omits membership), then fetch each
+ * stack by id so every member is inserted — not only assets that happened to be in the
+ * list payload or already present in the duplicate group.
+ */
+export async function syncGroupsWithImmichStacks(
+  groups: StoredGroup[],
+  baseUrl: string,
+  apiKey: string,
+  maps: PathMapEntry[],
+  parallelism: number,
+  listed: ImmichStack[] | null,
+): Promise<StoredGroup[]> {
+  const touching = listed ? stacksTouchingGroups(groups, listed) : [];
+  // List payloads can be enough to stamp stack ids onto matched assets; member insertion
+  // still goes through expandImmichGroups so GET /stacks/:id supplies the full set.
+  const annotated = touching.length > 0 ? applyStackMembership(groups, touching, maps) : groups;
+  const expanded = await expandImmichGroups(annotated, baseUrl, apiKey, maps, parallelism);
+  return dropCompleteStacks(expanded);
+}
+
+/** List-only annotate/expand (no GET /stacks/:id). Prefer syncGroupsWithImmichStacks for scans. */
 export function applyListedStacks(groups: StoredGroup[], stacks: ImmichStack[], maps: PathMapEntry[]): StoredGroup[] {
   const touching = stacksTouchingGroups(groups, stacks);
   if (touching.length === 0) return dropCompleteStacks(groups);
@@ -57,8 +92,9 @@ export async function applyLibraryStacks(
   baseUrl: string,
   apiKey: string,
   maps: PathMapEntry[],
+  parallelism: number,
 ): Promise<StoredGroup[]> {
-  return applyListedStacks(groups, await listImmichStacks(baseUrl, apiKey), maps);
+  return syncGroupsWithImmichStacks(groups, baseUrl, apiKey, maps, parallelism, await listImmichStacks(baseUrl, apiKey));
 }
 
 export async function expandImmichGroups(
@@ -68,8 +104,10 @@ export async function expandImmichGroups(
   maps: PathMapEntry[],
   parallelism: number,
 ): Promise<StoredGroup[]> {
-  const stackIds = groups.flatMap((group) => group.items.flatMap((item) => (itemStackId(item) ? [itemStackId(item)!] : [])));
+  const stackIds = stackIdsInGroups(groups);
   if (stackIds.length === 0) return groups;
+  // Drop cached list entries so a thin GET /stacks payload cannot block full members.
+  forgetImmichStacks(stackIds);
   const stacks = await loadImmichStacks(baseUrl, apiKey, stackIds, parallelism);
   if (stacks.length === 0) return groups;
   return applyStackMembership(groups, stacks, maps);

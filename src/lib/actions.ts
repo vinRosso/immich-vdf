@@ -21,7 +21,7 @@ import {
   type ImmichUser,
 } from "./immich";
 import { groupHasImmichArchived } from "./immich-archived";
-import { applyListedStacks, expandImmichGroups, forgetImmichStacks, rememberImmichStack } from "./immich-stack-sync";
+import { forgetImmichStacks, rememberImmichStack, syncGroupsWithImmichStacks } from "./immich-stack-sync";
 import {
   assignSelectionToStack,
   detachAssetsFromStack,
@@ -529,17 +529,14 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
     const saved = await updateResults("immich", async (current) => {
       const base = current ?? results;
       const attached = attachAssets(base.groups, assets, maps);
-      const groups = listed
-        ? applyListedStacks(attached, listed, maps)
-        : dropCompleteStacks(
-            await expandImmichGroups(
-              attached,
-              settings.immich.baseUrl,
-              settings.immich.apiKey,
-              maps,
-              settings.immich.scan.parallelism,
-            ),
-          );
+      const groups = await syncGroupsWithImmichStacks(
+        attached,
+        settings.immich.baseUrl,
+        settings.immich.apiKey,
+        maps,
+        settings.immich.scan.parallelism,
+        listed,
+      );
       return { ...base, warning: stackWarning, groups };
     });
     reportRejoin({ percent: 100, label: "Done", detail: "Match finished" });

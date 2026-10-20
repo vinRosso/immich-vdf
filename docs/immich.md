@@ -29,7 +29,7 @@ Card posters for matched assets come from the Immich API. Playback still needs t
 
 Loose items are shown before stacks. Inside a stack, the cover comes first. Items follow capture date.
 
-**Match again**, on the results line, links the saved groups to Immich again without comparing files. It reads the current stacks for photos already in those groups. A new file still needs a scan. A group that is already one Immich stack is hidden. A stack that still has a loose duplicate stays visible, with the other photos from that stack pulled in. Immich's file search does not include stack membership, so this step reads the stack list directly.
+**Match again**, on the results line, links the saved groups to Immich again without comparing files. It reads the current stacks for photos already in those groups. A new file still needs a scan. A group that is already one Immich stack is hidden. A stack that still has a loose duplicate stays visible, with the other photos from that stack pulled in (via `GET /api/stacks/:id`, not only the stack list). Immich's file search often omits stack membership, so this step reads the stack list and then loads each stack by id.
 
 A file can fail to match an asset when its path is outside the mount, or when Immich stored a collision name (`name+1.ext`). Mount that folder the same way Immich does (Compose volumes, or `VOLUME_BINDS` on [local dev](dev-local#volume-binds)), then match again.
 

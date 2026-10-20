@@ -362,7 +362,13 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
             scan.addLine("[scan] Reading Immich stacks…");
             try {
-              groups = await applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps);
+              groups = await applyLibraryStacks(
+                groups,
+                creds.baseUrl,
+                creds.apiKey,
+                maps,
+                input.scanSettings.parallelism,
+              );
             } catch (err) {
               scan.addLine(redact(errorText(err), secrets));
               groups = dropCompleteStacks(
