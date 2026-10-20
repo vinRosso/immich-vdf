@@ -59,6 +59,7 @@ export function enqueueFfmpeg(
       resolve();
       return;
     }
+    const queuedAt = performance.now();
     let taken = false;
     let settled = false;
     const finish = (error?: unknown) => {
@@ -76,11 +77,18 @@ export function enqueueFfmpeg(
       }
       pool.active += 1;
       if (priority !== PLAYBACK_PRIORITY) pool.thumbs += 1;
+      const started = performance.now();
       job()
         .then(() => finish(), (error: unknown) => finish(error))
         .finally(() => {
           pool.active -= 1;
           if (priority !== PLAYBACK_PRIORITY) pool.thumbs -= 1;
+          if (process.env.VDF_TIMING === "1") {
+            const now = performance.now();
+            console.log(
+              `[ffmpeg] ${options?.priority ?? "thumbnail"} waited ${(started - queuedAt).toFixed(0)}ms ran ${(now - started).toFixed(0)}ms queue ${pool.queue.length} active ${pool.active}`,
+            );
+          }
           pump(limit);
         });
     };

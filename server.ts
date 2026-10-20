@@ -39,6 +39,7 @@ await app.prepare();
 const upgrade = app.getUpgradeHandler();
 
 const onRequest = async (request: IncomingMessage, response: ServerResponse) => {
+  if (process.env.VDF_TIMING === "1") logTiming(request, response);
   try {
     stripUntrustedForwarding(request);
     applySecurityHeaders(request, response);
@@ -89,6 +90,23 @@ httpServer.listen(config.port, config.host, () => {
 }
 
 void main();
+
+/** VDF_TIMING=1: one line per API request with status and wall time, for comparing builds. */
+function logTiming(request: IncomingMessage, response: ServerResponse): void {
+  const started = performance.now();
+  response.on("close", () => {
+    const url = new URL(request.url || "/", "http://local");
+    if (!url.pathname.startsWith("/api/")) return;
+    const detail = ["kind", "index", "size", "mode", "h", "priority"]
+      .map((key) => (url.searchParams.has(key) ? `${key}=${url.searchParams.get(key)}` : ""))
+      .filter(Boolean)
+      .join(" ");
+    const file = url.searchParams.get("path") ?? url.searchParams.get("id") ?? "";
+    const name = file.split(/[\\/]/).pop() ?? "";
+    const aborted = response.writableFinished ? "" : " aborted";
+    console.log(`[timing] ${response.statusCode}${aborted} ${(performance.now() - started).toFixed(0)}ms ${url.pathname} ${detail} ${name}`.trimEnd());
+  });
+}
 
 function applySecurityHeaders(request: IncomingMessage, response: ServerResponse): void {
   const script = dev ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self' 'unsafe-inline'";
