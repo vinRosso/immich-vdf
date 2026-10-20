@@ -6,6 +6,7 @@ import { loadConfig } from "./config";
 import { ffprobeArgs, ffprobeBitDepthArgs } from "./ffmpeg-args";
 import { bitDepthFromHeader, imageBitDepthFromFfprobe } from "./image-bit-depth";
 import { parseFfprobe, type ProbeSummary } from "./playback";
+import { createCachedLoader, createLaneQueue, type LaneQueue, type ProbeLane } from "./probe-queue";
 
 export function ffmpegBin(): string {
   return process.env.FFMPEG?.trim() || "ffmpeg";
@@ -25,6 +26,7 @@ export async function fileCacheKey(file: string): Promise<string> {
 const HEADER_CHUNK = 64 * 1024;
 const HEADER_MAX = 1024 * 1024;
 const FFPROBE_BIT_DEPTH_TIMEOUT_MS = 15_000;
+const FFPROBE_TIMEOUT_MS = 30_000;
 
 type CachedDepth = { dir: string; depthPath: string; depth: number | null };
 
@@ -87,14 +89,46 @@ export async function probeImageBitDepth(file: string, options?: { ffprobe?: boo
   }
   if (options?.ffprobe === false) return 0;
   if (slot.depth === 0) return 0;
-  const stdout = await capture(ffprobeBin(), ffprobeBitDepthArgs(file), FFPROBE_BIT_DEPTH_TIMEOUT_MS);
+  const stdout = await probeQueue().run("background", () =>
+    capture(ffprobeBin(), ffprobeBitDepthArgs(file), FFPROBE_BIT_DEPTH_TIMEOUT_MS),
+  ).promise;
   bitDepth = imageBitDepthFromFfprobe(JSON.parse(stdout) as unknown);
   await mkdir(slot.dir, { recursive: true });
   await writeFile(slot.depthPath, JSON.stringify({ bitDepth }));
   return bitDepth;
 }
 
-export async function probeFile(file: string): Promise<ProbeSummary> {
+type ProbeHolder = { queue: LaneQueue; loader: ReturnType<typeof createCachedLoader<ProbeSummary>> };
+
+/** One queue for every ffprobe the app starts, so a scan or warm-up cannot starve a viewer request. */
+function probeHolder(): ProbeHolder {
+  const holder = globalThis as typeof globalThis & { __vdfProbe?: ProbeHolder };
+  if (!holder.__vdfProbe) {
+    const queue = createLaneQueue(() => Math.max(2, Math.min(6, Math.floor(loadConfig().cpuCount / 2))));
+    holder.__vdfProbe = {
+      queue,
+      loader: createCachedLoader<ProbeSummary>({
+        queue,
+        maxEntries: 5000,
+        failureTtlMs: 30_000,
+        load: probeFromDiskOrTool,
+      }),
+    };
+  }
+  return holder.__vdfProbe;
+}
+
+export function probeQueue(): LaneQueue {
+  return probeHolder().queue;
+}
+
+/** Summary from the in-memory cache, the disk cache, or one ffprobe run. `background` yields to viewer requests. */
+export async function probeFile(file: string, lane: ProbeLane = "interactive"): Promise<ProbeSummary> {
+  const key = await fileCacheKey(file);
+  return probeHolder().loader.get(key, file, lane);
+}
+
+async function probeFromDiskOrTool(file: string): Promise<ProbeSummary> {
   const key = await fileCacheKey(file);
   const cachePath = path.join(loadConfig().dataDir, "probe", `${key}.json`);
   try {
@@ -102,7 +136,9 @@ export async function probeFile(file: string): Promise<ProbeSummary> {
   } catch {
     // Cache miss or a stale file. Probe again.
   }
-  const stdout = await capture(ffprobeBin(), ffprobeArgs(file));
+  const started = performance.now();
+  const stdout = await capture(ffprobeBin(), ffprobeArgs(file), FFPROBE_TIMEOUT_MS);
+  if (process.env.VDF_TIMING === "1") console.log(`[ffprobe] ${(performance.now() - started).toFixed(0)}ms ${path.basename(file)}`);
   const parsed = JSON.parse(stdout) as unknown;
   const summary = parseFfprobe(parsed);
   await mkdir(path.dirname(cachePath), { recursive: true });
