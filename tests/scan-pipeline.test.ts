@@ -112,3 +112,24 @@ test("a new file brings the CLI steps back", async () => {
   assert.ok(run.phases && "CLI scan" in run.phases);
   assert.match(run.error ?? "", /could not be started/);
 });
+
+test("capture dates that cannot be read do not stop the scan", async () => {
+  const settings = await mods.store.loadSettings();
+  settings.server.scan.timeWindowDays = 7;
+  await mods.store.saveSettings(settings);
+  try {
+    await runToEnd();
+    const run = (await mods.store.loadRuns()).server;
+    // Reading dates fails because there is no vdf-cli, and the scan carries on to the step that needs it.
+    assert.equal(run.status, "error");
+    assert.match(run.error ?? "", /could not be started/);
+    assert.ok(run.phases && "Capture dates" in run.phases);
+    assert.ok(run.phases && "CLI scan" in run.phases);
+    assert.ok(mods.scan.getScan().lines.some((line) => /Could not read capture dates from files/.test(line)));
+    assert.equal(mods.scan.getScan().running, false);
+  } finally {
+    const restored = await mods.store.loadSettings();
+    restored.server.scan.timeWindowDays = 0;
+    await mods.store.saveSettings(restored);
+  }
+});

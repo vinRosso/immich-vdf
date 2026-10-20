@@ -91,7 +91,7 @@ export function removeStaleScanTemp(dir: string, maxAgeMs = STALE_SCAN_TEMP_MS, 
     return 0;
   }
   for (const name of names) {
-    if (!name.startsWith("scan-") || !name.endsWith(".json")) continue;
+    if (!name.startsWith("scan-") || !(name.endsWith(".json") || name.endsWith(".txt"))) continue;
     const file = path.join(dir, name);
     try {
       if (now - statSync(file).mtimeMs < maxAgeMs) continue;

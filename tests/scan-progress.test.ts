@@ -123,3 +123,13 @@ test("parseScanProgress reports Immich asset and stack steps", () => {
   const stacks = parseScanProgress(["[scan] Matching Immich library…", "[scan] Reading Immich stacks…"]);
   assert.equal(stacks.label, "Reading Immich stacks");
 });
+
+test("parseScanProgress names the capture date step", () => {
+  const info = parseScanProgress([
+    "[scan] Checking whether the library changed…",
+    "[scan] Inventory took 1.0 s",
+    "[scan] Reading capture dates from Immich…",
+  ]);
+  assert.equal(info.label, "Reading capture dates");
+  assert.equal(info.indeterminate, true);
+});

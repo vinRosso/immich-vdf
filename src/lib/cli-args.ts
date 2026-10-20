@@ -11,6 +11,8 @@ type VdfCompareParams = ScanSettings & {
   dbDir: string;
   outputFile: string;
   settingsFile: string;
+  /** JSON of scan path to capture date. Passed only when the capture-time window is on. */
+  timesFile?: string;
 };
 
 function appendMatchFlags(args: string[], scan: ScanSettings): void {
@@ -43,7 +45,13 @@ export function buildVdfCompareArgs(scan: VdfCompareParams): string[] {
   const args = ["compare"];
   appendMatchFlags(args, scan);
   args.push("--db", scan.dbDir, "--format", "json", "--output", scan.outputFile, "--settings", scan.settingsFile);
+  if (scan.timesFile && scan.timeWindowDays > 0) args.push("--times", scan.timesFile);
   return args;
+}
+
+/** Capture dates for the files listed (one path per line) in `pathsFile`. */
+export function buildVdfExifArgs(pathsFile: string, outputFile: string, parallelism: number): string[] {
+  return ["exif", "--paths", pathsFile, "--output", outputFile, "--parallelism", String(Math.max(1, Math.floor(parallelism) || 1))];
 }
 
 export function buildVdfImageTimesArgs(dbDir: string, outputFile: string): string[] {

@@ -60,3 +60,27 @@ test("a failing search rejects the whole listing", async () => {
   globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
   await assert.rejects(listTrashedImmichAssets(BASE, "key"), /Immich trash search failed \(500\)/);
 });
+
+test("asset dates come from images and videos, ask only for changes, and skip trashed assets", async () => {
+  const bodies: Array<{ type: string; updatedAfter?: string; withArchived?: boolean }> = [];
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { type: string; page: number; updatedAfter?: string; withArchived?: boolean };
+    bodies.push(body);
+    const items =
+      body.type === "IMAGE"
+        ? [
+            { id: "i1", originalPath: "/data/a.jpg", fileCreatedAt: "2020-05-01T10:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" },
+            { id: "i2", originalPath: "/data/gone.jpg", fileCreatedAt: "2020-05-02T10:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z", isTrashed: true },
+            { id: "i3", originalPath: "/data/bad.jpg", fileCreatedAt: "not a date", updatedAt: "2024-01-01T00:00:00.000Z" },
+          ]
+        : [{ id: "v1", originalPath: "/data/c.mp4", fileCreatedAt: "2021-06-01T00:00:00.000Z", updatedAt: "2024-02-01T00:00:00.000Z" }];
+    return new Response(JSON.stringify({ assets: { items, nextPage: null } }), { status: 200 });
+  }) as typeof fetch;
+
+  const { listImmichAssetTimes } = await import("../src/lib/immich");
+  const times = await listImmichAssetTimes(BASE, "key", "2023-12-31T23:59:59.000Z");
+  assert.deepEqual(times.map((time) => time.originalPath).sort(), ["/data/a.jpg", "/data/c.mp4"]);
+  assert.equal(times.find((time) => time.originalPath === "/data/c.mp4")?.updatedAt, "2024-02-01T00:00:00.000Z");
+  assert.deepEqual(bodies.map((body) => body.type).sort(), ["IMAGE", "VIDEO"]);
+  assert.ok(bodies.every((body) => body.updatedAfter === "2023-12-31T23:59:59.000Z" && body.withArchived === true));
+});

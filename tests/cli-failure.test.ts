@@ -32,10 +32,11 @@ test("stale scan temp files are removed and fresh ones kept", async () => {
     const oldSettings = path.join(dir, "scan-immich-settings-1.json");
     const fresh = path.join(dir, "scan-server-2.json");
     const other = path.join(dir, "notes.json");
-    for (const file of [old, oldSettings, fresh, other]) await writeFile(file, "{}");
+    const oldList = path.join(dir, "scan-immich-filelist-1.txt");
+    for (const file of [old, oldSettings, fresh, other, oldList]) await writeFile(file, "{}");
     const longAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    for (const file of [old, oldSettings, other]) await utimes(file, longAgo, longAgo);
-    assert.equal(removeStaleScanTemp(dir), 2);
+    for (const file of [old, oldSettings, other, oldList]) await utimes(file, longAgo, longAgo);
+    assert.equal(removeStaleScanTemp(dir), 3);
     assert.deepEqual(readdirSync(dir).sort(), ["notes.json", "scan-server-2.json"]);
   } finally {
     await rm(dir, { recursive: true, force: true });

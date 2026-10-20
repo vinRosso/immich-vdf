@@ -178,14 +178,21 @@ export function fingerprintMatchingSettings(scan: ScanSettings): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-export function combinedCompareFingerprint(inventoryFp: string, settingsFp: string, timeWindowDays = 0): string {
-  return createHash("sha256")
+export function combinedCompareFingerprint(
+  inventoryFp: string,
+  settingsFp: string,
+  timeWindowDays = 0,
+  /** Capture dates the window used. Empty when the window is off, so those fingerprints stay as they were. */
+  timesFp = "",
+): string {
+  const hash = createHash("sha256")
     .update(inventoryFp)
     .update(":")
     .update(settingsFp)
     .update(":")
-    .update(String(timeWindowDays))
-    .digest("hex");
+    .update(String(timeWindowDays));
+  if (timesFp) hash.update(":").update(timesFp);
+  return hash.digest("hex");
 }
 
 export function countInventoryChanges(before: InventoryEntry[], after: InventoryEntry[]): number {

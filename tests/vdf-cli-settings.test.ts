@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildVdfArgs, buildVdfCompareArgs, buildVdfScanArgs } from "../src/lib/cli-args";
+import { buildVdfArgs, buildVdfCompareArgs, buildVdfExifArgs, buildVdfScanArgs } from "../src/lib/cli-args";
 import { defaultScan } from "../src/lib/scan-defaults";
 import { buildVdfCliSettingsFile } from "../src/lib/vdf-cli-settings";
 
@@ -64,4 +64,25 @@ test("buildVdfCompareArgs uses compare with json output", () => {
   assert.equal(args[args.indexOf("--format") + 1], "json");
   assert.equal(args[args.indexOf("--output") + 1], "/data/tmp/out.json");
   assert.equal(args.includes("--include"), false);
+});
+
+test("buildVdfCompareArgs passes the capture dates only when the window is on", () => {
+  const base = {
+    ...defaultScan(),
+    dbDir: "/data/db/server",
+    outputFile: "/data/tmp/out.json",
+    settingsFile: "/data/tmp/settings.json",
+    timesFile: "/data/tmp/times.json",
+  };
+  const windowed = buildVdfCompareArgs({ ...base, timeWindowDays: 7 });
+  assert.equal(windowed[windowed.indexOf("--times") + 1], "/data/tmp/times.json");
+  assert.equal(buildVdfCompareArgs({ ...base, timeWindowDays: 0 }).includes("--times"), false);
+  assert.equal(buildVdfCompareArgs({ ...base, timeWindowDays: 7, timesFile: undefined }).includes("--times"), false);
+});
+
+test("buildVdfExifArgs lists the files and sets the parallelism", () => {
+  assert.deepEqual(buildVdfExifArgs("/tmp/list.txt", "/tmp/out.json", 4), [
+    "exif", "--paths", "/tmp/list.txt", "--output", "/tmp/out.json", "--parallelism", "4",
+  ]);
+  assert.equal(buildVdfExifArgs("a", "b", 0).at(-1), "1");
 });

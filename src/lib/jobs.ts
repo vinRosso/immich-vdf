@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildVdfCompareArgs, buildVdfImageTimesArgs, buildVdfScanArgs } from "./cli-args";
+import { buildVdfCompareArgs, buildVdfExifArgs, buildVdfImageTimesArgs, buildVdfScanArgs } from "./cli-args";
+import {
+  applyCaptureDates,
+  applyCaptureDatesToImages,
+  collectCaptureTimes,
+  needsCaptureDates,
+  prefixCacheKey,
+  type CaptureTimes,
+} from "./capture-times";
 import { decideCompareRun } from "./compare-decision";
 import { buildVdfCliSettingsFile } from "./vdf-cli-settings";
 import { loadConfig, resolveVdfCli } from "./config";
@@ -9,7 +17,7 @@ import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts"
 import { errorText } from "./errors";
 import { assetsForOriginalPaths } from "./immich-asset-index";
 import { attachAssets, dropImmichTrashedFromGroups, immichTrashedCredits, originalPathsForGroups } from "./immich-join";
-import { listImmichStacks, listTrashedImmichAssets } from "./immich";
+import { listImmichAssetTimes, listImmichStacks, listTrashedImmichAssets } from "./immich";
 import { applyLibraryStacks, expandImmichGroups } from "./immich-stack-sync";
 import { dropCompleteStacks } from "./immich-stacks";
 import { resolveImmichPathMap } from "./immich-path-map";
@@ -53,6 +61,8 @@ type ScanPaths = {
   dbDir: string;
   outputFile: string;
   settingsFile: string;
+  /** Capture dates handed to compare. Only written when the capture-time window is on. */
+  timesFile: string;
 };
 
 /** Scheduled runs keep the live folders and use the schedule's own matching options. */
@@ -101,8 +111,9 @@ export async function startScan(
     const stamp = Date.now();
     const outputFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-${stamp}.json`);
     const settingsFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-settings-${stamp}.json`);
+    const timesFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-times-${stamp}.json`);
     await writeFile(settingsFile, `${JSON.stringify(buildVdfCliSettingsFile(scanSettings, paths))}\n`);
-    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile }, startedAt).catch(() => undefined);
+    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile, timesFile }, startedAt).catch(() => undefined);
     return { ok: true };
   } catch (error) {
     const message = redact(errorText(error), secretValues(settings));
@@ -215,6 +226,20 @@ async function runScanSteps(
     return;
   }
 
+  // The window and burst groups use these, and an edited date has to count as a change.
+  let capture: CaptureTimes | null = null;
+  if (needsCaptureDates(scanSettings)) {
+    try {
+      capture = await timer.time("Capture dates", () => readCaptureDates(section, scanSettings, inventory));
+    } catch (error) {
+      scan.addLine(`[scan] Capture dates skipped: ${redact(errorText(error), scan.secrets)}`);
+    }
+    if (scan.cancelled) {
+      await cancelled();
+      return;
+    }
+  }
+
   const { decision, previous } = await timer.time("Decision", async () => {
     const previous = await loadResults(section);
     const previousInventory = await loadStoredInventory(section);
@@ -225,6 +250,7 @@ async function runScanSteps(
         inventory,
         previous,
         previousInventory,
+        timesFingerprint: capture?.fingerprint,
       }),
     };
   });
@@ -237,6 +263,7 @@ async function runScanSteps(
       scanSettings,
       inventory,
       decision,
+      capture,
       cancelled: false,
       startedAt,
       timer,
@@ -265,7 +292,9 @@ async function runScanSteps(
     return;
   }
 
-  const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths });
+  const sendDates = capture !== null && scanSettings.timeWindowDays > 0;
+  if (capture && sendDates) await writeFile(paths.timesFile, JSON.stringify(Object.fromEntries(capture.times)));
+  const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths, timesFile: sendDates ? paths.timesFile : undefined });
   const compareResult = await timer.time("CLI compare", () => spawnVdfCli(compareArgs));
   if (scan.cancelled) {
     await cancelled();
@@ -279,6 +308,7 @@ async function runScanSteps(
     scanSettings,
     inventory,
     decision,
+    capture,
     spawnFailed: compareResult.spawnFailed,
     cancelled: false,
     startedAt,
@@ -312,6 +342,7 @@ type FinishInput = {
       scanSettings: ScanSettings;
       inventory: InventoryEntry[];
       decision: CompareDecision;
+      capture: CaptureTimes | null;
       cancelled: boolean;
     }
   | {
@@ -324,6 +355,7 @@ type FinishInput = {
       scanSettings: ScanSettings;
       inventory: InventoryEntry[];
       decision: CompareDecision;
+      capture: CaptureTimes | null;
       spawnFailed: boolean;
       cancelled: boolean;
     }
@@ -363,6 +395,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     await Promise.all([
       rm(paths.outputFile, { force: true }).catch(() => undefined),
       rm(paths.settingsFile, { force: true }).catch(() => undefined),
+      rm(paths.timesFile, { force: true }).catch(() => undefined),
     ]);
   }
   const { ok, groupCount } = outcome;
@@ -412,7 +445,14 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
         error = "No saved duplicate groups to reuse.";
       } else {
         // Regrouping can be slow and takes the results lock itself, so it runs before the merge below.
-        const reused = await reusedGroups(section, existing, input.scanSettings, paths, input.decision.inventoryFingerprint);
+        const reused = await reusedGroups(
+          section,
+          existing,
+          input.scanSettings,
+          paths,
+          input.decision.inventoryFingerprint,
+          input.capture,
+        );
         const shapeBefore = groupShape(existing.groups);
         let savedGroups = reused.groups;
         await updateResults(section, (current) => {
@@ -427,6 +467,7 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
             durationMs: pipelineDurationMs(input.startedAt),
             error: null,
             appliedPrefixSeconds: untouched ? reused.appliedPrefixSeconds : current.appliedPrefixSeconds,
+            appliedTimesFingerprint: untouched ? reused.appliedTimesFingerprint : current.appliedTimesFingerprint,
           };
         });
         groupCount = await countVisibleGroups(section, savedGroups);
@@ -440,7 +481,7 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
       const immichFetch =
         section === "immich" && settings.immich.baseUrl && settings.immich.apiKey ? startImmichFetch(settings) : null;
       const visualGroups = await timer.time("Parse results", async () =>
-        parseCliResults(await readFile(paths.outputFile, "utf8")).map(toStoredGroup),
+        applyCaptureDates(parseCliResults(await readFile(paths.outputFile, "utf8")).map(toStoredGroup), input.capture),
       );
       const prefixed = await timer.time("Burst groups", () =>
         withPrefixGroups(
@@ -451,6 +492,7 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           paths.excludes,
           section,
           input.decision.inventoryFingerprint,
+          input.capture,
         ),
       );
       const parsed = prefixed.groups;
@@ -548,7 +590,9 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           compareInventoryFingerprint: input.decision.inventoryFingerprint,
           compareSettingsFingerprint: input.decision.settingsFingerprint,
           compareTimeWindowDays: input.scanSettings.timeWindowDays,
+          compareTimesFingerprint: input.decision.compareTimesFingerprint || null,
           appliedPrefixSeconds: prefixed.applied ? input.scanSettings.prefixSeconds : null,
+          appliedTimesFingerprint: prefixed.applied ? (input.capture?.fingerprint ?? null) : null,
         });
         await updateIgnored(section, (ignoredRaw) => {
           const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
@@ -565,6 +609,52 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
     ok = false;
   }
   return { ok, error, groupCount };
+}
+
+/** Capture dates for the inventory: Immich first, then the files themselves. */
+async function readCaptureDates(
+  section: SectionId,
+  scanSettings: ScanSettings,
+  inventory: InventoryEntry[],
+): Promise<CaptureTimes> {
+  const scan = getScan();
+  const settings = await loadSettings();
+  const configured = Boolean(settings.immich.baseUrl && settings.immich.apiKey);
+  const creds = immichCredentials(settings);
+  let maps: Awaited<ReturnType<typeof resolveImmichPathMap>> = [];
+  if (configured) {
+    try {
+      maps = await resolveImmichPathMap(creds);
+    } catch (error) {
+      scan.addLine(`[scan] Immich path map unavailable (${redact(errorText(error), scan.secrets)}).`);
+    }
+  }
+  return collectCaptureTimes(section, inventory, {
+    listImmichTimes: configured ? (updatedAfter) => listImmichAssetTimes(creds.baseUrl, creds.apiKey, updatedAfter) : undefined,
+    maps,
+    readFileDates: (files) => readDatesWithCli(section, files, scanSettings.parallelism),
+    log: (line) => scan.addLine(line),
+  });
+}
+
+/** `vdf-cli exif` over a list of files. Throws when the CLI cannot run, so nothing is saved as "no date". */
+async function readDatesWithCli(section: SectionId, files: string[], parallelism: number): Promise<Map<string, string>> {
+  const scan = getScan();
+  const stamp = Date.now();
+  const tmp = path.join(loadConfig().dataDir, "tmp");
+  const listFile = path.join(tmp, `scan-${section}-filelist-${stamp}.txt`);
+  const outFile = path.join(tmp, `scan-${section}-filedates-${stamp}.json`);
+  try {
+    await writeFile(listFile, `${files.join("\n")}\n`, "utf8");
+    const result = await spawnVdfCli(buildVdfExifArgs(listFile, outFile, parallelism));
+    if (result.spawnFailed || result.code !== 0) throw new Error(cliFailure(result, scan.cliTail()));
+    const raw = JSON.parse(await readFile(outFile, "utf8")) as Record<string, unknown>;
+    const dates = new Map<string, string>();
+    for (const [file, value] of Object.entries(raw)) if (typeof value === "string") dates.set(file, value);
+    return dates;
+  } finally {
+    await Promise.all([rm(listFile, { force: true }).catch(() => undefined), rm(outFile, { force: true }).catch(() => undefined)]);
+  }
 }
 
 /** Immich requests that only need the connection settings. Failures surface where the result is awaited. */
@@ -766,18 +856,26 @@ async function keepInside(
 
 async function reusedGroups(
   section: SectionId,
-  existing: { groups: StoredGroup[]; appliedPrefixSeconds?: number | null },
+  existing: { groups: StoredGroup[]; appliedPrefixSeconds?: number | null; appliedTimesFingerprint?: string | null },
   scanSettings: ScanSettings,
   paths: ScanPaths,
   inventoryFingerprint: string,
-): Promise<{ groups: StoredGroup[]; appliedPrefixSeconds: number | null }> {
+  capture: CaptureTimes | null,
+): Promise<{ groups: StoredGroup[]; appliedPrefixSeconds: number | null; appliedTimesFingerprint: string | null }> {
   const visible = section === "immich" ? dropCompleteStacks(existing.groups) : existing.groups;
-  if ((existing.appliedPrefixSeconds ?? null) === scanSettings.prefixSeconds) {
-    return { groups: visible, appliedPrefixSeconds: scanSettings.prefixSeconds };
+  // Burst groups follow the capture dates, so a date edited since they were built means building them again.
+  const burstsApply = scanSettings.prefixSeconds > 0 && scanSettings.includeImages;
+  const datesSame = !burstsApply || (existing.appliedTimesFingerprint ?? "") === (capture?.fingerprint ?? "");
+  if ((existing.appliedPrefixSeconds ?? null) === scanSettings.prefixSeconds && datesSame) {
+    return {
+      groups: visible,
+      appliedPrefixSeconds: scanSettings.prefixSeconds,
+      appliedTimesFingerprint: existing.appliedTimesFingerprint ?? null,
+    };
   }
   const cache = await loadPrefixCache(section);
-  const base =
-    cache && cache.inventoryFingerprint === inventoryFingerprint ? cache.baseGroups : stripPrefixItems(existing.groups);
+  const cacheKey = prefixCacheKey(inventoryFingerprint, capture);
+  const base = cache && cache.inventoryFingerprint === cacheKey ? cache.baseGroups : stripPrefixItems(existing.groups);
   const refreshed = await withPrefixGroups(
     base,
     paths.dbDir,
@@ -786,12 +884,20 @@ async function reusedGroups(
     paths.excludes,
     section,
     inventoryFingerprint,
+    capture,
   );
-  if (!refreshed.applied) return { groups: visible, appliedPrefixSeconds: existing.appliedPrefixSeconds ?? null };
+  if (!refreshed.applied) {
+    return {
+      groups: visible,
+      appliedPrefixSeconds: existing.appliedPrefixSeconds ?? null,
+      appliedTimesFingerprint: existing.appliedTimesFingerprint ?? null,
+    };
+  }
   const overlaid = overlayKnownItems(existing.groups, refreshed.groups);
   return {
     groups: section === "immich" ? dropCompleteStacks(overlaid) : overlaid,
     appliedPrefixSeconds: scanSettings.prefixSeconds,
+    appliedTimesFingerprint: capture?.fingerprint ?? null,
   };
 }
 
@@ -802,9 +908,12 @@ async function withPrefixGroups(
   includes: string[],
   excludes: string[],
   section: SectionId,
-  inventoryFingerprint: string,
+  rawInventoryFingerprint: string,
+  capture: CaptureTimes | null,
 ): Promise<{ groups: StoredGroup[]; applied: boolean }> {
   const scan = getScan();
+  // The saved groups are only good for the dates they were built from.
+  const inventoryFingerprint = prefixCacheKey(rawInventoryFingerprint, capture);
   const cache = await loadPrefixCache(section);
   if (scanSettings.prefixSeconds <= 0 || !scanSettings.includeImages) {
     if (cache && cache.inventoryFingerprint === inventoryFingerprint) {
@@ -840,11 +949,14 @@ async function withPrefixGroups(
         scan.addLine("[scan] Could not read image times, so prefix groups were skipped.");
         return { groups: visualGroups, applied: false };
       }
-      images = await imagesInScanScopeParallel(
-        parseImageTimes(await readFile(timesFile, "utf8")),
-        includes,
-        excludes,
-        scanSettings.parallelism,
+      images = applyCaptureDatesToImages(
+        await imagesInScanScopeParallel(
+          parseImageTimes(await readFile(timesFile, "utf8")),
+          includes,
+          excludes,
+          scanSettings.parallelism,
+        ),
+        capture,
       );
       clusters = await prefixClustersParallel(
         images,

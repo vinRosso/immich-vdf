@@ -124,6 +124,10 @@ export type StoredResults = {
   compareTimeWindowDays?: number | null;
   /** Prefix seconds applied to `groups`. Missing on results from before prefix caching. */
   appliedPrefixSeconds?: number | null;
+  /** Capture dates the capture-time window used in the last compare. */
+  compareTimesFingerprint?: string | null;
+  /** Capture dates behind the burst groups in these results. */
+  appliedTimesFingerprint?: string | null;
 };
 
 export type IgnoredEntry = {

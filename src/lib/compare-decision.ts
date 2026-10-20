@@ -13,6 +13,10 @@ export type CompareDecision = {
   inventoryFingerprint: string;
   settingsFingerprint: string;
   compareFingerprint: string;
+  /** Capture dates behind the window. Empty when the window is off. */
+  compareTimesFingerprint: string;
+  /** Capture dates this run used, whether or not the window did. Burst groups depend on them too. */
+  timesFingerprint: string;
 };
 
 export function decideCompareRun(input: {
@@ -20,19 +24,26 @@ export function decideCompareRun(input: {
   inventory: InventoryEntry[];
   previous: StoredResults | null;
   previousInventory: InventoryEntry[] | null;
+  /** Fingerprint of the capture dates, when this run read them. */
+  timesFingerprint?: string;
 }): CompareDecision {
   const settingsFingerprint = fingerprintMatchingSettings(input.scan);
   const inventoryFingerprint = fingerprintInventory(input.inventory);
+  const timesFingerprint = input.timesFingerprint ?? "";
+  const compareTimesFingerprint = input.scan.timeWindowDays > 0 ? timesFingerprint : "";
   const compareFingerprint = combinedCompareFingerprint(
     inventoryFingerprint,
     settingsFingerprint,
     input.scan.timeWindowDays,
+    compareTimesFingerprint,
   );
 
   const base = {
     inventoryFingerprint,
     settingsFingerprint,
     compareFingerprint,
+    compareTimesFingerprint,
+    timesFingerprint,
   };
 
   const previous = input.previous;
@@ -76,6 +87,13 @@ export function decideCompareRun(input: {
       ...base,
       skipCompare: false,
       logMessage: windowChangeMessage(previous.compareTimeWindowDays, input.scan.timeWindowDays),
+    };
+  }
+  if (changed === 0 && (previous.compareTimesFingerprint ?? "") !== compareTimesFingerprint) {
+    return {
+      ...base,
+      skipCompare: false,
+      logMessage: "[scan] Capture dates changed, comparing the library.",
     };
   }
   if (changed > 0) {

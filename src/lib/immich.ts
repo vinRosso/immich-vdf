@@ -303,6 +303,75 @@ async function searchAllPages(
   return assets;
 }
 
+export type ImmichAssetTime = { originalPath: string; fileCreatedAt: string; updatedAt: string };
+
+/**
+ * Capture date of every asset, or of those Immich changed after `updatedAfter`. `fileCreatedAt` is the date
+ * Immich shows in its timeline, so it includes dates edited in Immich or in a sidecar file.
+ */
+export async function listImmichAssetTimes(
+  baseUrl: string,
+  apiKey: string,
+  updatedAfter?: string,
+): Promise<ImmichAssetTime[]> {
+  const byType = await Promise.all(
+    ["IMAGE", "VIDEO"].map((type) => listAssetTimesOfType(baseUrl, apiKey, type, updatedAfter)),
+  );
+  return byType.flat();
+}
+
+async function listAssetTimesOfType(
+  baseUrl: string,
+  apiKey: string,
+  type: string,
+  updatedAfter: string | undefined,
+): Promise<ImmichAssetTime[]> {
+  const items: ImmichAssetTime[] = [];
+  let page = 1;
+  for (let guard = 0; guard < 5000; guard += 1) {
+    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+      method: "POST",
+      headers: headers(apiKey, true),
+      body: searchMetadataBody({ page, type, updatedAfter, withArchived: true }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`Immich date search failed (${response.status})`);
+    const batch = parseAssetTimes(await response.json());
+    items.push(...batch.items);
+    if (!batch.nextPage || batch.items.length === 0) break;
+    const parsed = Number(batch.nextPage);
+    page = Number.isFinite(parsed) && parsed > page ? parsed : page + 1;
+  }
+  return items;
+}
+
+export function parseAssetTimes(body: unknown): { items: ImmichAssetTime[]; nextPage: string | number | null } {
+  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const nested = record.assets && typeof record.assets === "object" ? (record.assets as Record<string, unknown>) : null;
+  const rawItems = (nested?.items ?? record.items) as unknown;
+  const items: ImmichAssetTime[] = [];
+  if (Array.isArray(rawItems)) {
+    for (const item of rawItems) {
+      if (!item || typeof item !== "object" || immichAssetTrashed(item)) continue;
+      const asset = item as { originalPath?: unknown; fileCreatedAt?: unknown; updatedAt?: unknown };
+      if (
+        typeof asset.originalPath === "string" &&
+        typeof asset.fileCreatedAt === "string" &&
+        Number.isFinite(Date.parse(asset.fileCreatedAt))
+      ) {
+        items.push({
+          originalPath: asset.originalPath,
+          fileCreatedAt: asset.fileCreatedAt,
+          updatedAt: typeof asset.updatedAt === "string" ? asset.updatedAt : asset.fileCreatedAt,
+        });
+      }
+    }
+  }
+  const next = nested?.nextPage ?? record.nextPage;
+  const nextPage = typeof next === "string" || typeof next === "number" ? next : null;
+  return { items, nextPage };
+}
+
 export type ImmichAssetUpdate = { id: string; updatedAt: string };
 
 /** Assets Immich has modified after `updatedAfter`. Search results omit stack membership. */

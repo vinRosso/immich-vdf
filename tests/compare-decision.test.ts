@@ -144,3 +144,52 @@ test("changing prefix seconds reuses the visual compare", () => {
   assert.equal(decision.skipCompare, true);
   assert.match(decision.logMessage, /reusing last compare/i);
 });
+
+test("an edited capture date requires a compare when the window is on", () => {
+  const scan = { ...defaultScan(), timeWindowDays: 7 };
+  const settingsFp = fingerprintMatchingSettings(scan);
+  const inventoryFp = fingerprintInventory(baseInventory);
+  const saved = stored({
+    compareFingerprint: combinedCompareFingerprint(inventoryFp, settingsFp, 7, "dates-a"),
+    compareInventoryFingerprint: inventoryFp,
+    compareSettingsFingerprint: settingsFp,
+    compareTimeWindowDays: 7,
+    compareTimesFingerprint: "dates-a",
+  });
+  const same = decideCompareRun({ scan, inventory: baseInventory, previous: saved, previousInventory: baseInventory, timesFingerprint: "dates-a" });
+  assert.equal(same.skipCompare, true);
+
+  const edited = decideCompareRun({ scan, inventory: baseInventory, previous: saved, previousInventory: baseInventory, timesFingerprint: "dates-b" });
+  assert.equal(edited.skipCompare, false);
+  assert.match(edited.logMessage, /capture dates changed/i);
+  assert.equal(edited.compareTimesFingerprint, "dates-b");
+});
+
+test("capture dates only matter to compare while the window is on", () => {
+  const scan = { ...defaultScan(), timeWindowDays: 0 };
+  const settingsFp = fingerprintMatchingSettings(scan);
+  const inventoryFp = fingerprintInventory(baseInventory);
+  const saved = stored({
+    compareFingerprint: combinedCompareFingerprint(inventoryFp, settingsFp, 0),
+    compareInventoryFingerprint: inventoryFp,
+    compareSettingsFingerprint: settingsFp,
+    compareTimeWindowDays: 0,
+  });
+  const decision = decideCompareRun({ scan, inventory: baseInventory, previous: saved, previousInventory: baseInventory, timesFingerprint: "burst-only-dates" });
+  assert.equal(decision.skipCompare, true);
+  assert.equal(decision.compareTimesFingerprint, "");
+  assert.equal(decision.timesFingerprint, "burst-only-dates");
+});
+
+test("fingerprints saved before capture dates existed stay valid", () => {
+  const settingsFp = fingerprintMatchingSettings(defaultScan());
+  const inventoryFp = fingerprintInventory(baseInventory);
+  assert.equal(
+    combinedCompareFingerprint(inventoryFp, settingsFp, 7),
+    combinedCompareFingerprint(inventoryFp, settingsFp, 7, ""),
+  );
+  assert.notEqual(
+    combinedCompareFingerprint(inventoryFp, settingsFp, 7),
+    combinedCompareFingerprint(inventoryFp, settingsFp, 7, "dates"),
+  );
+});

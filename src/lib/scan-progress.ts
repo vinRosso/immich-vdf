@@ -15,6 +15,11 @@ const SERVER_PHASES = [
     label: "Checking the library",
     detail: "Looking for new or changed files…",
   },
+  {
+    test: /Reading capture dates/i,
+    label: "Reading capture dates",
+    detail: "Dates from Immich, then from the files…",
+  },
   { test: /reusing last compare/i, label: "Reusing last compare", detail: "Library unchanged…" },
   { test: /Matching Immich library/i, label: "Matching Immich assets", detail: "Linking files to the library…" },
   { test: /Reading Immich stacks/i, label: "Reading Immich stacks", detail: "Checking existing stacks…" },
