@@ -96,8 +96,8 @@ public sealed class CompareRerunTests : IDisposable {
 	}
 
 	/// <summary>One compare, the way the CLI runs it: pair scores are read from and written to the database folder.</summary>
-	string[] Compare(Settings settings) {
-		var engine = new ScanEngine { Settings = settings };
+	string[] Compare(Settings settings, IReadOnlyDictionary<string, DateTime>? captureTimes = null) {
+		var engine = new ScanEngine { Settings = settings, CaptureTimeOverrides = captureTimes };
 		engine.positionList.Clear();
 		engine.positionList.Add(0.5f);
 		engine.ScanForDuplicates();
@@ -240,5 +240,40 @@ public sealed class CompareRerunTests : IDisposable {
 		Assert.Equal(gray, Compare(Match(96)));
 		Assert.Equal(pHash, Compare(Match(96, s => s.UsePHashing = true)));
 		Assert.Equal(gray.Length, pHash.Length);
+	}
+
+	[Fact]
+	public void CaptureDatesDecideTheWindowAndLaterRunsAgree() {
+		byte[] a = Noise(1);
+		FileEntry first = Image("a1.jpg", a);
+		FileEntry second = Image("a2.jpg", Perturb(a, 2, 11));
+		Image("u1.jpg", Noise(4));
+		Settings week() => Match(96, s => s.TimeWindowDays = 7);
+		string[] together = { "a1.jpg + a2.jpg" };
+
+		Assert.Equal(together, Compare(week()));
+
+		// The file dates match, but the library says one was taken four months later.
+		var apart = new Dictionary<string, DateTime> { [first.Path] = day, [second.Path] = day.AddDays(120) };
+		Assert.Empty(Compare(week(), apart));
+		Assert.Empty(Compare(week(), apart));
+
+		var close = new Dictionary<string, DateTime> { [first.Path] = day, [second.Path] = day.AddDays(1) };
+		Assert.Equal(together, Compare(week(), close));
+		Assert.Equal(together, Compare(week(), close));
+
+		// Without capture dates the file dates apply again, and nothing from the runs above leaks in.
+		Assert.Equal(together, Compare(week()));
+		Assert.All(DatabaseUtils.Database, entry => Assert.Null(entry.captureOverride));
+	}
+
+	[Fact]
+	public void CaptureDatesStayOutOfTheSavedDatabase() {
+		byte[] a = Noise(1);
+		FileEntry first = Image("a1.jpg", a);
+		Image("a2.jpg", Perturb(a, 2, 11));
+		var edited = new Dictionary<string, DateTime> { [first.Path] = day.AddDays(40) };
+		Compare(Match(96, s => s.TimeWindowDays = 7), edited);
+		Assert.Equal(day, first.DateCreated);
 	}
 }

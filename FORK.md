@@ -19,14 +19,18 @@ This repository is not a Git branch of the Video Duplicate Finder desktop app. T
 | --- | --- |
 | `VDF.Core/TimeWindow.cs` (new) | Capture-time windows: fixed tiles of W days from 2000-01-01, each padded on both sides. |
 | `VDF.Core/PairScoreStore.cs` (new) | `PairScores.db` next to `ScannedFiles.db`. Keeps gray scores of 85% and above (and AI scores), the covered files and the window they were compared in. `PairSession` is the per-run view the matching threads use. |
+| `VDF.Core/Utils/CaptureTimeReader.cs` (new) | Capture dates from EXIF, or from the container tag for HEIC and video, plus the JSON files that carry dates. |
 | `VDF.Core/Settings.cs` | `TimeWindowDays` |
-| `VDF.Core/ScanEngine.cs` | Time-window check in `ComparePair`, date-sorted loop with a cut-off in `CompareImages`, the pair store wired through `TryCheckDuplicate`, `RememberGray`, the compare set-up and the end of `ScanForDuplicates`, and the gray early-exit limit in `TryCompareGrayVideos`. |
+| `VDF.Core/FileEntry.cs` | `captureOverride` and `CaptureTime`: a date used instead of `DateCreated` for one compare. Not saved. |
+| `VDF.Core/ScanEngine.cs` | `CaptureTimeOverrides`; capture time in `ComparePair`'s window check and the date-sorted loop with a cut-off in `CompareImages`; the pair store wired through `TryCheckDuplicate`, `RememberGray`, the compare set-up and the end of `ScanForDuplicates`; and the gray early-exit limit in `TryCompareGrayVideos`. |
 | `VDF.Core/Utils/DatabaseUtils.cs` | `ExportImageTimes`, behind `db times` |
 | `VDF.Core/VDF.Core.csproj` | `InternalsVisibleTo` for `VDF.ForkTests` |
 | `VDF.CLI/Commands/SharedOptions.cs` | `--time-window-days` on `scan` and `compare` |
 | `VDF.CLI/Commands/DatabaseCommand.cs` | `db times` |
+| `VDF.CLI/Commands/CompareCommand.cs` | `--times <file.json>`, the capture dates for the window, and an exit code |
+| `VDF.CLI/Commands/ExifCommand.cs` (new), `VDF.CLI/Program.cs` | `exif --paths <list> --output <json>` |
 
-The pair store keeps nothing for pHash or combined matching, or for a percent under 85. A row is used only while both files still have the size and modified time they had when it was scored, and the saved settings match: ignore black and white pixels, mirrored compare, thumbnail count, sampling length, the duration limits and the folder rule. `ForkTests` covers the store, the per-run session and whole compares run twice, so run `npm run test:engine` after every update.
+The pair store keeps nothing for pHash or combined matching, or for a percent under 85. A row is used only while both files still have the size, modified time and capture date they had when it was scored, and the saved settings match: ignore black and white pixels, mirrored compare, thumbnail count, sampling length, the duration limits and the folder rule. `ForkTests` covers the store, the per-run session and whole compares run twice, so run `npm run test:engine` after every update.
 
 ## Pull a newer tag
 

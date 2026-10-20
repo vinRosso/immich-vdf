@@ -116,6 +116,12 @@ namespace VDF.Core {
 		internal bool[]? compareEmbeddingValid;
 		[MemoryPackIgnore]
 		internal int compareIndex;
+		// Capture date to use in place of DateCreated for the length of one compare, set when the
+		// caller passes capture times (compare --times). It is never saved with the entry.
+		[MemoryPackIgnore]
+		internal DateTime? captureOverride;
+		[MemoryPackIgnore]
+		internal DateTime CaptureTime => captureOverride ?? DateCreated;
 
 		[MemoryPackIgnore]
 		internal bool IsImage {

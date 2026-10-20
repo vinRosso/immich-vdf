@@ -17,6 +17,7 @@
 using System.CommandLine;
 using VDF.CLI.Output;
 using VDF.Core;
+using VDF.Core.Utils;
 
 namespace VDF.CLI.Commands {
 	internal static class CompareCommand {
@@ -24,6 +25,10 @@ namespace VDF.CLI.Commands {
 			var cmd = new Command("compare", "Compare previously scanned hashes and output duplicate groups. Requires a prior 'scan' run.");
 
 			SharedOptions.AddCompareOptions(cmd);
+			var timesOpt = new Option<FileInfo?>("--times") {
+				Description = "JSON file of {path: ISO date}. The capture-time window uses these dates instead of each file's creation date.",
+			};
+			cmd.Options.Add(timesOpt);
 
 			cmd.SetAction(async (parseResult, ct) => {
 				var engine = new ScanEngine();
@@ -34,6 +39,15 @@ namespace VDF.CLI.Commands {
 				// would make the inclusion filter skip every database entry (0 results, #790).
 				if (engine.Settings.IncludeList.Count == 0)
 					engine.Settings.ScanAgainstEntireDatabase = true;
+				var timesFile = parseResult.GetValue(timesOpt);
+				if (timesFile != null) {
+					if (!timesFile.Exists) {
+						Console.Error.WriteLine($"Error: {timesFile.FullName} does not exist.");
+						return 1;
+					}
+					engine.CaptureTimeOverrides = CaptureTimeReader.ReadJson(timesFile.FullName);
+					Console.Error.WriteLine($"Capture dates given for {engine.CaptureTimeOverrides.Count:N0} files.");
+				}
 				ScanRunner.WireProgress(engine);
 
 				// Compare-time AI needs: the union pass only reads embeddings cached by the
@@ -54,6 +68,7 @@ namespace VDF.CLI.Commands {
 				else {
 					Console.Write(output);
 				}
+				return 0;
 			});
 
 			return cmd;

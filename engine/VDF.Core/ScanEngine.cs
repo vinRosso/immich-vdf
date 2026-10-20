@@ -36,6 +36,11 @@ namespace VDF.Core {
 	public sealed partial class ScanEngine {
 		public HashSet<DuplicateItem> Duplicates { get; set; } = new HashSet<DuplicateItem>();
 		public Settings Settings { get; set; } = new Settings();
+		/// <summary>
+		/// Capture dates by file path. A compare uses them instead of the file's creation date for the
+		/// capture-time window, so dates edited elsewhere (for example in Immich) count.
+		/// </summary>
+		public IReadOnlyDictionary<string, DateTime>? CaptureTimeOverrides { get; set; }
 		public event EventHandler<ScanProgressSnapshot>? Progress {
 			add => progress.Progress += value;
 			remove => progress.Progress -= value;
@@ -1710,6 +1715,9 @@ namespace VDF.Core {
 					if (TryBuildCompareSnapshot(entry, usePHashing)) {
 						// compareIndex preserves list ordering so symmetric comparisons can be skipped.
 						entry.compareIndex = validated.Count;
+						entry.captureOverride = CaptureTimeOverrides is { } overrides && overrides.TryGetValue(entry.Path, out DateTime captured)
+							? captured
+							: null;
 						validated.Add(entry);
 					}
 					else
@@ -1915,7 +1923,7 @@ namespace VDF.Core {
 			// spilled arguments per candidate pair (measurable in pHash-only mode).
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			void ComparePair(FileEntry entry, FileEntry compItem, byte[]?[]? flippedGrayBytes, ulong[]? flippedPHashes, double entryDurationSeconds, double entryToleranceSeconds) {
-				if (Settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(entry.DateCreated, compItem.DateCreated, Settings.TimeWindowDays))
+				if (Settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(entry.CaptureTime, compItem.CaptureTime, Settings.TimeWindowDays))
 					return;
 				if (!entry.IsImage) {
 					double compDurationSeconds = compItem.mediaInfo!.Duration.TotalSeconds;
@@ -1981,7 +1989,7 @@ namespace VDF.Core {
 			void CompareImages() {
 				List<FileEntry> orderedImages = imageEntries;
 				if (Settings.TimeWindowDays > 0) {
-					orderedImages = imageEntries.OrderBy(entry => entry.DateCreated).ToList();
+					orderedImages = imageEntries.OrderBy(entry => entry.CaptureTime).ToList();
 					Logger.Instance.Info($"Capture-time window: {Settings.TimeWindowDays:0.###} days, buffer {TimeWindow.BufferDays(Settings.TimeWindowDays):0.###} days each side.");
 				}
 				Action<int> compareAction = i => {
@@ -1994,7 +2002,7 @@ namespace VDF.Core {
 						: 0;
 					for (int n = i + 1; n < orderedImages.Count; n++) {
 						var compItem = orderedImages[n];
-						if (reach > 0 && (compItem.DateCreated - entry.DateCreated).TotalDays > reach)
+						if (reach > 0 && (compItem.CaptureTime - entry.CaptureTime).TotalDays > reach)
 							break;
 						// Images never take the pHash branch, so no flipped pHash is needed.
 						ComparePair(entry, compItem, flippedGrayBytes, null, 0d, 0d);
@@ -2138,6 +2146,7 @@ namespace VDF.Core {
 				entry.comparePHashes = null;
 				entry.compareEmbeddings = null;
 				entry.compareEmbeddingValid = null;
+				entry.captureOverride = null;
 			}
 			matchingRequiredSampleMatches = null;
 		}

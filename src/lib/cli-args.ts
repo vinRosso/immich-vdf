@@ -94,6 +94,8 @@ export const REQUIRED_CLI_COMPARE_HELP = [
   "--format",
   "--output",
   "--time-window-days",
+  "--times",
+  "exif",
 ] as const;
 
 export const REQUIRED_CLI_HELP = [...REQUIRED_CLI_SCAN_HELP, ...REQUIRED_CLI_COMPARE_HELP] as const;

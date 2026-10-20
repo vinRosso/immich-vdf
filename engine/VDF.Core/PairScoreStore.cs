@@ -76,7 +76,7 @@ namespace VDF.Core {
 	/// </summary>
 	public sealed class PairScoreStore {
 		public const float FloorPercent = 85f;
-		const string Magic = "VDFPAIR2";
+		const string Magic = "VDFPAIR3";
 
 		readonly List<CoveredFile> table = new();
 		readonly Dictionary<string, int> tableIndex = new(StringComparer.Ordinal);
@@ -169,8 +169,7 @@ namespace VDF.Core {
 						continue;
 					}
 					map[t] = ci;
-					FileEntry entry = entries[ci];
-					if (file.Size == entry.FileSize && file.ModifiedTicks == entry.DateModified.Ticks)
+					if (file.Matches(entries[ci]))
 						covered[ci] = true;
 				}
 
@@ -232,7 +231,7 @@ namespace VDF.Core {
 		// ---- Lookups by file, for callers that work one pair at a time -------------------
 
 		public PairCompareAction Decide(FileEntry a, FileEntry b, Settings settings) {
-			if (settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, settings.TimeWindowDays))
+			if (settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.CaptureTime, b.CaptureTime, settings.TimeWindowDays))
 				return PairCompareAction.Skip;
 			if (!IsUsable(settings) || !GrayFlagsMatch(settings))
 				return PairCompareAction.Compute;
@@ -242,7 +241,7 @@ namespace VDF.Core {
 					&& tableIndex.TryGetValue(a.Path, out int ia) && tableIndex.TryGetValue(b.Path, out int ib)
 					&& pairs.TryGetValue(Key(ia, ib), out StoredPair row))
 					return PairSession.ActionForRow(row, settings);
-				if (IsCovered(a) && IsCovered(b) && TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, CoverageWindowDays))
+				if (IsCovered(a) && IsCovered(b) && TimeWindow.SharesWindow(a.CaptureTime, b.CaptureTime, CoverageWindowDays))
 					return PairSession.ActionWhenCovered(AiCovered, settings);
 			}
 			return PairCompareAction.Compute;
@@ -275,7 +274,7 @@ namespace VDF.Core {
 		int IndexOf(FileEntry entry) {
 			if (tableIndex.TryGetValue(entry.Path, out int index)) return index;
 			index = table.Count;
-			table.Add(new CoveredFile(entry.Path, -1, 0, ""));
+			table.Add(new CoveredFile(entry.Path, -1, 0, 0, ""));
 			tableIndex[entry.Path] = index;
 			return index;
 		}
@@ -335,8 +334,7 @@ namespace VDF.Core {
 
 		bool IsCovered(FileEntry entry) {
 			if (!tableIndex.TryGetValue(entry.Path, out int index)) return false;
-			CoveredFile covered = table[index];
-			return covered.Size == entry.FileSize && covered.ModifiedTicks == entry.DateModified.Ticks;
+			return table[index].Matches(entry);
 		}
 
 		// ---- Disk ----------------------------------------------------------------------
@@ -357,6 +355,7 @@ namespace VDF.Core {
 						writer.Write(file.Path);
 						writer.Write(file.Size);
 						writer.Write(file.ModifiedTicks);
+						writer.Write(file.CaptureTicks);
 						writer.Write(file.OsHash ?? "");
 					}
 					writer.Write(pairs.Count);
@@ -388,7 +387,7 @@ namespace VDF.Core {
 				};
 				int fileCount = reader.ReadInt32();
 				for (int i = 0; i < fileCount; i++) {
-					var file = new CoveredFile(reader.ReadString(), reader.ReadInt64(), reader.ReadInt64(), reader.ReadString());
+					var file = new CoveredFile(reader.ReadString(), reader.ReadInt64(), reader.ReadInt64(), reader.ReadInt64(), reader.ReadString());
 					store.table.Add(file);
 					store.tableIndex.TryAdd(file.Path, i);
 				}
@@ -412,23 +411,29 @@ namespace VDF.Core {
 		}
 
 		sealed class CoveredFile {
-			public CoveredFile(string path, long size, long modifiedTicks, string osHash) {
+			public CoveredFile(string path, long size, long modifiedTicks, long captureTicks, string osHash) {
 				Path = path;
 				Size = size;
 				ModifiedTicks = modifiedTicks;
+				CaptureTicks = captureTicks;
 				OsHash = osHash;
 			}
 
 			public string Path { get; }
 			public long Size { get; }
 			public long ModifiedTicks { get; }
+			/// <summary>The date the capture-time window saw for this file. A date edited since then voids its rows.</summary>
+			public long CaptureTicks { get; }
 			public string OsHash { get; }
 
+			public bool Matches(FileEntry entry) =>
+				Size == entry.FileSize && ModifiedTicks == entry.DateModified.Ticks && CaptureTicks == entry.CaptureTime.Ticks;
+
 			public static CoveredFile From(FileEntry entry) =>
-				new(entry.Path, entry.FileSize, entry.DateModified.Ticks, entry.OsHash ?? "");
+				new(entry.Path, entry.FileSize, entry.DateModified.Ticks, entry.CaptureTime.Ticks, entry.OsHash ?? "");
 
 			public CoveredFile MovedTo(FileEntry entry) =>
-				new(entry.Path, entry.FileSize, entry.DateModified.Ticks, OsHash);
+				new(entry.Path, entry.FileSize, entry.DateModified.Ticks, entry.CaptureTime.Ticks, OsHash);
 		}
 	}
 
@@ -458,7 +463,7 @@ namespace VDF.Core {
 
 		/// <param name="windowChecked">The caller already skipped pairs outside the capture-time window.</param>
 		public PairCompareAction Decide(FileEntry a, FileEntry b, Settings settings, bool windowChecked = false) {
-			if (!windowChecked && settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, settings.TimeWindowDays))
+			if (!windowChecked && settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.CaptureTime, b.CaptureTime, settings.TimeWindowDays))
 				return PairCompareAction.Skip;
 			if (!Usable)
 				return PairCompareAction.Compute;
@@ -466,7 +471,7 @@ namespace VDF.Core {
 			int ib = b.compareIndex;
 			if (rows.TryGetValue(PairScoreStore.Key(ia, ib), out StoredPair row))
 				return ActionForRow(row, settings);
-			if (covered[ia] && covered[ib] && (coverageWindowDays <= 0 || TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, coverageWindowDays)))
+			if (covered[ia] && covered[ib] && (coverageWindowDays <= 0 || TimeWindow.SharesWindow(a.CaptureTime, b.CaptureTime, coverageWindowDays)))
 				return ActionWhenCovered(aiCovered, settings);
 			return PairCompareAction.Compute;
 		}
