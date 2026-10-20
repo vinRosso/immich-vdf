@@ -19,6 +19,15 @@ test("vdf-cli settings file uses VDF.Core field names", () => {
   });
 });
 
+test("vdf-cli settings file carries the folder scope for compare", () => {
+  const file = buildVdfCliSettingsFile(defaultScan(), {
+    includes: ["/media/a", "/media/b"],
+    excludes: ["/media/a/skip"],
+  });
+  assert.deepEqual(file.IncludeList, ["/media/a", "/media/b"]);
+  assert.deepEqual(file.BlackList, ["/media/a/skip"]);
+});
+
 test("buildVdfArgs passes --settings path", () => {
   const args = buildVdfArgs({
     ...defaultScan(),

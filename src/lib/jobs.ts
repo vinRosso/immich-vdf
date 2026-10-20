@@ -99,7 +99,7 @@ export async function startScan(
     const stamp = Date.now();
     const outputFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-${stamp}.json`);
     const settingsFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-settings-${stamp}.json`);
-    await writeFile(settingsFile, `${JSON.stringify(buildVdfCliSettingsFile(scanSettings))}\n`);
+    await writeFile(settingsFile, `${JSON.stringify(buildVdfCliSettingsFile(scanSettings, paths))}\n`);
     void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile }, startedAt);
     return { ok: true };
   } catch (error) {
