@@ -143,6 +143,19 @@ export function SectionScreen({ section }: { section: SectionId }) {
     return nextResults;
   }, [section]);
 
+  /** Just the results, for after a viewer action. The full reload also refetches settings, runs and trash and resets the form. */
+  const reloadResults = useCallback(async () => {
+    const next = await api<ResultsResponse>(`/api/results?section=${section}`);
+    setResults(next);
+    // The Trash count in the header changes when a file is trashed. This does not hold up the list.
+    if (section === "server") {
+      void api<{ entries: TrashEntry[] }>("/api/trash")
+        .then((listed) => setTrash(listed.entries))
+        .catch(() => undefined);
+    }
+    return next;
+  }, [section]);
+
   const feed = useScanFeed(() => {
     void reload().catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not refresh"));
   });
@@ -499,6 +512,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
             results={results}
             loading={loading}
             onReload={reload}
+            onReloadResults={reloadResults}
             matching={matching}
             matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
             onMatchAgain={() => void matchAgain()}
@@ -538,6 +552,7 @@ function Results({
   results,
   loading,
   onReload,
+  onReloadResults,
   matching,
   matchDisabled,
   onMatchAgain,
@@ -546,6 +561,7 @@ function Results({
   results: ResultsResponse | null;
   loading: boolean;
   onReload: () => Promise<ResultsResponse>;
+  onReloadResults: () => Promise<ResultsResponse>;
   matching: boolean;
   matchDisabled: boolean;
   onMatchAgain: () => void;
@@ -602,14 +618,14 @@ function Results({
         return;
       }
       try {
-        await onReload();
+        await onReloadResults();
       } catch (err) {
         setMergeError(err instanceof Error ? err.message : "Merged, but the list did not refresh");
       } finally {
         setMergeBusy(false);
       }
     },
-    [groupOverride, onReload, results?.groups, section],
+    [groupOverride, onReloadResults, results?.groups, section],
   );
 
   const mergeDrag = useGroupMergeDrag({
@@ -626,7 +642,7 @@ function Results({
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
   async function openGroupAfterRefresh(fromIndex: number, groupId: string | null) {
-    const data = await onReload();
+    const data = await onReloadResults();
     const groups = data.groups ? sortResultGroups(data.groups, sortId) : [];
     if (groupId && groups.some((entry) => entry.groupId === groupId)) {
       setOpenGroupId(groupId);
