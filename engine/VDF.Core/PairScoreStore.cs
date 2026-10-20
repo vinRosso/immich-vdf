@@ -14,7 +14,8 @@
 // */
 //
 
-using System.Linq;
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 
 namespace VDF.Core {
@@ -30,28 +31,56 @@ namespace VDF.Core {
 	}
 
 	public readonly struct StoredPair {
-		public StoredPair(float grayPercent, float aiPercent) {
+		public StoredPair(float grayPercent, float aiPercent, bool flipped = false) {
 			GrayPercent = grayPercent;
 			AiPercent = aiPercent;
+			Flipped = flipped;
 		}
 
 		/// <summary>0–100, or a negative value when the pair is known to be under the 85% floor.</summary>
 		public float GrayPercent { get; }
 		/// <summary>0–100 when the AI pass ran, otherwise <see cref="float.NaN"/>.</summary>
 		public float AiPercent { get; }
+		/// <summary>True when the best gray score came from the mirrored orientation.</summary>
+		public bool Flipped { get; }
 		public bool HasAi => !float.IsNaN(AiPercent);
+
+		/// <summary>
+		/// The better gray score wins, and a tie stays unmirrored so the result does not depend on
+		/// which thread reported first. An AI score replaces the older one; a gray report leaves it.
+		/// </summary>
+		internal static StoredPair Merge(StoredPair existing, StoredPair incoming) {
+			float gray;
+			bool flipped;
+			if (incoming.GrayPercent > existing.GrayPercent) {
+				gray = incoming.GrayPercent;
+				flipped = incoming.Flipped;
+			}
+			else if (incoming.GrayPercent < existing.GrayPercent) {
+				gray = existing.GrayPercent;
+				flipped = existing.Flipped;
+			}
+			else {
+				gray = existing.GrayPercent;
+				flipped = existing.Flipped && incoming.Flipped;
+			}
+			return new StoredPair(gray, incoming.HasAi ? incoming.AiPercent : existing.AiPercent, flipped);
+		}
 	}
 
 	/// <summary>
 	/// Sidecar of pair scores at or above 85% gray, plus AI matches below that floor.
 	/// Lives next to <c>ScannedFiles.db</c> and does not change that file's format.
+	/// Pairs are stored by the position of each file in a table of covered files, so a row is
+	/// two integers and three numbers rather than two paths.
 	/// </summary>
 	public sealed class PairScoreStore {
 		public const float FloorPercent = 85f;
-		const string Magic = "VDFPAIR1";
+		const string Magic = "VDFPAIR2";
 
-		readonly Dictionary<string, CoveredFile> files = new(StringComparer.Ordinal);
-		readonly Dictionary<string, StoredPair> pairs = new(StringComparer.Ordinal);
+		readonly List<CoveredFile> table = new();
+		readonly Dictionary<string, int> tableIndex = new(StringComparer.Ordinal);
+		Dictionary<long, StoredPair> pairs = new();
 		readonly object gate = new();
 
 		public string Fingerprint { get; private set; } = "";
@@ -62,121 +91,225 @@ namespace VDF.Core {
 			get { lock (gate) return pairs.Count; }
 		}
 
+		/// <summary>
+		/// Scores are only kept for the grayscale matcher at 85% or above. pHash is cheap enough to
+		/// repeat, and a stored pHash verdict would depend on the percent, so those runs bypass the store.
+		/// </summary>
+		public static bool IsUsable(Settings settings) =>
+			settings.Percent >= FloorPercent && !settings.UsePHashing && !settings.CombineGrayscaleAndPHash;
+
+		/// <summary>
+		/// Everything that changes a gray score, or that decides which pairs are compared at all.
+		/// A pair skipped under one set of gates has no row, so loosening a gate has to start over.
+		/// </summary>
 		public static string MatcherFingerprint(Settings settings) {
-			string core = string.Join("|",
+			var invariant = CultureInfo.InvariantCulture;
+			return string.Join("|",
 				settings.IgnoreBlackPixels,
 				settings.IgnoreWhitePixels,
 				settings.CompareHorizontallyFlipped,
-				settings.UsePHashing,
-				settings.CombineGrayscaleAndPHash,
-				settings.Threshhold);
-			// pHash's per-frame gate is the requested percent, so a percent change is a different score.
-			if (settings.UsePHashing || settings.CombineGrayscaleAndPHash)
-				return core + "|p:" + settings.Percent.ToString("R");
-			return core;
+				settings.ThumbnailCount.ToString(invariant),
+				settings.MaxSamplingDurationSeconds.ToString("R", invariant),
+				settings.PercentDurationDifference.ToString("R", invariant),
+				settings.DurationDifferenceMinSeconds.ToString("R", invariant),
+				settings.DurationDifferenceMaxSeconds.ToString("R", invariant),
+				((int)settings.FolderMatchMode).ToString(invariant),
+				settings.SameFolderDepth.ToString(invariant));
 		}
 
-		public static string PairKey(string pathA, string pathB) {
-			return string.CompareOrdinal(pathA, pathB) <= 0
-				? pathA + "\n" + pathB
-				: pathB + "\n" + pathA;
-		}
+		internal static long Key(int a, int b) =>
+			a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+
+		static (int First, int Second) Split(long key) => ((int)(key >> 32), (int)(key & 0xFFFFFFFFL));
 
 		public bool GrayFlagsMatch(Settings settings) => Fingerprint == MatcherFingerprint(settings);
 
 		public void Clear() {
+			lock (gate) ClearUnlocked();
+		}
+
+		void ClearUnlocked() {
+			table.Clear();
+			tableIndex.Clear();
+			pairs = new Dictionary<long, StoredPair>();
+			Fingerprint = "";
+			CoverageWindowDays = 0;
+			AiCovered = false;
+		}
+
+		public bool HasFullLibraryCoverage {
+			get { lock (gate) return CoverageWindowDays <= 0 && HasCoveredFiles(); }
+		}
+
+		// ---- One compare run ------------------------------------------------------------
+
+		/// <summary>
+		/// Prepare the lookups for a compare over <paramref name="entries"/>. Each entry gets its list
+		/// position as <c>compareIndex</c>, and stored rows are re-keyed to those positions so the hot
+		/// loop needs no strings and no lock. The store is emptied first when its settings are stale.
+		/// </summary>
+		public PairSession BeginCompare(IReadOnlyList<FileEntry> entries, Settings settings) {
+			bool usable = IsUsable(settings);
 			lock (gate) {
-				files.Clear();
-				pairs.Clear();
-				Fingerprint = "";
-				CoverageWindowDays = 0;
-				AiCovered = false;
+				if (!usable || !GrayFlagsMatch(settings))
+					ClearUnlocked();
+
+				var byPath = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);
+				for (int i = 0; i < entries.Count; i++) {
+					entries[i].compareIndex = i;
+					byPath.TryAdd(entries[i].Path, i);
+				}
+
+				var map = new int[table.Count];
+				var covered = new bool[entries.Count];
+				for (int t = 0; t < table.Count; t++) {
+					CoveredFile file = table[t];
+					if (!byPath.TryGetValue(file.Path, out int ci)) {
+						map[t] = -1;
+						continue;
+					}
+					map[t] = ci;
+					FileEntry entry = entries[ci];
+					if (file.Size == entry.FileSize && file.ModifiedTicks == entry.DateModified.Ticks)
+						covered[ci] = true;
+				}
+
+				var rows = new ConcurrentDictionary<long, StoredPair>(Environment.ProcessorCount, Math.Max(16, pairs.Count));
+				foreach (var pair in pairs) {
+					(int first, int second) = Split(pair.Key);
+					int a = map[first];
+					int b = map[second];
+					// A score belongs to the bytes it was computed from. A file that changed since then
+					// (size or modified time) has to be compared again, and its old rows are dropped.
+					if (a < 0 || b < 0 || !covered[a] || !covered[b]) continue;
+					rows[Key(a, b)] = pair.Value;
+				}
+				return new PairSession(rows, covered, usable, AiCovered, CoverageWindowDays);
 			}
 		}
+
+		/// <summary>
+		/// Keep what a finished compare learned. Files that left the list lose their rows, and the
+		/// list becomes the new set of covered files.
+		/// </summary>
+		public void Commit(PairSession session, IReadOnlyList<FileEntry> entries, double windowDays, Settings settings) {
+			lock (gate) {
+				if (!session.Usable || session.EntryCount != entries.Count) {
+					ClearUnlocked();
+					return;
+				}
+				double window = NextCoverageWindow(windowDays);
+				table.Clear();
+				tableIndex.Clear();
+				for (int i = 0; i < entries.Count; i++) {
+					table.Add(CoveredFile.From(entries[i]));
+					tableIndex.TryAdd(entries[i].Path, i);
+				}
+				pairs = new Dictionary<long, StoredPair>(session.Rows);
+				Fingerprint = MatcherFingerprint(settings);
+				AiCovered = settings.UseAiMatching;
+				CoverageWindowDays = window;
+			}
+		}
+
+		/// <summary>Files known only through a score (size -1) are not covered.</summary>
+		bool HasCoveredFiles() {
+			foreach (CoveredFile file in table)
+				if (file.Size >= 0) return true;
+			return false;
+		}
+
+		/// <summary>A narrower positive window is a subset of a wider one, and of a full library compare. Keep the wider coverage.</summary>
+		double NextCoverageWindow(double windowDays) {
+			// Window 0 replaces it: that scan compared every remaining pair.
+			bool hadFullCoverage = CoverageWindowDays <= 0 && HasCoveredFiles();
+			double previousWindow = CoverageWindowDays;
+			if (windowDays <= 0) return 0;
+			if (hadFullCoverage || previousWindow > windowDays) return hadFullCoverage ? 0 : previousWindow;
+			return windowDays;
+		}
+
+		// ---- Lookups by file, for callers that work one pair at a time -------------------
 
 		public PairCompareAction Decide(FileEntry a, FileEntry b, Settings settings) {
 			if (settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, settings.TimeWindowDays))
 				return PairCompareAction.Skip;
-			if (settings.Percent < FloorPercent || !GrayFlagsMatch(settings))
+			if (!IsUsable(settings) || !GrayFlagsMatch(settings))
 				return PairCompareAction.Compute;
 
 			lock (gate) {
-				if (pairs.TryGetValue(PairKey(a.Path, b.Path), out StoredPair row)) {
-					bool grayPasses = row.GrayPercent >= settings.Percent;
-					if (settings.UseAiMatching && !row.HasAi && !grayPasses)
-						return PairCompareAction.ComputeAiOnly;
-					return PairCompareAction.UseStored;
-				}
-				if (IsCovered(a) && IsCovered(b) && SharesCoverageWindow(a, b)) {
-					if (settings.UseAiMatching && !AiCovered) return PairCompareAction.ComputeAiOnly;
-					return PairCompareAction.Skip;
-				}
+				if (IsCovered(a) && IsCovered(b)
+					&& tableIndex.TryGetValue(a.Path, out int ia) && tableIndex.TryGetValue(b.Path, out int ib)
+					&& pairs.TryGetValue(Key(ia, ib), out StoredPair row))
+					return PairSession.ActionForRow(row, settings);
+				if (IsCovered(a) && IsCovered(b) && TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, CoverageWindowDays))
+					return PairSession.ActionWhenCovered(AiCovered, settings);
 			}
 			return PairCompareAction.Compute;
 		}
 
 		public bool TryGet(FileEntry a, FileEntry b, out StoredPair row) {
-			lock (gate) return pairs.TryGetValue(PairKey(a.Path, b.Path), out row);
+			lock (gate) {
+				if (IsCovered(a) && IsCovered(b)
+					&& tableIndex.TryGetValue(a.Path, out int ia) && tableIndex.TryGetValue(b.Path, out int ib))
+					return pairs.TryGetValue(Key(ia, ib), out row);
+			}
+			row = default;
+			return false;
 		}
 
-		public void UpsertGray(FileEntry a, FileEntry b, float grayPercent) {
+		public void UpsertGray(FileEntry a, FileEntry b, float grayPercent, bool flipped = false) =>
+			Upsert(a, b, new StoredPair(grayPercent, float.NaN, flipped));
+
+		public void UpsertAi(FileEntry a, FileEntry b, float aiPercent) =>
+			Upsert(a, b, new StoredPair(-1f, aiPercent));
+
+		void Upsert(FileEntry a, FileEntry b, StoredPair incoming) {
 			lock (gate) {
-				string key = PairKey(a.Path, b.Path);
-				float gray = grayPercent;
-				float ai = float.NaN;
-				if (pairs.TryGetValue(key, out StoredPair existing)) {
-					if (existing.GrayPercent > gray) gray = existing.GrayPercent;
-					ai = existing.AiPercent;
+				long key = Key(IndexOf(a), IndexOf(b));
+				pairs[key] = pairs.TryGetValue(key, out StoredPair existing) ? StoredPair.Merge(existing, incoming) : incoming;
+			}
+		}
+
+		/// <summary>A file seen only through a score has no coverage until a compare marks it.</summary>
+		int IndexOf(FileEntry entry) {
+			if (tableIndex.TryGetValue(entry.Path, out int index)) return index;
+			index = table.Count;
+			table.Add(new CoveredFile(entry.Path, -1, 0, ""));
+			tableIndex[entry.Path] = index;
+			return index;
+		}
+
+		/// <summary>
+		/// Make <paramref name="entries"/> the covered files. Rows that involve any other file are dropped.
+		/// </summary>
+		public void MarkCovered(IReadOnlyList<FileEntry> entries, double windowDays, Settings settings) {
+			lock (gate) {
+				double window = NextCoverageWindow(windowDays);
+				var byPath = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);
+				for (int i = 0; i < entries.Count; i++) byPath.TryAdd(entries[i].Path, i);
+
+				var remap = new int[table.Count];
+				for (int t = 0; t < table.Count; t++)
+					remap[t] = byPath.TryGetValue(table[t].Path, out int ni) ? ni : -1;
+				var kept = new Dictionary<long, StoredPair>();
+				foreach (var pair in pairs) {
+					(int first, int second) = Split(pair.Key);
+					int a = remap[first];
+					int b = remap[second];
+					if (a >= 0 && b >= 0) kept[Key(a, b)] = pair.Value;
 				}
-				pairs[key] = new StoredPair(gray, ai);
-			}
-		}
 
-		public void UpsertAi(FileEntry a, FileEntry b, float aiPercent, float? grayPercent = null) {
-			lock (gate) {
-				string key = PairKey(a.Path, b.Path);
-				float gray = grayPercent ?? (pairs.TryGetValue(key, out StoredPair existing) ? existing.GrayPercent : -1f);
-				pairs[key] = new StoredPair(gray, aiPercent);
-			}
-		}
-
-		public bool HasFullLibraryCoverage {
-			get { lock (gate) return CoverageWindowDays <= 0 && files.Count > 0; }
-		}
-
-		public void MarkCovered(IEnumerable<FileEntry> entries, double windowDays, Settings settings) {
-			lock (gate) {
-				// A narrower positive window is a subset of a wider one, and of a full
-				// library compare. Keep that wider coverage so the next scan reuses it.
-				// Window 0 replaces it: that scan compared every remaining pair.
-				bool hadFullCoverage = CoverageWindowDays <= 0 && files.Count > 0;
-				double previousWindow = CoverageWindowDays;
-				files.Clear();
-				foreach (FileEntry entry in entries)
-					files[entry.Path] = CoveredFile.From(entry);
+				table.Clear();
+				tableIndex.Clear();
+				for (int i = 0; i < entries.Count; i++) {
+					table.Add(CoveredFile.From(entries[i]));
+					tableIndex.TryAdd(entries[i].Path, i);
+				}
+				pairs = kept;
 				Fingerprint = MatcherFingerprint(settings);
 				AiCovered = settings.UseAiMatching;
-				if (windowDays <= 0)
-					CoverageWindowDays = 0;
-				else if (hadFullCoverage || previousWindow > windowDays)
-					CoverageWindowDays = hadFullCoverage ? 0 : previousWindow;
-				else
-					CoverageWindowDays = windowDays;
-			}
-		}
-
-		public void DropMissing(IEnumerable<FileEntry> entries) {
-			lock (gate) {
-				var keep = new HashSet<string>(entries.Select(entry => entry.Path), StringComparer.Ordinal);
-				var stale = pairs.Keys.Where(key => {
-					int split = key.IndexOf('\n');
-					string left = key[..split];
-					string right = key[(split + 1)..];
-					return !keep.Contains(left) || !keep.Contains(right);
-				}).ToList();
-				foreach (string key in stale) pairs.Remove(key);
-				var gone = files.Keys.Where(path => !keep.Contains(path)).ToList();
-				foreach (string path in gone) files.Remove(path);
+				CoverageWindowDays = window;
 			}
 		}
 
@@ -188,44 +321,39 @@ namespace VDF.Core {
 					if (!string.IsNullOrEmpty(entry.OsHash))
 						byHash[entry.OsHash] = entry;
 				}
-				var renamed = new List<(string OldPath, string NewPath)>();
-				foreach (CoveredFile covered in files.Values.ToList()) {
+				for (int t = 0; t < table.Count; t++) {
+					CoveredFile covered = table[t];
 					if (string.IsNullOrEmpty(covered.OsHash)) continue;
 					if (!byHash.TryGetValue(covered.OsHash, out FileEntry? entry)) continue;
-					if (entry.Path == covered.Path) continue;
-					renamed.Add((covered.Path, entry.Path));
-					files.Remove(covered.Path);
-					files[entry.Path] = covered.MovedTo(entry);
+					if (entry.Path == covered.Path || tableIndex.ContainsKey(entry.Path)) continue;
+					tableIndex.Remove(covered.Path);
+					tableIndex[entry.Path] = t;
+					table[t] = covered.MovedTo(entry);
 				}
-				if (renamed.Count == 0) return;
-				var map = renamed.ToDictionary(item => item.OldPath, item => item.NewPath, StringComparer.Ordinal);
-				var rewritten = new Dictionary<string, StoredPair>(StringComparer.Ordinal);
-				foreach (var pair in pairs) {
-					int split = pair.Key.IndexOf('\n');
-					string left = pair.Key[..split];
-					string right = pair.Key[(split + 1)..];
-					if (map.TryGetValue(left, out string? newLeft)) left = newLeft;
-					if (map.TryGetValue(right, out string? newRight)) right = newRight;
-					rewritten[PairKey(left, right)] = pair.Value;
-				}
-				pairs.Clear();
-				foreach (var pair in rewritten) pairs[pair.Key] = pair.Value;
 			}
 		}
+
+		bool IsCovered(FileEntry entry) {
+			if (!tableIndex.TryGetValue(entry.Path, out int index)) return false;
+			CoveredFile covered = table[index];
+			return covered.Size == entry.FileSize && covered.ModifiedTicks == entry.DateModified.Ticks;
+		}
+
+		// ---- Disk ----------------------------------------------------------------------
 
 		public void Save(string databaseFolder) {
 			Directory.CreateDirectory(databaseFolder);
 			string path = Path.Combine(databaseFolder, "PairScores.db");
 			string temp = path + ".new";
 			lock (gate) {
-				using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+				using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20))
 				using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: false)) {
 					writer.Write(Magic);
 					writer.Write(Fingerprint ?? "");
 					writer.Write(CoverageWindowDays);
 					writer.Write(AiCovered);
-					writer.Write(files.Count);
-					foreach (CoveredFile file in files.Values) {
+					writer.Write(table.Count);
+					foreach (CoveredFile file in table) {
 						writer.Write(file.Path);
 						writer.Write(file.Size);
 						writer.Write(file.ModifiedTicks);
@@ -233,47 +361,54 @@ namespace VDF.Core {
 					}
 					writer.Write(pairs.Count);
 					foreach (var pair in pairs) {
-						writer.Write(pair.Key);
+						(int first, int second) = Split(pair.Key);
+						writer.Write(first);
+						writer.Write(second);
 						writer.Write(pair.Value.GrayPercent);
 						writer.Write(pair.Value.HasAi ? pair.Value.AiPercent : float.NaN);
+						writer.Write(pair.Value.Flipped);
 					}
 				}
 				File.Move(temp, path, overwrite: true);
 			}
 		}
 
+		/// <summary>An unreadable file, or one from an older layout, loads as an empty store and is rebuilt by the next compare.</summary>
 		public static PairScoreStore Load(string databaseFolder) {
-			var store = new PairScoreStore();
 			string path = Path.Combine(databaseFolder, "PairScores.db");
-			if (!File.Exists(path)) return store;
+			if (!File.Exists(path)) return new PairScoreStore();
 			try {
-				using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+				using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
 				using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
 				if (reader.ReadString() != Magic) return new PairScoreStore();
-				store.Fingerprint = reader.ReadString();
-				store.CoverageWindowDays = reader.ReadDouble();
-				store.AiCovered = reader.ReadBoolean();
+				var store = new PairScoreStore {
+					Fingerprint = reader.ReadString(),
+					CoverageWindowDays = reader.ReadDouble(),
+					AiCovered = reader.ReadBoolean(),
+				};
 				int fileCount = reader.ReadInt32();
 				for (int i = 0; i < fileCount; i++) {
 					var file = new CoveredFile(reader.ReadString(), reader.ReadInt64(), reader.ReadInt64(), reader.ReadString());
-					store.files[file.Path] = file;
+					store.table.Add(file);
+					store.tableIndex.TryAdd(file.Path, i);
 				}
 				int pairCount = reader.ReadInt32();
-				for (int i = 0; i < pairCount; i++)
-					store.pairs[reader.ReadString()] = new StoredPair(reader.ReadSingle(), reader.ReadSingle());
+				store.pairs = new Dictionary<long, StoredPair>(pairCount);
+				for (int i = 0; i < pairCount; i++) {
+					int first = reader.ReadInt32();
+					int second = reader.ReadInt32();
+					if ((uint)first >= (uint)fileCount || (uint)second >= (uint)fileCount)
+						return new PairScoreStore();
+					float gray = reader.ReadSingle();
+					float ai = reader.ReadSingle();
+					bool flipped = reader.ReadBoolean();
+					store.pairs[Key(first, second)] = new StoredPair(gray, ai, flipped);
+				}
 				return store;
 			}
 			catch (Exception) {
 				return new PairScoreStore();
 			}
-		}
-
-		bool SharesCoverageWindow(FileEntry a, FileEntry b) =>
-			TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, CoverageWindowDays);
-
-		bool IsCovered(FileEntry entry) {
-			if (!files.TryGetValue(entry.Path, out CoveredFile covered)) return false;
-			return covered.Size == entry.FileSize && covered.ModifiedTicks == entry.DateModified.Ticks;
 		}
 
 		sealed class CoveredFile {
@@ -295,5 +430,72 @@ namespace VDF.Core {
 			public CoveredFile MovedTo(FileEntry entry) =>
 				new(entry.Path, entry.FileSize, entry.DateModified.Ticks, OsHash);
 		}
+	}
+
+	/// <summary>
+	/// The stored scores for one compare run, keyed by each entry's position in the compare list. Worker
+	/// threads read and add scores at the same time; nothing waits on a global lock.
+	/// </summary>
+	public sealed class PairSession {
+		readonly ConcurrentDictionary<long, StoredPair> rows;
+		readonly bool[] covered;
+		readonly bool aiCovered;
+		readonly double coverageWindowDays;
+
+		internal PairSession(ConcurrentDictionary<long, StoredPair> rows, bool[] covered, bool usable, bool aiCovered, double coverageWindowDays) {
+			this.rows = rows;
+			this.covered = covered;
+			Usable = usable;
+			this.aiCovered = aiCovered;
+			this.coverageWindowDays = coverageWindowDays;
+		}
+
+		/// <summary>False when the matcher settings keep scores from being reused (pHash, or a percent under 85).</summary>
+		public bool Usable { get; }
+		internal int EntryCount => covered.Length;
+		internal ConcurrentDictionary<long, StoredPair> Rows => rows;
+		public int Count => rows.Count;
+
+		/// <param name="windowChecked">The caller already skipped pairs outside the capture-time window.</param>
+		public PairCompareAction Decide(FileEntry a, FileEntry b, Settings settings, bool windowChecked = false) {
+			if (!windowChecked && settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, settings.TimeWindowDays))
+				return PairCompareAction.Skip;
+			if (!Usable)
+				return PairCompareAction.Compute;
+			int ia = a.compareIndex;
+			int ib = b.compareIndex;
+			if (rows.TryGetValue(PairScoreStore.Key(ia, ib), out StoredPair row))
+				return ActionForRow(row, settings);
+			if (covered[ia] && covered[ib] && (coverageWindowDays <= 0 || TimeWindow.SharesWindow(a.DateCreated, b.DateCreated, coverageWindowDays)))
+				return ActionWhenCovered(aiCovered, settings);
+			return PairCompareAction.Compute;
+		}
+
+		public bool TryGet(FileEntry a, FileEntry b, out StoredPair row) =>
+			rows.TryGetValue(PairScoreStore.Key(a.compareIndex, b.compareIndex), out row);
+
+		public void RecordGray(FileEntry a, FileEntry b, float grayPercent, bool flipped) {
+			if (!Usable) return;
+			Record(a, b, new StoredPair(grayPercent, float.NaN, flipped));
+		}
+
+		public void RecordAi(FileEntry a, FileEntry b, float aiPercent) {
+			if (!Usable) return;
+			Record(a, b, new StoredPair(-1f, aiPercent));
+		}
+
+		void Record(FileEntry a, FileEntry b, StoredPair incoming) =>
+			rows.AddOrUpdate(PairScoreStore.Key(a.compareIndex, b.compareIndex), incoming, (_, existing) => StoredPair.Merge(existing, incoming));
+
+		internal static PairCompareAction ActionForRow(StoredPair row, Settings settings) {
+			bool grayPasses = row.GrayPercent >= settings.Percent;
+			if (settings.UseAiMatching && !row.HasAi && !grayPasses)
+				return PairCompareAction.ComputeAiOnly;
+			return PairCompareAction.UseStored;
+		}
+
+		/// <summary>Both files were compared before and no row exists, so the pair was under the floor.</summary>
+		internal static PairCompareAction ActionWhenCovered(bool aiCovered, Settings settings) =>
+			settings.UseAiMatching && !aiCovered ? PairCompareAction.ComputeAiOnly : PairCompareAction.Skip;
 	}
 }

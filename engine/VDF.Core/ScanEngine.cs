@@ -66,6 +66,8 @@ namespace VDF.Core {
 		// the compare snapshots are built — embeddings only occupy memory while needed.
 		internal AI.UnionEmbeddingStore? unionEmbeddingStore;
 		PairScoreStore pairScores = new();
+		// Set for the length of one compare; hot-path lookups go through it instead of the store.
+		PairSession? pairSession;
 
 		public ScanEngine() =>
 			// Armed and disarmed by the isScanning setter, so an idle engine owns no ticking timer.
@@ -1537,7 +1539,7 @@ namespace VDF.Core {
 				return false;
 			difference = 1f - aiSimilarity;
 			aiMatched = true;
-			pairScores.UpsertAi(entry, compItem, aiSimilarity * 100f);
+			pairSession?.RecordAi(entry, compItem, aiSimilarity * 100f);
 			return true;
 		}
 
@@ -1552,7 +1554,7 @@ namespace VDF.Core {
 				difference = ignoreBlackPixels || ignoreWhitePixels ?
 								GrayBytesUtils.PercentageDifferenceWithoutSpecificPixels(grayBytes[0]!, compItem.compareGray![0]!, ignoreBlackPixels, ignoreWhitePixels) :
 								GrayBytesUtils.PercentageDifference(grayBytes[0]!, compItem.compareGray![0]!);
-				RememberGray(entry, compItem, difference);
+				RememberGray(entry, compItem, difference, overrideGray != null);
 				bool isImageDuplicate = difference <= 1.0f - Settings.Percent / 100f;
 				// Images always compare by grayscale (single frame; the pHash quorum has
 				// nothing to vote over) — in combined mode the badge says so honestly.
@@ -1567,7 +1569,7 @@ namespace VDF.Core {
 				// it, and when both did the better (smaller) difference is reported —
 				// the same rule the flip-vs-normal selection uses.
 				bool grayScored = TryCompareGrayVideos(grayBytes, compItem, ignoreBlackPixels, ignoreWhitePixels, out float grayDifference);
-				if (grayScored) RememberGray(entry, compItem, grayDifference);
+				if (grayScored) RememberGray(entry, compItem, grayDifference, overrideGray != null);
 				bool grayMatched = grayScored && grayDifference <= 1.0f - Settings.Percent / 100f;
 				bool pHashMatched = TryComparePHashes(overrideGray != null ? overridePHashes : entry.comparePHashes, compItem.comparePHashes, out float pHashDifference);
 				if (!grayMatched && !pHashMatched)
@@ -1586,15 +1588,15 @@ namespace VDF.Core {
 
 			if (!TryCompareGrayVideos(grayBytes, compItem, ignoreBlackPixels, ignoreWhitePixels, out difference))
 				return false;
-			RememberGray(entry, compItem, difference);
+			RememberGray(entry, compItem, difference, overrideGray != null);
 			return difference <= 1.0f - Settings.Percent / 100f;
 		}
 
-		void RememberGray(FileEntry entry, FileEntry compItem, float difference) {
+		void RememberGray(FileEntry entry, FileEntry compItem, float difference, bool flipped) {
 			if (float.IsNaN(difference)) return;
 			float percent = (1f - difference) * 100f;
 			if (percent >= PairScoreStore.FloorPercent)
-				pairScores.UpsertGray(entry, compItem, percent);
+				pairSession?.RecordGray(entry, compItem, percent, flipped);
 		}
 
 		bool TryComparePHashes(ulong[]? phashes, ulong[]? phashesComp, out float difference) {
@@ -1648,8 +1650,11 @@ namespace VDF.Core {
 			difference = 1f;
 			byte[]?[] compGray = compItem.compareGray!;
 			// Record the 85–N band. A higher user percent must not stop the frame walk
-			// before we know whether the pair clears the store floor.
-			float scoreFloor = Math.Min(Settings.Percent, PairScoreStore.FloorPercent);
+			// before we know whether the pair clears the store floor. Runs that do not
+			// keep scores stop at the user's percent.
+			float scoreFloor = pairSession is { Usable: true }
+				? Math.Min(Settings.Percent, PairScoreStore.FloorPercent)
+				: Settings.Percent;
 			float differenceLimit = (1.0f - scoreFloor / 100f) * grayBytes.Length;
 			float diffSum = 0;
 			for (int j = 0; j < grayBytes.Length; j++) {
@@ -1725,14 +1730,17 @@ namespace VDF.Core {
 				Logger.Instance.Info($"Pair store could not be read ({ex.Message}). Comparing from scratch.");
 				pairScores = new PairScoreStore();
 			}
-			if (Settings.Percent < PairScoreStore.FloorPercent || !pairScores.GrayFlagsMatch(Settings)) {
+			if (!PairScoreStore.IsUsable(Settings) || !pairScores.GrayFlagsMatch(Settings)) {
 				if (pairScores.Count > 0)
 					Logger.Instance.Info(Settings.Percent < PairScoreStore.FloorPercent
 						? "Pair store cleared: percent is below 85."
-						: "Pair store cleared: matching settings changed.");
+						: Settings.UsePHashing || Settings.CombineGrayscaleAndPHash
+							? "Pair store cleared: pHash matching does not use it."
+							: "Pair store cleared: matching settings changed.");
 				pairScores.Clear();
 			}
 			pairScores.Relink(ScanList);
+			pairSession = pairScores.BeginCompare(ScanList, Settings);
 			if (Settings.TimeWindowDays <= 0 && pairScores.CoverageWindowDays > 0)
 				Logger.Instance.Info("Capture-time window is the whole library. Stored scores are reused; pairs outside the saved window are compared.");
 			else if (Settings.TimeWindowDays > 0 && (pairScores.HasFullLibraryCoverage || pairScores.CoverageWindowDays > Settings.TimeWindowDays))
@@ -1839,10 +1847,10 @@ namespace VDF.Core {
 				}
 			}
 
-			bool TryCheckDuplicate(FileEntry entry, FileEntry compItem, byte[]?[]? flippedGrayBytes, ulong[]? flippedPHashes, out float difference, out DuplicateFlags flags) {
+			bool TryCheckDuplicate(FileEntry entry, FileEntry compItem, byte[]?[]? flippedGrayBytes, ulong[]? flippedPHashes, out float difference, out DuplicateFlags flags, bool windowChecked = false) {
 				flags = DuplicateFlags.None;
 				difference = 0;
-				PairCompareAction stored = pairScores.Decide(entry, compItem, Settings);
+				PairCompareAction stored = pairSession?.Decide(entry, compItem, Settings, windowChecked) ?? PairCompareAction.Compute;
 				if (stored == PairCompareAction.Skip)
 					return false;
 				if (stored == PairCompareAction.UseStored)
@@ -1871,10 +1879,10 @@ namespace VDF.Core {
 			bool ApplyStoredPair(FileEntry entry, FileEntry compItem, out float difference, out DuplicateFlags flags) {
 				flags = DuplicateFlags.None;
 				difference = 1f;
-				if (!pairScores.TryGet(entry, compItem, out StoredPair row)) return false;
+				if (pairSession is null || !pairSession.TryGet(entry, compItem, out StoredPair row)) return false;
 				if (row.GrayPercent >= Settings.Percent) {
 					difference = 1f - (row.GrayPercent / 100f);
-					if (Settings.CombineGrayscaleAndPHash) flags |= DuplicateFlags.GrayscaleMatched;
+					if (row.Flipped) flags |= DuplicateFlags.Flipped;
 					return true;
 				}
 				if (Settings.UseAiMatching && row.HasAi && row.AiPercent >= Settings.AiPercent) {
@@ -1888,14 +1896,14 @@ namespace VDF.Core {
 			bool ApplyStoredAiOnly(FileEntry entry, FileEntry compItem, out float difference, out DuplicateFlags flags) {
 				flags = DuplicateFlags.None;
 				difference = 1f;
-				if (pairScores.TryGet(entry, compItem, out StoredPair row) && row.GrayPercent >= Settings.Percent)
+				if (pairSession is not null && pairSession.TryGet(entry, compItem, out StoredPair row) && row.GrayPercent >= Settings.Percent)
 					return ApplyStoredPair(entry, compItem, out difference, out flags);
 				float aiSimilarity = ComputeAiSimilarity(entry, compItem);
 				if (aiSimilarity < Settings.AiPercent / 100f)
 					return false;
 				difference = 1f - aiSimilarity;
 				flags |= DuplicateFlags.AiMatched;
-				pairScores.UpsertAi(entry, compItem, aiSimilarity * 100f);
+				pairSession?.RecordAi(entry, compItem, aiSimilarity * 100f);
 				return true;
 			}
 
@@ -1921,7 +1929,7 @@ namespace VDF.Core {
 				if (!PassesFolderMatchGate(entry, compItem))
 					return;
 
-				bool isDuplicate = TryCheckDuplicate(entry, compItem, flippedGrayBytes, flippedPHashes, out float difference, out DuplicateFlags flags);
+				bool isDuplicate = TryCheckDuplicate(entry, compItem, flippedGrayBytes, flippedPHashes, out float difference, out DuplicateFlags flags, windowChecked: true);
 
 				// Hard links are the same data on disk, so a pair can only be one if the sizes match;
 				// for videos the equal-duration test is a second cheap prefilter before the
@@ -2110,8 +2118,8 @@ namespace VDF.Core {
 			}
 
 			if (!cancelationTokenSource.IsCancellationRequested) {
-				pairScores.DropMissing(ScanList);
-				pairScores.MarkCovered(ScanList, Settings.TimeWindowDays, Settings);
+				if (pairSession != null)
+					pairScores.Commit(pairSession, ScanList, Settings.TimeWindowDays, Settings);
 				try {
 					pairScores.Save(DatabaseUtils.GetDatabaseFolderPath());
 					Logger.Instance.Info($"Pair store: {pairScores.Count:N0} pairs at or above {PairScoreStore.FloorPercent:0}%.");
@@ -2120,6 +2128,8 @@ namespace VDF.Core {
 					Logger.Instance.Info($"Pair store was not saved ({ex.Message}).");
 				}
 			}
+
+			pairSession = null;
 
 			// Release the transient snapshots; the gray-byte arrays themselves remain
 			// owned by entry.grayBytes, only the alignment wrappers are dropped.
