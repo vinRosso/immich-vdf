@@ -78,6 +78,11 @@ namespace VDF.Core {
 		/// </summary>
 		public double TimeWindowDays;
 		/// <summary>
+		/// Fork: when saved pair scores still apply to most files, only pairs that involve a new or changed
+		/// file are scored and the others are replayed from the store. Off scores every pair, as upstream does.
+		/// </summary>
+		public bool IncrementalCompare = true;
+		/// <summary>
 		/// Minimum fraction (0..1) of sampled frame positions that must individually pass
 		/// the pHash similarity threshold for a pair to count as duplicates. Only used
 		/// when <see cref="UsePHashing"/> is on.

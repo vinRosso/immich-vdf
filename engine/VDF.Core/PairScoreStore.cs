@@ -120,7 +120,7 @@ namespace VDF.Core {
 		internal static long Key(int a, int b) =>
 			a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
-		static (int First, int Second) Split(long key) => ((int)(key >> 32), (int)(key & 0xFFFFFFFFL));
+		internal static (int First, int Second) Split(long key) => ((int)(key >> 32), (int)(key & 0xFFFFFFFFL));
 
 		public bool GrayFlagsMatch(Settings settings) => Fingerprint == MatcherFingerprint(settings);
 
@@ -455,8 +455,53 @@ namespace VDF.Core {
 			this.coverageWindowDays = coverageWindowDays;
 		}
 
+		int[][]? partners;
+
 		/// <summary>False when the matcher settings keep scores from being reused (pHash, or a percent under 85).</summary>
 		public bool Usable { get; }
+
+		public bool IsCovered(FileEntry entry) => covered[entry.compareIndex];
+
+		/// <summary>
+		/// True when every pair of covered files is either stored or known to be under the floor, so the loops
+		/// can leave those pairs alone. That needs the saved window to be the one in use (or the whole library),
+		/// and AI scores to have been saved if AI matching is on.
+		/// </summary>
+		internal bool CanSkipCoveredPairs(Settings settings) {
+			if (!Usable) return false;
+			if (coverageWindowDays > 0 && coverageWindowDays != settings.TimeWindowDays) return false;
+			if (settings.UseAiMatching && !aiCovered) return false;
+			foreach (bool isCovered in covered)
+				if (isCovered) return true;
+			return false;
+		}
+
+		/// <summary>
+		/// For every covered file, the covered files it may be a duplicate of, according to the stored rows.
+		/// Rows that cannot make a match at the current percent are left out. With AI matching on, a row
+		/// without an AI score stays in, because that pair still has the AI pass to run.
+		/// </summary>
+		internal void BuildPartners(Settings settings) {
+			var lists = new List<int>?[covered.Length];
+			foreach (var row in rows) {
+				(int a, int b) = PairScoreStore.Split(row.Key);
+				if (!covered[a] || !covered[b]) continue;
+				StoredPair value = row.Value;
+				bool grayMatches = value.GrayPercent >= settings.Percent;
+				bool aiMayMatch = settings.UseAiMatching && (!value.HasAi || value.AiPercent >= settings.AiPercent);
+				if (!grayMatches && !aiMayMatch) continue;
+				(lists[a] ??= new List<int>()).Add(b);
+				(lists[b] ??= new List<int>()).Add(a);
+			}
+			partners = new int[lists.Length][];
+			for (int i = 0; i < lists.Length; i++) {
+				partners[i] = lists[i]?.ToArray() ?? Array.Empty<int>();
+				Array.Sort(partners[i]);
+			}
+		}
+
+		/// <summary>Compare indexes of the files <paramref name="entry"/> has a worthwhile stored row with.</summary>
+		internal int[] PartnersOf(FileEntry entry) => partners![entry.compareIndex];
 		internal int EntryCount => covered.Length;
 		internal ConcurrentDictionary<long, StoredPair> Rows => rows;
 		public int Count => rows.Count;

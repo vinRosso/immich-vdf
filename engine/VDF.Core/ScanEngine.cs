@@ -73,6 +73,9 @@ namespace VDF.Core {
 		PairScoreStore pairScores = new();
 		// Set for the length of one compare; hot-path lookups go through it instead of the store.
 		PairSession? pairSession;
+		// Pairs ComparePair looked at during the last compare, for the log and for tests.
+		long pairsEvaluated;
+		internal long PairsEvaluated => Interlocked.Read(ref pairsEvaluated);
 
 		public ScanEngine() =>
 			// Armed and disarmed by the isScanning setter, so an idle engine owns no ticking timer.
@@ -1685,6 +1688,7 @@ namespace VDF.Core {
 			Dictionary<Guid, List<DuplicateItem>> groupMembers = new();
 			int mergesBlocked = 0;
 			missingPHashFiles.Clear();
+			Interlocked.Exchange(ref pairsEvaluated, 0);
 
 			//Exclude existing database entries which not met current scan settings
 			List<FileEntry> ScanList = new();
@@ -1766,6 +1770,14 @@ namespace VDF.Core {
 			int matchingParallelism = MatchingParallelDegree;
 			Logger.Instance.Info($"Matching concurrency: {matchingParallelism} worker(s) on {Environment.ProcessorCount} logical processor(s) (configured: matching={Settings.MatchingMaxDegreeOfParallelism}, media reads={Settings.MaxDegreeOfParallelism})");
 
+			// Only pairs that involve a new or changed file are scored when the saved scores cover the rest.
+			bool incremental = Settings.IncrementalCompare && pairSession is not null && pairSession.CanSkipCoveredPairs(Settings);
+			if (incremental) {
+				pairSession!.BuildPartners(Settings);
+				int changedFiles = ScanList.Count(entry => !pairSession.IsCovered(entry));
+				Logger.Instance.Info($"Incremental compare: {changedFiles:N0} of {ScanList.Count:N0} files are new or changed. Pairs among the other files are replayed from the saved scores.");
+			}
+
 			InitProgress(ScanList.Count, T("Scan.Stage.ComparingDuplicates"));
 
 			// Duration buckets are keyed by whole seconds to keep percent-based tolerance intact.
@@ -1773,6 +1785,7 @@ namespace VDF.Core {
 			var imageEntries = new List<FileEntry>();
 			var videoEntries = new List<FileEntry>();
 			var videoBuckets = new Dictionary<int, List<FileEntry>>();
+			var uncoveredVideoBuckets = incremental ? new Dictionary<int, List<FileEntry>>() : null;
 			const int largeBucketThreshold = 400;
 
 			for (int i = 0; i < ScanList.Count; i++) {
@@ -1789,6 +1802,13 @@ namespace VDF.Core {
 					videoBuckets.Add(bucketKey, bucket);
 				}
 				bucket.Add(entry);
+				if (uncoveredVideoBuckets != null && !pairSession!.IsCovered(entry)) {
+					if (!uncoveredVideoBuckets.TryGetValue(bucketKey, out var changedBucket)) {
+						changedBucket = new List<FileEntry>();
+						uncoveredVideoBuckets.Add(bucketKey, changedBucket);
+					}
+					changedBucket.Add(entry);
+				}
 			}
 
 			void MergeDuplicate(FileEntry entry, FileEntry compItem, float difference, DuplicateFlags flags) {
@@ -1923,6 +1943,7 @@ namespace VDF.Core {
 			// spilled arguments per candidate pair (measurable in pHash-only mode).
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			void ComparePair(FileEntry entry, FileEntry compItem, byte[]?[]? flippedGrayBytes, ulong[]? flippedPHashes, double entryDurationSeconds, double entryToleranceSeconds) {
+				Interlocked.Increment(ref pairsEvaluated);
 				if (Settings.TimeWindowDays > 0 && !TimeWindow.SharesWindow(entry.CaptureTime, compItem.CaptureTime, Settings.TimeWindowDays))
 					return;
 				if (!entry.IsImage) {
@@ -1955,6 +1976,29 @@ namespace VDF.Core {
 					MergeDuplicate(entry, compItem, difference, flags);
 			}
 
+			// Positions after `after` that a covered entry still needs a look at, in ascending order: the new or
+			// changed files, and the files it has a worthwhile stored row with. Every other pair is already
+			// settled. Visiting them in list order keeps the order a full compare would have used.
+			void VisitCandidatePositions(FileEntry entry, int after, int[] uncoveredPositions, int[] positionOf, Func<int, bool> visit) {
+				int[] partnerIndexes = pairSession!.PartnersOf(entry);
+				var partnerPositions = new List<int>(partnerIndexes.Length);
+				foreach (int partner in partnerIndexes) {
+					int position = positionOf[partner];
+					if (position > after) partnerPositions.Add(position);
+				}
+				partnerPositions.Sort();
+
+				int u = Array.BinarySearch(uncoveredPositions, after + 1);
+				if (u < 0) u = ~u;
+				int p = 0;
+				while (u < uncoveredPositions.Length || p < partnerPositions.Count) {
+					int next = p >= partnerPositions.Count || (u < uncoveredPositions.Length && uncoveredPositions[u] < partnerPositions[p])
+						? uncoveredPositions[u++]
+						: partnerPositions[p++];
+					if (!visit(next)) return;
+				}
+			}
+
 			// Compare one entry against candidate buckets (bucketed path).
 			void CompareEntry(FileEntry entry, int entryIndex, IEnumerable<int> candidateBucketKeys) {
 				if (!pauseTokenSource.TryWaitWhilePaused(cancelationTokenSource.Token))
@@ -1971,8 +2015,10 @@ namespace VDF.Core {
 						flippedPHashes = ComputePHashesFromGray(flippedGrayBytes);
 				}
 
+				bool settled = incremental && pairSession!.IsCovered(entry);
 				foreach (int bucketKey in candidateBucketKeys) {
-					if (!videoBuckets.TryGetValue(bucketKey, out var bucketEntries))
+					// A covered entry only needs the new or changed files of each bucket.
+					if (!(settled ? uncoveredVideoBuckets! : videoBuckets).TryGetValue(bucketKey, out var bucketEntries))
 						continue;
 					foreach (var compItem in bucketEntries) {
 						int compIndex = compItem.compareIndex;
@@ -1980,6 +2026,13 @@ namespace VDF.Core {
 							continue;
 
 						ComparePair(entry, compItem, flippedGrayBytes, flippedPHashes, entryDurationSeconds, entryToleranceSeconds);
+					}
+				}
+				if (settled) {
+					foreach (int partner in pairSession!.PartnersOf(entry)) {
+						if (partner <= entryIndex)
+							continue;
+						ComparePair(entry, ScanList[partner], flippedGrayBytes, flippedPHashes, entryDurationSeconds, entryToleranceSeconds);
 					}
 				}
 				IncrementProgress(entry.Path);
@@ -1992,6 +2045,17 @@ namespace VDF.Core {
 					orderedImages = imageEntries.OrderBy(entry => entry.CaptureTime).ToList();
 					Logger.Instance.Info($"Capture-time window: {Settings.TimeWindowDays:0.###} days, buffer {TimeWindow.BufferDays(Settings.TimeWindowDays):0.###} days each side.");
 				}
+				int[]? uncoveredImagePositions = null;
+				int[]? imagePositionOf = null;
+				if (incremental) {
+					imagePositionOf = new int[ScanList.Count];
+					var changed = new List<int>();
+					for (int position = 0; position < orderedImages.Count; position++) {
+						imagePositionOf[orderedImages[position].compareIndex] = position;
+						if (!pairSession!.IsCovered(orderedImages[position])) changed.Add(position);
+					}
+					uncoveredImagePositions = changed.ToArray();
+				}
 				Action<int> compareAction = i => {
 					var entry = orderedImages[i];
 					byte[]?[]? flippedGrayBytes = null;
@@ -2000,12 +2064,23 @@ namespace VDF.Core {
 					double reach = Settings.TimeWindowDays > 0
 						? Settings.TimeWindowDays + (2d * TimeWindow.BufferDays(Settings.TimeWindowDays))
 						: 0;
-					for (int n = i + 1; n < orderedImages.Count; n++) {
-						var compItem = orderedImages[n];
-						if (reach > 0 && (compItem.CaptureTime - entry.CaptureTime).TotalDays > reach)
-							break;
-						// Images never take the pHash branch, so no flipped pHash is needed.
-						ComparePair(entry, compItem, flippedGrayBytes, null, 0d, 0d);
+					if (uncoveredImagePositions != null && pairSession!.IsCovered(entry)) {
+						VisitCandidatePositions(entry, i, uncoveredImagePositions, imagePositionOf!, position => {
+							var compItem = orderedImages[position];
+							if (reach > 0 && (compItem.CaptureTime - entry.CaptureTime).TotalDays > reach)
+								return false;
+							ComparePair(entry, compItem, flippedGrayBytes, null, 0d, 0d);
+							return true;
+						});
+					}
+					else {
+						for (int n = i + 1; n < orderedImages.Count; n++) {
+							var compItem = orderedImages[n];
+							if (reach > 0 && (compItem.CaptureTime - entry.CaptureTime).TotalDays > reach)
+								break;
+							// Images never take the pHash branch, so no flipped pHash is needed.
+							ComparePair(entry, compItem, flippedGrayBytes, null, 0d, 0d);
+						}
 					}
 					IncrementProgress(entry.Path);
 				};
@@ -2024,6 +2099,17 @@ namespace VDF.Core {
 
 			// Linear compare path for small datasets to avoid bucket bookkeeping overhead.
 			void CompareVideosLinear() {
+				int[]? uncoveredVideoPositions = null;
+				int[]? videoPositionOf = null;
+				if (incremental) {
+					videoPositionOf = new int[ScanList.Count];
+					var changed = new List<int>();
+					for (int position = 0; position < videoEntries.Count; position++) {
+						videoPositionOf[videoEntries[position].compareIndex] = position;
+						if (!pairSession!.IsCovered(videoEntries[position])) changed.Add(position);
+					}
+					uncoveredVideoPositions = changed.ToArray();
+				}
 				Action<int> compareAction = i => {
 					if (!pauseTokenSource.TryWaitWhilePaused(cancelationTokenSource.Token))
 						return; // canceled while paused — the loop guards below end the iteration
@@ -2040,10 +2126,18 @@ namespace VDF.Core {
 							flippedPHashes = ComputePHashesFromGray(flippedGrayBytes);
 					}
 
-					for (int n = i + 1; n < videoEntries.Count; n++) {
-						var compItem = videoEntries[n];
+					if (uncoveredVideoPositions != null && pairSession!.IsCovered(entry)) {
+						VisitCandidatePositions(entry, i, uncoveredVideoPositions, videoPositionOf!, position => {
+							ComparePair(entry, videoEntries[position], flippedGrayBytes, flippedPHashes, entryDurationSeconds, entryToleranceSeconds);
+							return true;
+						});
+					}
+					else {
+						for (int n = i + 1; n < videoEntries.Count; n++) {
+							var compItem = videoEntries[n];
 
-						ComparePair(entry, compItem, flippedGrayBytes, flippedPHashes, entryDurationSeconds, entryToleranceSeconds);
+							ComparePair(entry, compItem, flippedGrayBytes, flippedPHashes, entryDurationSeconds, entryToleranceSeconds);
+						}
 					}
 
 					IncrementProgress(entry.Path);
@@ -2104,6 +2198,7 @@ namespace VDF.Core {
 				}
 			}
 			catch (OperationCanceledException) { }
+			Logger.Instance.Info($"Pairs looked at: {PairsEvaluated:N0}{(incremental ? " (incremental)" : "")}.");
 			if (mergesBlocked > 0)
 				Logger.Instance.Info($"Group merge validation: blocked {mergesBlocked} merge(s) where group representatives were not similar");
 			if (missingPHashFiles.Count > 0)
