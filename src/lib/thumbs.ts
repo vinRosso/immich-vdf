@@ -10,10 +10,15 @@ import type { SectionId } from "./types";
 
 const STILL_IMAGE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
+const madeDirs = new Set<string>();
+
 async function dirFor(file: string): Promise<string> {
   const key = await fileCacheKey(file);
   const dir = path.join(loadConfig().dataDir, "thumbs", key);
-  await mkdir(dir, { recursive: true });
+  if (!madeDirs.has(dir)) {
+    await mkdir(dir, { recursive: true });
+    madeDirs.add(dir);
+  }
   return dir;
 }
 

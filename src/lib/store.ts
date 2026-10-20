@@ -225,8 +225,21 @@ function normalizeScanParallelism(fallback: ScanSettings, patch: Partial<ScanSet
   return scan;
 }
 
-export function loadSettings(): Promise<Settings> {
-  return readJson<StoredSettingsFile | null>(settingsPath(), null).then((raw) => normalizeStoredSettings(raw));
+let settingsCache: { stamp: string; settings: Settings } | null = null;
+
+/** Settings are read on nearly every request, so reuse the parsed copy until the file changes. */
+export async function loadSettings(): Promise<Settings> {
+  let stamp = "missing";
+  try {
+    const info = await stat(settingsPath());
+    stamp = `${info.mtimeMs}:${info.size}`;
+  } catch {
+    stamp = "missing";
+  }
+  if (settingsCache?.stamp === stamp) return structuredClone(settingsCache.settings);
+  const settings = normalizeStoredSettings(await readJson<StoredSettingsFile | null>(settingsPath(), null));
+  settingsCache = { stamp, settings };
+  return structuredClone(settings);
 }
 
 export function saveSettings(settings: Settings): Promise<void> {
