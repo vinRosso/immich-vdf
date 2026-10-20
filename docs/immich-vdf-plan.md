@@ -23,7 +23,7 @@ One Compose service, built from a multi-stage [Dockerfile](../Dockerfile):
 
 - Build `vdf-cli` from `engine/` (.NET 10). The runtime stage deletes `engine/` after publish so the image does not carry the C# sources.
 - Build the Next.js app.
-- Runtime image: .NET 10 runtime, Node, ffmpeg, and ffprobe from the distro. VDF runs ffmpeg in process mode; the native binding needs FFmpeg 8 shared libraries and is not used.
+- Runtime image: .NET 10 runtime, Node, ffmpeg, and ffprobe from the distro. The image also carries FFmpeg 8 shared libraries, fetched at build time with a pinned checksum, so scans decode inside `vdf-cli`. Without them, or when they fail to load, VDF starts one ffmpeg program per frame.
 
 [docker-compose.yml](../docker-compose.yml) publishes an uncommon host port, sets `APP_PASSWORD`, and mounts:
 

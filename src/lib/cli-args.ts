@@ -5,6 +5,8 @@ type VdfScanParams = ScanSettings & {
   excludes: string[];
   dbDir: string;
   settingsFile: string;
+  /** Decode inside vdf-cli. Only when the FFmpeg 8 libraries are installed, or the scan cannot start. */
+  nativeFfmpeg?: boolean;
 };
 
 type VdfCompareParams = ScanSettings & {
@@ -37,6 +39,7 @@ export function buildVdfScanArgs(scan: VdfScanParams): string[] {
   for (const include of scan.includes) args.push("--include", include);
   for (const exclude of scan.excludes) args.push("--exclude", exclude);
   appendMatchFlags(args, scan);
+  if (scan.nativeFfmpeg) args.push("--native-ffmpeg");
   args.push("--db", scan.dbDir, "--settings", scan.settingsFile);
   return args;
 }
@@ -72,6 +75,7 @@ export function buildVdfArgs(
 /** Flags that must appear in `vdf-cli scan --help` (or root help). */
 export const REQUIRED_CLI_SCAN_HELP = [
   "scan",
+  "--native-ffmpeg",
   "--include",
   "--exclude",
   "--threshold",

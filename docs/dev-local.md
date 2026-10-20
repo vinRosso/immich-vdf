@@ -35,6 +35,16 @@ IMMICH_PATH=//server/share/immich
 
 On Windows the binary is `./bin/vdf-cli/vdf-cli.exe`.
 
+### Faster scans
+
+By default a scan starts one `ffmpeg` program for every frame it reads. With the FFmpeg 8 shared libraries next to `vdf-cli`, it decodes inside the process instead, which was about four times faster on a test library of 300 images and 40 videos, with the same similarity scores. Download a `win64-gpl-shared` 8.x build (for example from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases)), copy its `bin/*.dll` files next to `vdf-cli.exe`, and set this in `.env`:
+
+```bash
+VDF_NATIVE_FFMPEG=1
+```
+
+Leave it unset to keep using the `ffmpeg` program. If the libraries are missing or fail to load, the scan runs again without them.
+
 ## Run
 
 ```bash

@@ -1,7 +1,21 @@
 # syntax=docker/dockerfile:1
 
-# vdf-cli is built from engine/ (.NET 10, process-mode ffmpeg).
-# Native FFmpeg bindings need FFmpeg 8 shared libraries and are not used.
+# vdf-cli is built from engine/ (.NET 10).
+# Scans decode inside vdf-cli when the FFmpeg 8 shared libraries below are installed, about 4x faster than
+# starting one ffmpeg program per frame. If they cannot be fetched the image still builds and scans use the program.
+FROM debian:bookworm-slim AS ffmpeg-libs
+# A dated release stays downloadable; "latest" does not. When this link stops working, take a newer
+# autobuild tag and its checksum from https://github.com/BtbN/FFmpeg-Builds/releases (an 8.1 "linux64-gpl-shared" file).
+ARG FFMPEG_LIBS_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-linux64-gpl-shared-8.1.tar.xz
+ARG FFMPEG_LIBS_SHA256=1550d95f723911d1bd356dabfc1c1b6d26b1e7adaa36a5eda203f8e089d2bbd2
+RUN mkdir -p /opt/ffmpeg/lib \
+  && ( apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates xz-utils \
+    && curl -fsSL -o /tmp/ffmpeg.tar.xz "$FFMPEG_LIBS_URL" \
+    && echo "$FFMPEG_LIBS_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/ffmpeg.tar.xz -C /opt/ffmpeg/lib --strip-components=2 --wildcards '*/lib/*.so*' \
+  ) || echo "FFmpeg 8 libraries not installed: scans will use the ffmpeg program"
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS vdf
 WORKDIR /src
 COPY engine/VDF.Core/VDF.Core.csproj VDF.Core/
@@ -31,6 +45,7 @@ RUN apt-get update \
 COPY --from=node:22-bookworm-slim /usr/local /usr/local
 WORKDIR /app
 COPY --from=vdf /out /opt/vdf
+COPY --from=ffmpeg-libs /opt/ffmpeg/lib /opt/ffmpeg/lib
 COPY --from=web /app /app
 RUN rm -rf /app/upstream /app/engine /app/agent-tools
 ENV NODE_ENV=production \
@@ -39,6 +54,7 @@ ENV NODE_ENV=production \
   MEDIA_ROOTS=/media \
   IMMICH_LIBRARY=/immich \
   VDF_CLI=/opt/vdf/vdf-cli \
+  VDF_FFMPEG_LIBS=/opt/ffmpeg/lib \
   DOTNET_RUNNING_IN_CONTAINER=true \
   NEXT_TELEMETRY_DISABLED=1
 # The CLI uses --db only when that directory already exists. The server creates

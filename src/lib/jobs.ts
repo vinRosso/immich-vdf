@@ -30,6 +30,7 @@ import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
 import { cliFailure, type CliOutcome } from "./cli-failure";
+import { nativeFfmpegEnv, nativeFfmpegPlan, shouldRetryWithoutNative } from "./native-ffmpeg";
 import { PhaseTimer } from "./phase-timer";
 import { TRASH_DIR } from "./trash-dir";
 import { redact } from "./redact";
@@ -271,8 +272,15 @@ async function runScanSteps(
     return;
   }
 
-  const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
-  const scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs));
+  // Decoding inside vdf-cli is several times faster than one ffmpeg program per frame, when the libraries exist.
+  const native = nativeFfmpegPlan();
+  const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths, nativeFfmpeg: native.enabled });
+  let scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs, nativeFfmpegEnv(native)));
+  if (shouldRetryWithoutNative(native, scanResult, scan.cancelled)) {
+    scan.addLine("[scan] Native FFmpeg could not be used. Scanning again with the ffmpeg program.");
+    const plainArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
+    scanResult = await timer.time("CLI scan (ffmpeg program)", () => spawnVdfCli(plainArgs));
+  }
   if (scan.cancelled) {
     await cancelled();
     return;
@@ -317,7 +325,7 @@ async function runScanSteps(
   });
 }
 
-function spawnVdfCli(args: string[]): Promise<CliOutcome> {
+function spawnVdfCli(args: string[], env?: NodeJS.ProcessEnv): Promise<CliOutcome> {
   return new Promise((resolve) => {
     const scan = getScan();
     // Own process group on POSIX, so cancelling reaches the ffmpeg processes vdf-cli started.
@@ -325,6 +333,7 @@ function spawnVdfCli(args: string[]): Promise<CliOutcome> {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      ...(env ? { env } : {}),
     });
     scan.attach(child);
     child.on("error", () => resolve({ code: null, signal: null, spawnFailed: true }));
