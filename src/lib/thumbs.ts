@@ -4,7 +4,7 @@ import path from "node:path";
 import { loadConfig } from "./config";
 import { ffmpegBin, fileCacheKey, probeFile, runProcess } from "./probe";
 import { enqueueFfmpeg } from "./ffmpeg-pool";
-import { filmstripArgs, posterArgs, posterTime, sampleTimes, STRIP_FRAMES, viewArgs } from "./ffmpeg-args";
+import { filmstripBatchArgs, posterArgs, posterTime, sampleTimes, STRIP_FRAMES, viewArgs } from "./ffmpeg-args";
 import { loadSettings } from "./store";
 import type { SectionId } from "./types";
 
@@ -136,20 +136,29 @@ export async function ensureStrip(file: string, index: number, parallelism: numb
   const dir = await dirFor(file);
   const output = path.join(dir, `strip-${index}.jpg`);
   if (await exists(output)) return output;
-  return singleFlight(
-    `strip\0${file}\0${index}`,
+  // One ffmpeg run writes every missing frame, so six frame requests cost one process and one probe.
+  await singleFlight(
+    `strips\0${file}`,
     async (signal) => {
-      if (await exists(output)) return output;
+      const missing: { seconds: number; output: string }[] = [];
       const duration = await probeFile(file).then((probe) => probe.duration).catch(() => 0);
       const times = sampleTimes(duration, STRIP_FRAMES);
-      await renderThumb(parallelism, output, filmstripArgs(file, times[index] ?? 0, output), {
-        priority: options?.priority,
-        signal,
-      });
-      return output;
+      for (let frame = 0; frame < STRIP_FRAMES; frame += 1) {
+        const target = path.join(dir, `strip-${frame}.jpg`);
+        if (!(await exists(target))) missing.push({ seconds: times[frame] ?? 0, output: target });
+      }
+      if (missing.length > 0) {
+        await renderThumb(parallelism, missing[0]!.output, filmstripBatchArgs(file, missing), {
+          priority: options?.priority,
+          signal,
+        });
+      }
+      return dir;
     },
     options?.signal,
   );
+  if (!(await exists(output))) throw new ThumbnailCancelled();
+  return output;
 }
 
 async function renderThumb(parallelism: number, output: string, args: string[], options?: ThumbRender): Promise<void> {

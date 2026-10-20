@@ -10,6 +10,19 @@ export function viewArgs(file: string, output: string): string[] {
   return ["-hide_banner", "-loglevel", "error", "-y", "-i", file, "-frames:v", "1", "-vf", "scale='min(1920,iw)':-2", "-q:v", "3", output];
 }
 
+/** One ffmpeg process that seeks the file once per frame and writes every frame, instead of one process per frame. */
+export function filmstripBatchArgs(file: string, frames: { seconds: number; output: string }[]): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-y"];
+  for (const frame of frames) {
+    if (frame.seconds > 0) args.push("-ss", frame.seconds.toFixed(3));
+    args.push("-i", file);
+  }
+  frames.forEach((frame, index) => {
+    args.push("-map", `${index}:v:0`, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4", frame.output);
+  });
+  return args;
+}
+
 export function filmstripArgs(file: string, seconds: number, output: string): string[] {
   return posterArgs(file, seconds, output);
 }
