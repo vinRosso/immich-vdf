@@ -18,6 +18,8 @@ nav_next_title: Review
 
 A scheduled run only starts a scan. It never stacks, trashes, or deletes.
 
+If a scan is already running when the time comes, the scheduled run waits in line and starts when that scan ends. If the server stops first, the run starts again after the restart, up to a day late. A run is started at most three times: when the server went down during each of three tries, the run is given up. A run that waited more than a day is also given up. A run given up is recorded as **skipped** on the page. A scan that is stopped by a normal shutdown is recorded as interrupted and does not count as a try.
+
 ![Schedule dialog with the finish webhook](images/schedule.jpg)
 
 The clock uses the time zone you pick, not the host zone. Delete the schedule to stop the runs. That also removes the saved webhook. Scan settings on the page stay as they are.
@@ -26,7 +28,7 @@ The clock uses the time zone you pick, not the host zone. Delete the schedule to
 
 The finish webhook is one URL for the app. It runs when a **scheduled** scan finishes. Pressing **Scan** does not call it.
 
-It also runs when a scheduled start is skipped because a scan is already running.
+It also runs, with status `skipped`, when a scheduled run is given up as described above.
 
 **Test** sends a sample and waits for a response under 10 seconds. The URL has to be `http` or `https`. Loopback, link-local, and cloud metadata addresses are refused. A LAN address is allowed.
 

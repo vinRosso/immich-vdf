@@ -47,6 +47,8 @@ npm run install-ffmpeg
 
 Set `VDF_NATIVE_FFMPEG=0` in `.env` to always use the `ffmpeg` program and never download. `VDF_NATIVE_FFMPEG=1` forces native mode without checking.
 
+If a native scan fails before hashing finishes, it runs again with the `ffmpeg` program. A failure after that point, in the compare step, is reported as it is, because decoding is over by then.
+
 ## Run
 
 ```bash

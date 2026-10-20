@@ -20,7 +20,9 @@ Open **Immich** or **Files**, pick a profile, and press **Scan**. Only one scan 
 
 ![Scan profiles and the Scan button](images/scan.jpg)
 
-A scan first lists the media files in your folders. If no file and no matching setting changed since the last run, both `vdf-cli` steps are skipped and the previous groups stay. Otherwise it runs `vdf-cli scan`, then `vdf-cli compare`. Changing Parallel does not count as a change. The log ends with how long each step took, and the run keeps those timings.
+A scan first lists the media files in your folders. If no file and no matching setting changed since the last run, both `vdf-cli` steps are skipped and the previous groups stay. Otherwise it runs `vdf-cli scan-and-compare` as one process, so compare reuses what the scan just read. Changing Parallel does not count as a change. The log ends with how long each step took, and the run keeps those timings.
+
+The engine also keeps the pair scores it computed (`PairScores.db`, next to the scan database). When most files are unchanged, a repeat compare only scores pairs that involve a new or changed file and replays the stored matches. That is skipped for pHash and combined matching, for a percent under 85, and when the saved capture window or AI percent does not cover the current one, so those runs score every pair. The first scan after an upgrade that changes the file is a full compare.
 
 ## Which profile
 
@@ -39,7 +41,7 @@ A scan first lists the media files in your folders. If no file and no matching s
 | --- | --- |
 | Threshold | Leave at 5. Lower is stricter and drops real duplicates. |
 | Percent | Let the profile set it (98 or 92). A much lower percent fills the grid with weak matches. |
-| Window | Immich defaults to 7 days, so a burst of the same event is compared. Files defaults to 0, the whole library. Raise the Immich window only when the same photo was imported months apart. The date is the one Immich shows, including dates you edited there. Files Immich does not know use the date inside the file (EXIF, or the video's creation tag), then the file's own date. |
+| Window | Immich defaults to 7 days, so a burst of the same event is compared. Files defaults to 0, the whole library. Raise the Immich window only when the same photo was imported months apart. The date is the one Immich shows, including dates you edited there. The app asks Immich only for dates changed since the last scan, and lists every asset again once a week, so moved and deleted assets are forgotten. Files Immich does not know use the date inside the file (EXIF, or the video's creation tag), then the file's own date. |
 | Prefix | Also group images taken within this many seconds when their original file names share a prefix, even if they are not visual duplicates. Default is 5. 0 turns it off. |
 | Parallel | Use the suggested value for the CPUs inside the container. |
 | Images | Leave on unless you only care about video. |

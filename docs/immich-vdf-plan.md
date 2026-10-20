@@ -23,7 +23,7 @@ One Compose service, built from a multi-stage [Dockerfile](../Dockerfile):
 
 - Build `vdf-cli` from `engine/` (.NET 10). The runtime stage deletes `engine/` after publish so the image does not carry the C# sources.
 - Build the Next.js app.
-- Runtime image: .NET 10 runtime, Node, ffmpeg, and ffprobe from the distro. The image also carries FFmpeg 8 shared libraries, fetched at build time with a pinned checksum, so scans decode inside `vdf-cli`. Outside Docker a scan finds the libraries or downloads them once (`vdf-cli ffmpeg install`, checksum-checked). When they are missing, cannot be downloaded or fail to load, VDF starts one ffmpeg program per frame.
+- Runtime image: .NET 10 runtime, Node, ffmpeg, and ffprobe from the distro. The image also carries FFmpeg 8 shared libraries, fetched at build time with a pinned checksum, so scans decode inside `vdf-cli`. Outside Docker a scan finds the libraries or downloads them once (`vdf-cli ffmpeg install`, checksum-checked). When they are missing, cannot be downloaded or fail to load, VDF starts one ffmpeg program per frame. An image built without the libraries (a dead download link) never tries to install them at run time, and a download that fails its checksum fails the build. A native scan that fails before hashing finishes is repeated with the ffmpeg program; a later failure is reported as is.
 
 [docker-compose.yml](../docker-compose.yml) publishes an uncommon host port, sets `APP_PASSWORD`, and mounts:
 
@@ -59,7 +59,7 @@ HTTP range requests for browser-safe codecs; on-demand fragmented MP4 transcode 
 
 ### Schedules
 
-Per-section daily or weekly scans only (no auto stack/delete). Optional webhook on finish.
+Per-section daily or weekly scans only (no auto stack/delete). Optional webhook on finish. A due slot that finds another scan running waits in line (`pendingSlot` in `runs.json`) and survives a restart for up to a day, started at most three times (`pendingAttempts`) before it is recorded as skipped. A scan still winding down when the server exits is recorded as interrupted.
 
 ### Ignore list and trash
 

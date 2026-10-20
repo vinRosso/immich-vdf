@@ -13,6 +13,7 @@ nav_next_title: Engine
 ## On this page
 
 - [This checkout](#this-checkout)
+- [FFmpeg libraries](#ffmpeg-libraries)
 - [Publish](#publish)
 
 ## This checkout
@@ -24,6 +25,14 @@ docker compose up -d
 ```
 
 `docker-compose.yml` builds `immich-vdf:local` and sets `pull_policy: build`, so Compose does not pull from Docker Hub. The Dockerfile compiles `vdf-cli` from `engine/`, runs the test suite and the fixture check, and sets the container paths. The image healthcheck requests `/api/health`.
+
+## FFmpeg libraries
+
+The Dockerfile downloads the FFmpeg 8 shared libraries from a dated BtbN release, checks them against a pinned SHA-256 and keeps them in `/opt/ffmpeg/lib` (`VDF_FFMPEG_LIBS`). With them, scans decode inside `vdf-cli`.
+
+- When the link no longer downloads (a 404), the image still builds without the libraries. Such an image scans with the `ffmpeg` program and never tries to download them at run time, because the installer writes next to `vdf-cli`, a folder the container user cannot write. The scan log says so.
+- When the download does not match the checksum, the build fails.
+- To update, take a newer `autobuild` tag and its checksum from [FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases) (an 8.1 `linux64-gpl-shared` file) and change `FFMPEG_LIBS_URL` and `FFMPEG_LIBS_SHA256`. `docker build --target ffmpeg-libs .` builds only that stage.
 
 ## Publish
 
