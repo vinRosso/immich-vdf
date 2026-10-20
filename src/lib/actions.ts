@@ -1,3 +1,5 @@
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import { baseName } from "./format";
 import { AppError } from "./errors";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
@@ -45,6 +47,7 @@ import {
   loadResults,
   loadSettings,
   resultsMembership,
+  resultsStamp,
   updateIgnored,
   updateResults,
 } from "./store";
@@ -62,7 +65,38 @@ import type {
   UnmatchedFile,
 } from "./types";
 
+const gzipAsync = promisify(gzip);
+
+type ViewEntry = { stamp: string; view: Promise<ResultsResponse>; gzip?: Promise<Buffer> };
+const viewCache = new Map<SectionId, ViewEntry>();
+
+async function viewEntry(section: SectionId): Promise<ViewEntry> {
+  const stamp = await resultsStamp(section);
+  let entry = viewCache.get(section);
+  if (!entry || entry.stamp !== stamp) {
+    const built: ViewEntry = { stamp, view: buildResultsView(section) };
+    built.view.catch(() => {
+      if (viewCache.get(section) === built) viewCache.delete(section);
+    });
+    viewCache.set(section, built);
+    entry = built;
+  }
+  return entry;
+}
+
+/** The client view of the saved results, rebuilt only when the results or ignore files change. */
 export async function resultsView(section: SectionId): Promise<ResultsResponse> {
+  return (await viewEntry(section)).view;
+}
+
+/** The same view as gzip-compressed JSON, compressed once per change. */
+export async function resultsViewGzip(section: SectionId): Promise<Buffer> {
+  const entry = await viewEntry(section);
+  entry.gzip ??= entry.view.then((view) => gzipAsync(JSON.stringify(view)));
+  return entry.gzip;
+}
+
+async function buildResultsView(section: SectionId): Promise<ResultsResponse> {
   const [results, ignored] = await Promise.all([loadResults(section), loadIgnored(section)]);
   if (!results) {
     return {

@@ -59,6 +59,21 @@ function ignorePath(section: SectionId): string {
   return path.join(loadConfig().dataDir, "ignore", `${section}.json`);
 }
 
+async function fileStamp(file: string): Promise<string> {
+  try {
+    const info = await stat(file);
+    return `${info.mtimeMs}:${info.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+/** Changes whenever the saved results or the ignore list for a section change on disk. */
+export async function resultsStamp(section: SectionId): Promise<string> {
+  const [results, ignored] = await Promise.all([fileStamp(resultsPath(section)), fileStamp(ignorePath(section))]);
+  return `${results}|${ignored}`;
+}
+
 function runsPath(): string {
   return path.join(loadConfig().dataDir, "runs.json");
 }
