@@ -21,6 +21,7 @@ import { PREFIX_CACHE_REVISION, loadPrefixCache, prefixCacheAction, prefixRegrou
 import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
+import { PhaseTimer } from "./phase-timer";
 import { redact } from "./redact";
 import { getScan } from "./scan";
 import { walkScanInventory, type InventoryEntry } from "./scan-inventory";
@@ -142,10 +143,11 @@ async function runScanPipeline(
   startedAt: number,
 ): Promise<void> {
   const scan = getScan();
+  const timer = new PhaseTimer((line) => scan.addLine(line));
   const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
-  const scanResult = await spawnVdfCli(scanArgs);
+  const scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs));
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
     return;
   }
   if (scanResult.spawnFailed || scanResult.code !== 0) {
@@ -157,6 +159,7 @@ async function runScanPipeline(
       spawnFailed: scanResult.spawnFailed,
       cancelled: false,
       startedAt,
+      timer,
     });
     return;
   }
@@ -164,7 +167,7 @@ async function runScanPipeline(
   scan.addLine("[scan] Checking whether compare is needed…");
   let inventory: InventoryEntry[];
   try {
-    inventory = await walkScanInventory(paths.includes, paths.excludes, () => scan.cancelled);
+    inventory = await timer.time("Inventory", () => walkScanInventory(paths.includes, paths.excludes, () => scan.cancelled));
   } catch (error) {
     scan.addLine(redact(errorText(error), scan.secrets));
     await finishScan(section, {
@@ -175,21 +178,24 @@ async function runScanPipeline(
       spawnFailed: false,
       cancelled: false,
       startedAt,
+      timer,
     });
     return;
   }
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
     return;
   }
 
-  const previous = await loadResults(section);
-  const previousInventory = await loadStoredInventory(section);
-  const decision = decideCompareRun({
-    scan: scanSettings,
-    inventory,
-    previous,
-    previousInventory,
+  const decision = await timer.time("Decision", async () => {
+    const previous = await loadResults(section);
+    const previousInventory = await loadStoredInventory(section);
+    return decideCompareRun({
+      scan: scanSettings,
+      inventory,
+      previous,
+      previousInventory,
+    });
   });
   scan.addLine(decision.logMessage);
 
@@ -202,14 +208,15 @@ async function runScanPipeline(
       decision,
       cancelled: false,
       startedAt,
+      timer,
     });
     return;
   }
 
   const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths });
-  const compareResult = await spawnVdfCli(compareArgs);
+  const compareResult = await timer.time("CLI compare", () => spawnVdfCli(compareArgs));
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt });
+    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
     return;
   }
   await finishScan(section, {
@@ -222,6 +229,7 @@ async function runScanPipeline(
     spawnFailed: compareResult.spawnFailed,
     cancelled: false,
     startedAt,
+    timer,
   });
 }
 
@@ -237,6 +245,7 @@ function spawnVdfCli(args: string[]): Promise<{ code: number | null; spawnFailed
 
 type FinishInput = {
   startedAt: number;
+  timer: PhaseTimer;
 } & (
   | {
       kind: "reuse";
@@ -269,6 +278,7 @@ type FinishInput = {
 async function finishScan(section: SectionId, input: FinishInput): Promise<void> {
   const scan = getScan();
   if (!scan.claim()) return;
+  const { timer } = input;
   scan.addLine("[scan] Finishing up…");
   const settings = await loadSettings();
   const secrets = secretValues(settings);
@@ -303,39 +313,47 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     } else if (input.code !== 0) {
       error = `vdf-cli exited with code ${input.code}`;
     } else {
-      const raw = await readFile(paths.outputFile, "utf8");
       scan.addLine("[scan] Processing results…");
-      const prefixed = await withPrefixGroups(
-        parseCliResults(raw).map(toStoredGroup),
-        paths.dbDir,
-        input.scanSettings,
-        paths.includes,
-        paths.excludes,
-        section,
-        input.decision.inventoryFingerprint,
+      const visualGroups = await timer.time("Parse results", async () =>
+        parseCliResults(await readFile(paths.outputFile, "utf8")).map(toStoredGroup),
+      );
+      const prefixed = await timer.time("Burst groups", () =>
+        withPrefixGroups(
+          visualGroups,
+          paths.dbDir,
+          input.scanSettings,
+          paths.includes,
+          paths.excludes,
+          section,
+          input.decision.inventoryFingerprint,
+        ),
       );
       const parsed = prefixed.groups;
-      const kept = await keepInside(
-        section,
-        parsed,
-        settings,
-        input.scanSettings.parallelism,
-        (done, total) => {
-          if (done === 0 || done === total || done % 200 === 0) {
-            scan.addLine(`[scan] Processing results… ${done}/${total} paths`);
-          }
-        },
-        () => scan.cancelled,
+      const kept = await timer.time("Path check", () =>
+        keepInside(
+          section,
+          parsed,
+          settings,
+          input.scanSettings.parallelism,
+          (done, total) => {
+            if (done === 0 || done === total || done % 200 === 0) {
+              scan.addLine(`[scan] Processing results… ${done}/${total} paths`);
+            }
+          },
+          () => scan.cancelled,
+        ),
       );
-      const previous = await loadResults(section);
-      let groups = await enrichImageBitDepth(
-        kept,
-        input.scanSettings.parallelism,
-        bitDepthsFromResults(previous),
-        (done, total) => {
-          if (done === total || done % 200 === 0) scan.addLine(`[scan] Processing results… ${done}/${total} images`);
-        },
-        () => scan.cancelled,
+      const previous = await timer.time("Load saved results", () => loadResults(section));
+      let groups = await timer.time("Bit depth", () =>
+        enrichImageBitDepth(
+          kept,
+          input.scanSettings.parallelism,
+          bitDepthsFromResults(previous),
+          (done, total) => {
+            if (done === total || done % 200 === 0) scan.addLine(`[scan] Processing results… ${done}/${total} images`);
+          },
+          () => scan.cancelled,
+        ),
       );
       if (scan.cancelled) {
         error = "Cancelled";
@@ -348,28 +366,28 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
           try {
             scan.addLine("[scan] Matching Immich library…");
             const creds = immichCredentials(settings);
-            const maps = await resolveImmichPathMap(creds);
-            const trashed = await listTrashedImmichAssets(settings.immich.baseUrl, settings.immich.apiKey);
-            const assets = await assetsForOriginalPaths(
-              settings.immich.baseUrl,
-              settings.immich.apiKey,
-              originalPathsForGroups(groups, maps),
-              settings.immich.scan.includeImages,
-              input.scanSettings.parallelism,
-              undefined,
-              trashed.ids,
+            const maps = await timer.time("Immich path map", () => resolveImmichPathMap(creds));
+            const trashed = await timer.time("Immich trash list", () =>
+              listTrashedImmichAssets(settings.immich.baseUrl, settings.immich.apiKey),
+            );
+            const assets = await timer.time("Immich assets", () =>
+              assetsForOriginalPaths(
+                settings.immich.baseUrl,
+                settings.immich.apiKey,
+                originalPathsForGroups(groups, maps),
+                settings.immich.scan.includeImages,
+                input.scanSettings.parallelism,
+                undefined,
+                trashed.ids,
+              ),
             );
             groups = attachAssets(groups, assets, maps);
             const immichTrashCredits = immichTrashedCredits(groups, trashed.ids, maps, trashed.originalPaths);
             groups = dropImmichTrashedFromGroups(groups, trashed.ids, maps, trashed.originalPaths);
             scan.addLine("[scan] Reading Immich stacks…");
             try {
-              groups = await applyLibraryStacks(
-                groups,
-                creds.baseUrl,
-                creds.apiKey,
-                maps,
-                input.scanSettings.parallelism,
+              groups = await timer.time("Immich stacks", () =>
+                applyLibraryStacks(groups, creds.baseUrl, creds.apiKey, maps, input.scanSettings.parallelism),
               );
             } catch (err) {
               scan.addLine(redact(errorText(err), secrets));
@@ -389,24 +407,26 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
       if (scan.cancelled) {
         error = "Cancelled";
       } else {
-      await saveStoredInventory(section, input.inventory);
-      await saveResults(section, {
-        finishedAt: new Date().toISOString(),
-        durationMs: pipelineDurationMs(input.startedAt),
-        error: null,
-        warning,
-        groups,
-        compareFingerprint: input.decision.compareFingerprint,
-        compareInventoryFingerprint: input.decision.inventoryFingerprint,
-        compareSettingsFingerprint: input.decision.settingsFingerprint,
-        compareTimeWindowDays: input.scanSettings.timeWindowDays,
-        appliedPrefixSeconds: prefixed.applied ? input.scanSettings.prefixSeconds : null,
+      await timer.time("Save results", async () => {
+        await saveStoredInventory(section, input.inventory);
+        await saveResults(section, {
+          finishedAt: new Date().toISOString(),
+          durationMs: pipelineDurationMs(input.startedAt),
+          error: null,
+          warning,
+          groups,
+          compareFingerprint: input.decision.compareFingerprint,
+          compareInventoryFingerprint: input.decision.inventoryFingerprint,
+          compareSettingsFingerprint: input.decision.settingsFingerprint,
+          compareTimeWindowDays: input.scanSettings.timeWindowDays,
+          appliedPrefixSeconds: prefixed.applied ? input.scanSettings.prefixSeconds : null,
+        });
+        await updateIgnored(section, (ignoredRaw) => {
+          const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
+          return pruned.length === ignoredRaw.length ? ignoredRaw : pruned;
+        });
+        groupCount = await countVisibleGroups(section, groups);
       });
-      await updateIgnored(section, (ignoredRaw) => {
-        const pruned = pruneIgnoredEntries(section, ignoredRaw, groups);
-        return pruned.length === ignoredRaw.length ? ignoredRaw : pruned;
-      });
-      groupCount = await countVisibleGroups(section, groups);
       ok = true;
       }
       }
@@ -422,7 +442,10 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
   }
   const message = scan.cancelled ? "Cancelled" : error;
   const status = ok && !scan.cancelled ? "ok" : "error";
+  const timings = timer.summary();
+  if (timings) scan.addLine(timings);
   await patchRun(section, {
+    phases: timer.record(),
     at: new Date().toISOString(),
     status,
     groupCount,
@@ -772,6 +795,7 @@ export async function recordSkipped(section: SectionId, slotKey: string): Promis
     groupCount: 0,
     error: "A scan was already running",
     trigger: "schedule",
+    phases: undefined,
   });
   if (!settings.webhookUrl) return;
   try {

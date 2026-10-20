@@ -145,6 +145,8 @@ export type RunRecord = {
   groupCount: number | null;
   error: string | null;
   trigger: "manual" | "schedule" | null;
+  /** Milliseconds per scan step from the last run. */
+  phases?: Record<string, number>;
 };
 
 export type RunsFile = {
