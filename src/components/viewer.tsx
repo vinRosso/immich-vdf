@@ -1232,7 +1232,7 @@ function Player({
         <div className="grid shrink-0 grid-cols-6 gap-1">
           {frames.map((time, index) => (
             <button key={time} type="button" onClick={() => seekFile(time, "user")} className="overflow-hidden rounded-md bg-black">
-              <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}&priority=viewer`} className="aspect-video w-full object-cover" />
+              <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}&priority=strip`} className="aspect-video w-full object-cover" />
             </button>
           ))}
         </div>
@@ -1528,7 +1528,24 @@ function mediaSrc(
 }
 
 function thumbSrc(section: SectionId, item: ClientItem): string {
-  return posterSrc(section, item);
+  return posterSrc(section, item, "thumb");
+}
+
+/** 1920px JPEG (or Immich's preview): sharp at fit-to-screen without decoding the original. */
+function midSrc(section: SectionId, item: ClientItem): string {
+  if (section === "immich" && item.assetId) return `/api/immich-thumb?id=${encodeURIComponent(item.assetId)}&size=preview`;
+  return `/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=view&priority=thumb`;
+}
+
+/** Full-resolution files, loaded only once the user zooms in. */
+function isFullSource(src: string): boolean {
+  // A GIF may be animated, and the still would hide that, so it always loads as-is.
+  if (/\.gif(&|$)/i.test(src)) return false;
+  return src.startsWith("/api/media?") || src.startsWith("/api/immich-original");
+}
+
+function withoutFull(sources: string[], full: boolean): string[] {
+  return full ? sources : sources.filter((src) => !isFullSource(src));
 }
 
 const BROWSER_IMAGE = /\.(avif|bmp|gif|jpe?g|png|webp)$/i;
@@ -1549,13 +1566,13 @@ function viewerImageSources(section: SectionId, item: ClientItem): string[] {
   const sources: string[] = [];
   if (BROWSER_IMAGE.test(item.path)) sources.push(compareImageSrc(section, item.path));
   if (section === "immich" && item.assetId && BROWSER_IMAGE.test(item.path)) sources.push(immichOriginalSrc(item.assetId));
-  sources.push(thumbSrc(section, item));
+  sources.push(midSrc(section, item), thumbSrc(section, item));
   return sources.filter((src, index) => sources.indexOf(src) === index);
 }
 
-/** Full file when the browser can decode it. HEIC and other camera formats use the JPEG poster. */
+/** What the viewer paints first for this photo, so the next and previous ones can load ahead. */
 function previewImageSrc(section: SectionId, item: ClientItem): string {
-  return viewerImageSources(section, item)[0] ?? thumbSrc(section, item);
+  return withoutFull(viewerImageSources(section, item), false)[0] ?? thumbSrc(section, item);
 }
 
 function BlendControls({ compare }: { compare: ImageCompare }) {
@@ -1641,9 +1658,16 @@ function ImageStage({ sources, compare }: { sources: string[]; compare: ImageCom
   const [frame, setFrame] = useState<ImageFrame | null>(null);
   const [panning, setPanning] = useState(false);
   const [over, setOver] = useState(false);
-  const sourceKey = sources.join("\0");
+  const allKey = sources.join("\0");
+  const allKeyRef = useRef(allKey);
+  allKeyRef.current = allKey;
+  // The full-resolution file is only fetched once this photo has been zoomed past fit.
+  const [fullFor, setFullFor] = useState<string | null>(null);
+  const full = fullFor === allKey;
+  const shown = withoutFull(sources, full);
+  const sourceKey = shown.join("\0");
   const referenceKey = compare.referenceSources.join("\0");
-  const referenceSrc = useBestSrc(referenceKey ? compare.referenceSources : []);
+  const referenceSrc = useBestSrc(referenceKey ? withoutFull(compare.referenceSources, full) : []);
   const placeholderSrc = sources[sources.length - 1] ?? "";
 
   function bounds(): ImageBounds | null {
@@ -1665,7 +1689,10 @@ function ImageStage({ sources, compare }: { sources: string[]; compare: ImageCom
     const clamped = box ? clampImageView(next, box) : next;
     viewRef.current = clamped;
     setView(clamped);
-    if (box) relativeRef.current = viewToRelative(clamped, box);
+    if (box) {
+      relativeRef.current = viewToRelative(clamped, box);
+      if (relativeRef.current.zoomRatio > 1.05) setFullFor(allKeyRef.current);
+    }
   }
 
   function applyRelative() {

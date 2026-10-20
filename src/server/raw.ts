@@ -90,7 +90,7 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
           url.searchParams.get("kind") || "poster",
           Number(url.searchParams.get("index") || 0),
           {
-            priority: url.searchParams.get("priority") === "viewer" ? "viewer" : "thumbnail",
+            priority: thumbPriority(url.searchParams.get("priority")),
             signal: clientAbortSignal(request, response),
           },
         );
@@ -99,7 +99,15 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       return true;
     }
     if (request.method === "GET" && pathname === "/api/immich-thumb") {
-      await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichThumbnail, "Immich thumbnail failed");
+      const size = url.searchParams.get("size") === "preview" ? "preview" : "thumbnail";
+      await proxyImmichAsset(
+        request,
+        response,
+        requiredQuery(url, "id"),
+        (baseUrl, apiKey, assetId) => openImmichThumbnail(baseUrl, apiKey, assetId, size),
+        "Immich thumbnail failed",
+        86400,
+      );
       return true;
     }
     if (request.method === "GET" && pathname === "/api/immich-original") {
@@ -210,6 +218,7 @@ async function proxyImmichAsset(
   assetId: string,
   open: (baseUrl: string, apiKey: string, assetId: string) => Promise<Response>,
   failure: string,
+  maxAgeSeconds = 300,
 ): Promise<void> {
   const membership = await resultsMembership("immich");
   if (!membership.found || !membership.assetIds.has(assetId)) throw new AppError("That asset is not in the current results", 404);
@@ -221,7 +230,7 @@ async function proxyImmichAsset(
   }
   response.writeHead(200, {
     "Content-Type": upstream.headers.get("content-type") || "image/jpeg",
-    "Cache-Control": "private, max-age=300",
+    "Cache-Control": `private, max-age=${maxAgeSeconds}`,
     "X-Content-Type-Options": "nosniff",
   });
   const reader = upstream.body.getReader();
@@ -256,6 +265,12 @@ async function sendStatic(
   const stream = createReadStream(file);
   stream.pipe(response);
   request.on("close", () => stream.destroy());
+}
+
+function thumbPriority(value: string | null): "thumb" | "strip" | "thumbnail" {
+  if (value === "thumb" || value === "viewer") return "thumb";
+  if (value === "strip") return "strip";
+  return "thumbnail";
 }
 
 function requiredQuery(url: URL, key: string): string {

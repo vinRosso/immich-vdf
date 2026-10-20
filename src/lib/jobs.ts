@@ -40,6 +40,7 @@ import {
 import { probeImageBitDepth } from "./probe";
 import type { CompareDecision } from "./compare-decision";
 import type { ScanSettings, SectionId, Settings, StoredGroup, StoredItem } from "./types";
+import { cancelPosterWarmup, warmPosters } from "./thumb-warm";
 import { postWebhook } from "./webhook";
 
 type ScanPaths = {
@@ -87,6 +88,7 @@ export async function startScan(
   if (!scan.tryBegin({ section, trigger, secrets: secretValues(settings), slotKey })) {
     return { ok: false, status: 409, error: "A scan is already running" };
   }
+  cancelPosterWarmup();
   const startedAt = Date.now();
   try {
     const paths = await resolveScanPaths(section, scanSettings, settings);
@@ -436,6 +438,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
     }
   }
   scan.finish(ok && !scan.cancelled, message, groupCount);
+  if (ok && !scan.cancelled) void warmPosters(section, input.scanSettings.parallelism).catch(() => undefined);
 }
 
 /** Wall clock from scan button to saved results (index, hash, compare, Immich join). */

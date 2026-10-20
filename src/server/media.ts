@@ -13,7 +13,7 @@ import { ffmpegBin, probeFile } from "../lib/probe";
 import { parseByteRange } from "../lib/range";
 import { resultMediaMeta } from "../lib/store";
 import { thumbRequestSignal } from "../lib/thumb-sessions";
-import { ensurePoster, ensureStrip, sectionParallelism } from "../lib/thumbs";
+import { ensurePoster, ensureStrip, ensureView, sectionParallelism } from "../lib/thumbs";
 import type { SectionId } from "../lib/types";
 
 export async function streamMedia(
@@ -55,7 +55,7 @@ async function streamClaimedMedia(
   const info = await stat(real);
   if (signal.aborted || response.destroyed || response.writableEnded) return;
   if (item?.isImage || isImageExt(real)) {
-    sendFile(request, response, real, info.size, contentType(real));
+    sendFile(request, response, real, info.size, contentType(real), { mtimeMs: info.mtimeMs });
     return;
   }
   const offset = startSeconds && Number.isFinite(startSeconds) ? Math.max(0, Math.min(startSeconds, 24 * 60 * 60)) : 0;
@@ -132,12 +132,27 @@ function pipeFfmpeg(response: ServerResponse, args: string[], signal: AbortSigna
   });
 }
 
-function sendFile(request: IncomingMessage, response: ServerResponse, file: string, size: number, type: string): void {
+function sendFile(
+  request: IncomingMessage,
+  response: ServerResponse,
+  file: string,
+  size: number,
+  type: string,
+  cache?: { mtimeMs: number },
+): void {
   const header = request.headers.range;
+  const etag = cache ? `"${size.toString(16)}-${Math.round(cache.mtimeMs).toString(16)}"` : null;
+  if (etag && request.headers["if-none-match"] === etag) {
+    response.writeHead(304, { ETag: etag, "Cache-Control": "private, max-age=3600" });
+    response.end();
+    return;
+  }
   const common = {
     "Accept-Ranges": "bytes",
     "Content-Type": type,
-    "Cache-Control": "private, no-store",
+    // Stills are safe to reuse for a while (the ETag tracks size and mtime). Video streams are never cached.
+    "Cache-Control": etag ? "private, max-age=3600" : "private, no-store",
+    ...(etag ? { ETag: etag } : {}),
     "X-Content-Type-Options": "nosniff",
   };
   if (!header) {
@@ -172,7 +187,7 @@ export async function thumbnailFile(
   filePath: string,
   kind: string,
   index: number,
-  options?: { priority?: "viewer" | "thumbnail"; signal?: AbortSignal },
+  options?: { priority?: "thumb" | "strip" | "viewer" | "thumbnail"; signal?: AbortSignal },
 ): Promise<string> {
   const real = await realResultPath(section, filePath);
   const parallelism = await sectionParallelism(section);
@@ -181,6 +196,7 @@ export async function thumbnailFile(
     const render = { ...options, signal: session.signal };
     if (kind === "poster") return await ensurePoster(real, parallelism, render);
     if (kind === "strip") return await ensureStrip(real, index, parallelism, render);
+    if (kind === "view") return await ensureView(real, parallelism, render);
     throw new AppError("Unknown thumbnail");
   } finally {
     session.release();

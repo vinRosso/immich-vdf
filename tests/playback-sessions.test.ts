@@ -57,6 +57,80 @@ test("viewer thumbnails run before queued card posters", async () => {
   assert.deepEqual(order, ["viewer", "card"]);
 });
 
+test("playback starts before filmstrip frames, and filmstrip frames start before cover posters", async () => {
+  resetFfmpegPoolForTests();
+  let release: (() => void) | undefined;
+  const blocker = enqueueFfmpeg(
+    1,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    { priority: "thumbnail" },
+  );
+  const order: string[] = [];
+  const cover = enqueueFfmpeg(1, async () => {
+    order.push("cover");
+  }, { priority: "thumbnail" });
+  const playback = enqueueFfmpeg(1, async () => {
+    order.push("playback");
+  }, { priority: "playback" });
+  const strip = enqueueFfmpeg(1, async () => {
+    order.push("strip");
+  }, { priority: "strip" });
+  await new Promise((resolve) => setImmediate(resolve));
+  release?.();
+  await blocker;
+  await strip;
+  await playback;
+  await cover;
+  assert.deepEqual(order, ["playback", "strip", "cover"]);
+});
+
+test("one ffmpeg slot stays free for playback while thumbnails run", async () => {
+  resetFfmpegPoolForTests();
+  let releaseThumb: (() => void) | undefined;
+  const thumb = enqueueFfmpeg(
+    2,
+    () =>
+      new Promise<void>((resolve) => {
+        releaseThumb = resolve;
+      }),
+    { priority: "thumbnail" },
+  );
+  let coverStarted = false;
+  const cover = enqueueFfmpeg(
+    2,
+    async () => {
+      coverStarted = true;
+    },
+    { priority: "thumbnail" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(coverStarted, false);
+  let playStarted = false;
+  let releasePlay: (() => void) | undefined;
+  const play = enqueueFfmpeg(
+    2,
+    () =>
+      new Promise<void>((resolve) => {
+        playStarted = true;
+        releasePlay = resolve;
+      }),
+    { priority: "playback" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(playStarted, true);
+  assert.equal(coverStarted, false);
+  releaseThumb?.();
+  await thumb;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(coverStarted, true);
+  releasePlay?.();
+  await play;
+  await cover;
+});
+
 test("an aborted playback leaves the queue without starting", async () => {
   resetFfmpegPoolForTests();
   let releaseFirst: (() => void) | undefined;

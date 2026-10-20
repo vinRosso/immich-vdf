@@ -14,6 +14,9 @@ type PoolState = {
   queue: Queued[];
 };
 
+/** Matches encodePriority("playback"). Thumb work yields one slot when more than one is allowed. */
+const PLAYBACK_PRIORITY = 0;
+
 function state(): PoolState {
   const holder = globalThis as typeof globalThis & { __vdfPool?: PoolState };
   if (
@@ -38,14 +41,18 @@ export function ffmpegSlots(limit: number): number {
   return Math.min(max, Math.max(1, requested));
 }
 
-/** Playback runs first, then thumbnails for the open group, then card posters. One slot stays free for playback when more than one is allowed. */
+/**
+ * Lower runs first: playback, then open-group stills, then filmstrip frames, then cover posters.
+ * Jobs that have not started can be removed by aborting their signal.
+ * When more than one slot is allowed, one stays free for playback.
+ */
 export function enqueueFfmpeg(
   limit: number,
   job: Job,
-  options?: { priority?: "playback" | "viewer" | "thumbnail"; signal?: AbortSignal },
+  options?: { priority?: "thumb" | "strip" | "playback" | "viewer" | "thumbnail"; signal?: AbortSignal },
 ): Promise<void> {
   const pool = state();
-  const priority = options?.priority === "playback" ? 0 : options?.priority === "viewer" ? 1 : 2;
+  const priority = encodePriority(options?.priority);
   const signal = options?.signal;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -68,12 +75,12 @@ export function enqueueFfmpeg(
         return;
       }
       pool.active += 1;
-      if (priority > 0) pool.thumbs += 1;
+      if (priority !== PLAYBACK_PRIORITY) pool.thumbs += 1;
       job()
         .then(() => finish(), (error: unknown) => finish(error))
         .finally(() => {
           pool.active -= 1;
-          if (priority > 0) pool.thumbs -= 1;
+          if (priority !== PLAYBACK_PRIORITY) pool.thumbs -= 1;
           pump(limit);
         });
     };
@@ -92,6 +99,13 @@ export function enqueueFfmpeg(
   });
 }
 
+function encodePriority(priority: "thumb" | "strip" | "playback" | "viewer" | "thumbnail" | undefined): number {
+  if (priority === "playback") return PLAYBACK_PRIORITY;
+  if (priority === "thumb" || priority === "viewer") return 1;
+  if (priority === "strip") return 2;
+  return 3;
+}
+
 function pump(limit: number): void {
   const pool = state();
   const cap = ffmpegSlots(limit);
@@ -99,7 +113,7 @@ function pump(limit: number): void {
   while (pool.queue.length > 0 && pool.active < cap) {
     const next = pool.queue[0];
     if (!next) break;
-    if (next.priority > 0 && pool.thumbs >= thumbCap) break;
+    if (next.priority !== PLAYBACK_PRIORITY && pool.thumbs >= thumbCap) break;
     pool.queue.shift();
     next.run();
   }

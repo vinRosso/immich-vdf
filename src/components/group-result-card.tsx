@@ -117,9 +117,15 @@ function PosterImage({ src, sensitive = false }: { src: string; sensitive?: bool
   );
 }
 
-export function posterSrc(section: SectionId, item: { path: string; assetId?: string | null }): string {
+/** `priority: "thumb"` is for the open group, so its stills render before the grid's cards. */
+export function posterSrc(
+  section: SectionId,
+  item: { path: string; assetId?: string | null },
+  priority?: "thumb",
+): string {
   if (section === "immich" && item.assetId) return `/api/immich-thumb?id=${encodeURIComponent(item.assetId)}`;
-  return `/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=poster`;
+  const base = `/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=poster`;
+  return priority === "thumb" ? `${base}&priority=thumb` : base;
 }
 
 export function similarityRange(group: ClientGroup): string {

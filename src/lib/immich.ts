@@ -560,9 +560,14 @@ export async function listAlbumsForAsset(baseUrl: string, apiKey: string, assetI
   return parseAlbumList(await response.json());
 }
 
-export async function openImmichThumbnail(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {
+export async function openImmichThumbnail(
+  baseUrl: string,
+  apiKey: string,
+  assetId: string,
+  size: "thumbnail" | "preview" = "preview",
+): Promise<Response> {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
-  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/thumbnail?size=preview`, {
+  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/thumbnail?size=${size}`, {
     headers: { "x-api-key": apiKey, accept: "image/*" },
     signal: AbortSignal.timeout(20_000),
   });

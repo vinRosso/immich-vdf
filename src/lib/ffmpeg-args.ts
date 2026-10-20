@@ -5,6 +5,11 @@ export function posterArgs(file: string, seconds: number, output: string): strin
   return args;
 }
 
+/** Mid-size still for the viewer: sharp at fit-to-screen, a fraction of the original's bytes. Never upscales. */
+export function viewArgs(file: string, output: string): string[] {
+  return ["-hide_banner", "-loglevel", "error", "-y", "-i", file, "-frames:v", "1", "-vf", "scale='min(1920,iw)':-2", "-q:v", "3", output];
+}
+
 export function filmstripArgs(file: string, seconds: number, output: string): string[] {
   return posterArgs(file, seconds, output);
 }
