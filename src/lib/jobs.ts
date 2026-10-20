@@ -22,6 +22,7 @@ import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
 import { PhaseTimer } from "./phase-timer";
+import { TRASH_DIR } from "./trash-dir";
 import { redact } from "./redact";
 import { getScan } from "./scan";
 import { walkScanInventory, type InventoryEntry } from "./scan-inventory";
@@ -126,7 +127,8 @@ async function resolveScanPaths(
   const includes: string[] = [];
   for (const folder of includeSources) includes.push(await resolveInside(roots, folder));
   const excludes: string[] = [];
-  for (const folder of [...scanSettings.excludes, ...extraExcludes]) {
+  const trashFolders = section === "server" ? roots.map((root) => path.join(root, TRASH_DIR)) : [];
+  for (const folder of [...scanSettings.excludes, ...extraExcludes, ...trashFolders]) {
     try {
       excludes.push(await resolveInside(roots, folder));
     } catch {
@@ -144,30 +146,19 @@ async function runScanPipeline(
 ): Promise<void> {
   const scan = getScan();
   const timer = new PhaseTimer((line) => scan.addLine(line));
-  const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
-  const scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs));
-  if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
-    return;
-  }
-  if (scanResult.spawnFailed || scanResult.code !== 0) {
-    await finishScan(section, {
-      kind: "error",
-      code: scanResult.code,
-      paths,
-      scanSettings,
-      spawnFailed: scanResult.spawnFailed,
-      cancelled: false,
-      startedAt,
-      timer,
-    });
-    return;
-  }
+  const cancelled = () =>
+    finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
 
-  scan.addLine("[scan] Checking whether compare is needed…");
+  // Walk the library first: when no file and no matching setting changed, neither CLI step has anything to do.
+  scan.addLine("[scan] Checking whether the library changed…");
   let inventory: InventoryEntry[];
   try {
-    inventory = await timer.time("Inventory", () => walkScanInventory(paths.includes, paths.excludes, () => scan.cancelled));
+    inventory = await timer.time("Inventory", () =>
+      walkScanInventory(paths.includes, paths.excludes, {
+        includeImages: scanSettings.includeImages,
+        shouldAbort: () => scan.cancelled,
+      }),
+    );
   } catch (error) {
     scan.addLine(redact(errorText(error), scan.secrets));
     await finishScan(section, {
@@ -183,7 +174,7 @@ async function runScanPipeline(
     return;
   }
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
+    await cancelled();
     return;
   }
 
@@ -213,10 +204,30 @@ async function runScanPipeline(
     return;
   }
 
+  const scanArgs = buildVdfScanArgs({ ...scanSettings, ...paths });
+  const scanResult = await timer.time("CLI scan", () => spawnVdfCli(scanArgs));
+  if (scan.cancelled) {
+    await cancelled();
+    return;
+  }
+  if (scanResult.spawnFailed || scanResult.code !== 0) {
+    await finishScan(section, {
+      kind: "error",
+      code: scanResult.code,
+      paths,
+      scanSettings,
+      spawnFailed: scanResult.spawnFailed,
+      cancelled: false,
+      startedAt,
+      timer,
+    });
+    return;
+  }
+
   const compareArgs = buildVdfCompareArgs({ ...scanSettings, ...paths });
   const compareResult = await timer.time("CLI compare", () => spawnVdfCli(compareArgs));
   if (scan.cancelled) {
-    await finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
+    await cancelled();
     return;
   }
   await finishScan(section, {
@@ -375,7 +386,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
                 settings.immich.baseUrl,
                 settings.immich.apiKey,
                 originalPathsForGroups(groups, maps),
-                settings.immich.scan.includeImages,
+                input.scanSettings.includeImages,
                 input.scanSettings.parallelism,
                 undefined,
                 trashed.ids,

@@ -15,9 +15,10 @@ import {
 } from "./store";
 import { ensurePoster, sectionParallelism } from "./thumbs";
 import { containingRoot, isInside, PathJailError, resolveInside } from "./path-jail";
+import { TRASH_DIR } from "./trash-dir";
 import type { TrashEntry } from "./types";
 
-const TRASH = ".vdf-trash";
+const TRASH = TRASH_DIR;
 
 async function findTrashedCopy(roots: string[], candidate: string): Promise<string | null> {
   const normalized = path.normalize(candidate);
