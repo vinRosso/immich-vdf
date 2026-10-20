@@ -12,6 +12,7 @@ import {
   addAssetsToAlbum,
   fetchImmichAssetStatistics,
   fetchImmichUser,
+  listAlbumsForAsset,
   pingImmich,
   removeAssetsFromAlbum,
   fetchImmichStack,
@@ -41,6 +42,8 @@ import { DEFAULT_RESULTS_GROUP_SORT, sortResultGroups, type ResultsGroupSortId }
 import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
 import { resolveInside } from "./path-jail";
 import { loadConfig } from "./config";
+import type { ImmichAlbum } from "./immich";
+import { runPool } from "./concurrency";
 import {
   creditImmichTrash,
   loadIgnored,
@@ -428,6 +431,29 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
   return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, ids.filter((id) => id !== keepId));
 }
 
+const albumCache = new Map<string, { at: number; albums: ImmichAlbum[] }>();
+const ALBUM_TTL_MS = 60_000;
+const ALBUM_PARALLEL = 4;
+
+/** Albums for several assets with a small cache and a cap on parallel Immich calls. */
+export async function albumsForAssets(assetIds: string[]): Promise<Record<string, ImmichAlbum[]>> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const out: Record<string, ImmichAlbum[]> = {};
+  const missing: string[] = [];
+  for (const id of new Set(assetIds.slice(0, 200))) {
+    const hit = albumCache.get(id);
+    if (hit && Date.now() - hit.at < ALBUM_TTL_MS) out[id] = hit.albums;
+    else missing.push(id);
+  }
+  await runPool(missing, ALBUM_PARALLEL, async (id) => {
+    const albums = await listAlbumsForAsset(settings.immich.baseUrl, settings.immich.apiKey, id);
+    albumCache.set(id, { at: Date.now(), albums });
+    out[id] = albums;
+  });
+  return out;
+}
+
 export async function mutateImmichAlbumAsset(albumId: string, assetId: string, action: "add" | "remove"): Promise<void> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
@@ -438,6 +464,7 @@ export async function mutateImmichAlbumAsset(albumId: string, assetId: string, a
   const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
   if (action === "add") await addAssetsToAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
   else await removeAssetsFromAlbum(creds.baseUrl, creds.apiKey, albumId, [assetId]);
+  albumCache.delete(assetId);
 }
 
 export async function trashImmichItems(groupId: string, victimIds: string[]): Promise<number> {

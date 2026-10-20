@@ -761,6 +761,13 @@ function Player({
   // Matched Immich videos play Immich's own encoded copy: no probe and no transcode. The path is kept
   // when the user asks for the original or Immich's copy fails, so the 240p to 720p path takes over.
   const [originalFor, setOriginalFor] = useState<string | null>(null);
+  // Filmstrip frames wait for the video's first picture (or 1.5 s) so they do not compete with it.
+  const [stripsGo, setStripsGo] = useState(false);
+  useEffect(() => {
+    setStripsGo(false);
+    const timer = window.setTimeout(() => setStripsGo(true), 1500);
+    return () => window.clearTimeout(timer);
+  }, [item.path]);
   const viaImmich = section === "immich" && Boolean(item.assetId) && !item.isImage && originalFor !== item.path;
 
   useEffect(() => sync.register(side, apiRef), [side, sync]);
@@ -775,7 +782,7 @@ function Player({
       setInfo({ mode: "direct", duration: item.durationSeconds, width: item.width, height: item.height, videoCodec: null, audioCodec: null });
       return;
     }
-    void api<MediaInfo>(`/api/media/info?section=${section}&path=${encodeURIComponent(item.path)}`)
+    void loadMediaInfo(section, item.path)
       .then((next) => {
         if (!cancelled) setInfo(next);
       })
@@ -1060,6 +1067,7 @@ function Player({
     if (!isShown(event)) return;
     if (event.currentTarget.dataset.seekToken === String(seekToken.current)) reportedFileTime.current = null;
     setTranscodeSpinner(transcodeSpinnerRef.current, false);
+    setStripsGo(true);
     if (info?.mode === "transcode" && event.currentTarget === lowRef.current) startUpgrade();
   }
 
@@ -1266,7 +1274,13 @@ function Player({
         <div className="grid shrink-0 grid-cols-6 gap-1">
           {frames.map((time, index) => (
             <button key={time} type="button" onClick={() => seekFile(time, "user")} className="overflow-hidden rounded-md bg-black">
-              <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}&priority=strip`} className="aspect-video w-full object-cover" />
+              {stripsGo ? (
+                <LoadingImage src={`/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=strip&index=${index}&priority=strip`} className="aspect-video w-full object-cover" />
+              ) : (
+                <span className="relative block aspect-video w-full bg-black">
+                  <ThumbnailSkeleton />
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1318,23 +1332,26 @@ function useImmichGroupAlbums(section: SectionId, group: ClientGroup | null): Im
     }
     let cancelled = false;
     setLoading(true);
-    void Promise.all(
-      assetIds.map(async (id) => {
-        const body = await api<{ albums: ImmichAlbum[] }>(`/api/immich/albums?assetId=${encodeURIComponent(id)}`);
-        return [id, body.albums] as const;
-      }),
-    )
-      .then((pairs) => {
-        if (!cancelled) setByAsset(Object.fromEntries(pairs));
-      })
-      .catch(() => {
-        if (!cancelled) setByAsset({});
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    // One batched request, sent after the photos and video have had their turn. The first load waits
+    // briefly; a refresh after an album change goes out at once.
+    const timer = window.setTimeout(
+      () => {
+        void api<{ albumsByAsset: GroupAlbumMap }>(`/api/immich/albums?assetIds=${assetIds.map(encodeURIComponent).join(",")}`)
+          .then((body) => {
+            if (!cancelled) setByAsset(body.albumsByAsset);
+          })
+          .catch(() => {
+            if (!cancelled) setByAsset({});
+          })
+          .finally(() => {
+            if (!cancelled) setLoading(false);
+          });
+      },
+      version === 0 ? 500 : 0,
+    );
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [assetKey, version]);
 
@@ -1563,29 +1580,35 @@ function mediaSrc(
 
 const IMMICH_VIDEO_PATIENCE_MS = 6000;
 
+const mediaInfoCache = new Map<string, Promise<MediaInfo>>();
+
+/** One request per file for the whole session, shared by both players and by every reopen of a group. */
+function loadMediaInfo(section: SectionId, filePath: string): Promise<MediaInfo> {
+  const key = `${section}\0${filePath}`;
+  let pending = mediaInfoCache.get(key);
+  if (!pending) {
+    pending = api<MediaInfo>(`/api/media/info?section=${section}&path=${encodeURIComponent(filePath)}`).catch((error: unknown) => {
+      mediaInfoCache.delete(key);
+      throw error;
+    });
+    mediaInfoCache.set(key, pending);
+    if (mediaInfoCache.size > 300) mediaInfoCache.delete(mediaInfoCache.keys().next().value as string);
+  }
+  return pending;
+}
+
 function immichVideoSrc(assetId: string): string {
   return `/api/immich-video?id=${encodeURIComponent(assetId)}`;
 }
 
 function thumbSrc(section: SectionId, item: ClientItem): string {
-  return posterSrc(section, item, "thumb");
+  return posterSrc(section, item);
 }
 
-/** 1920px JPEG (or Immich's preview): sharp at fit-to-screen without decoding the original. */
+/** For files the browser cannot decode (HEIC, TIFF): a 1920px JPEG, or Immich's preview for matched assets. */
 function midSrc(section: SectionId, item: ClientItem): string {
   if (section === "immich" && item.assetId) return `/api/immich-thumb?id=${encodeURIComponent(item.assetId)}&size=preview`;
   return `/api/thumbs?section=${section}&path=${encodeURIComponent(item.path)}&kind=view&priority=thumb`;
-}
-
-/** Full-resolution files, loaded only once the user zooms in. */
-function isFullSource(src: string): boolean {
-  // A GIF may be animated, and the still would hide that, so it always loads as-is.
-  if (/\.gif(&|$)/i.test(src)) return false;
-  return src.startsWith("/api/media?") || src.startsWith("/api/immich-original");
-}
-
-function withoutFull(sources: string[], full: boolean): string[] {
-  return full ? sources : sources.filter((src) => !isFullSource(src));
 }
 
 const BROWSER_IMAGE = /\.(avif|bmp|gif|jpe?g|png|webp)$/i;
@@ -1606,13 +1629,16 @@ function viewerImageSources(section: SectionId, item: ClientItem): string[] {
   const sources: string[] = [];
   if (BROWSER_IMAGE.test(item.path)) sources.push(compareImageSrc(section, item.path));
   if (section === "immich" && item.assetId && BROWSER_IMAGE.test(item.path)) sources.push(immichOriginalSrc(item.assetId));
-  sources.push(midSrc(section, item), thumbSrc(section, item));
+  // A decodable original loads at once, with the poster as the instant placeholder. The mid-size image is
+  // only for formats the browser cannot show, which would otherwise stop at the 480px poster.
+  if (!BROWSER_IMAGE.test(item.path)) sources.push(midSrc(section, item));
+  sources.push(thumbSrc(section, item));
   return sources.filter((src, index) => sources.indexOf(src) === index);
 }
 
 /** What the viewer paints first for this photo, so the next and previous ones can load ahead. */
 function previewImageSrc(section: SectionId, item: ClientItem): string {
-  return withoutFull(viewerImageSources(section, item), false)[0] ?? thumbSrc(section, item);
+  return viewerImageSources(section, item)[0] ?? thumbSrc(section, item);
 }
 
 function BlendControls({ compare }: { compare: ImageCompare }) {
@@ -1698,16 +1724,9 @@ function ImageStage({ sources, compare }: { sources: string[]; compare: ImageCom
   const [frame, setFrame] = useState<ImageFrame | null>(null);
   const [panning, setPanning] = useState(false);
   const [over, setOver] = useState(false);
-  const allKey = sources.join("\0");
-  const allKeyRef = useRef(allKey);
-  allKeyRef.current = allKey;
-  // The full-resolution file is only fetched once this photo has been zoomed past fit.
-  const [fullFor, setFullFor] = useState<string | null>(null);
-  const full = fullFor === allKey;
-  const shown = withoutFull(sources, full);
-  const sourceKey = shown.join("\0");
+  const sourceKey = sources.join("\0");
   const referenceKey = compare.referenceSources.join("\0");
-  const referenceSrc = useBestSrc(referenceKey ? withoutFull(compare.referenceSources, full) : []);
+  const referenceSrc = useBestSrc(referenceKey ? compare.referenceSources : []);
   const placeholderSrc = sources[sources.length - 1] ?? "";
 
   function bounds(): ImageBounds | null {
@@ -1729,10 +1748,7 @@ function ImageStage({ sources, compare }: { sources: string[]; compare: ImageCom
     const clamped = box ? clampImageView(next, box) : next;
     viewRef.current = clamped;
     setView(clamped);
-    if (box) {
-      relativeRef.current = viewToRelative(clamped, box);
-      if (relativeRef.current.zoomRatio > 1.05) setFullFor(allKeyRef.current);
-    }
+    if (box) relativeRef.current = viewToRelative(clamped, box);
   }
 
   function applyRelative() {
