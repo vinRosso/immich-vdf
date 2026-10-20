@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildVdfArgs, buildVdfExifArgs, buildVdfImageTimesArgs } from "./cli-args";
@@ -329,7 +330,7 @@ async function runScanAndCompare(
   env: NodeJS.ProcessEnv | undefined,
   timer: PhaseTimer,
   suffix = "",
-): Promise<CliOutcome> {
+): Promise<CliOutcome & { hashingDone: boolean }> {
   const scan = getScan();
   const started = Date.now();
   let scanDoneAt = null as number | null;
@@ -340,7 +341,8 @@ async function runScanAndCompare(
     }
   });
   try {
-    return await spawnVdfCli(args, env);
+    const outcome = await spawnVdfCli(args, env);
+    return { ...outcome, hashingDone: scanDoneAt !== null };
   } finally {
     unsubscribe();
     const finished = Date.now();
@@ -702,6 +704,7 @@ async function readCaptureDates(
     }
   }
   return collectCaptureTimes(section, inventory, {
+    immichBaseUrl: configured ? creds.baseUrl.trim().replace(/\/+$/, "") : undefined,
     listImmichTimes: configured ? (updatedAfter) => listImmichAssetTimes(creds.baseUrl, creds.apiKey, updatedAfter) : undefined,
     maps,
     readFileDates: (files) => readDatesWithCli(section, files, scanSettings.parallelism),
@@ -741,10 +744,20 @@ function startImmichFetch(settings: Settings) {
   return fetched;
 }
 
-function groupShape(groups: StoredGroup[]): string {
-  let items = 0;
-  for (const group of groups) items += group.items.length;
-  return `${groups.length}:${items}`;
+/**
+ * What a trash or stack action can change in the groups: which groups and files there are, and how they are stacked.
+ * Counts alone would miss a stack made while a refresh ran, because stacking keeps every file where it is.
+ */
+export function groupShape(groups: StoredGroup[]): string {
+  const hash = createHash("sha1");
+  for (const group of groups) {
+    hash.update(group.groupId);
+    for (const item of group.items) {
+      hash.update(`\0${item.path}\0${item.stackId ?? ""}\0${item.stackPrimary ? 1 : 0}`);
+    }
+    hash.update("\n");
+  }
+  return `${groups.length}:${hash.digest("hex")}`;
 }
 
 /** Wall clock from scan button to saved results (index, hash, compare, Immich join). */
@@ -1092,15 +1105,35 @@ function toStoredItem(item: ParsedGroup["items"][number]): StoredItem {
   };
 }
 
-export async function recordSkipped(section: SectionId, slotKey: string): Promise<void> {
+/**
+ * The server is leaving while a scan is still winding down, so the scan cannot write its own run. The run shows as
+ * interrupted, and a scheduled slot stays pending to run again after the restart.
+ */
+export async function recordInterrupted(section: SectionId, trigger: "manual" | "schedule" | null): Promise<void> {
+  await patchRun(section, {
+    at: new Date().toISOString(),
+    status: "error",
+    groupCount: null,
+    error: "Interrupted by shutdown",
+    trigger,
+    ...slotPatch(trigger, null, true),
+  });
+}
+
+export async function recordSkipped(
+  section: SectionId,
+  slotKey: string,
+  reason = "Missed: the server was busy or switched off for a day",
+): Promise<void> {
   const settings = await loadSettings();
   await patchRun(section, {
     slotKey,
     pendingSlot: null,
+    pendingAttempts: 0,
     at: new Date().toISOString(),
     status: "skipped",
     groupCount: 0,
-    error: "Missed: the server was busy or switched off for a day",
+    error: reason,
     trigger: "schedule",
     phases: undefined,
   });

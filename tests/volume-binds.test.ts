@@ -13,6 +13,22 @@ test("parseVolumeBinds accepts mount=host and host:mount", () => {
   ]);
 });
 
+test("parseVolumeBinds reads host:mount in Compose order, also for POSIX and drive-letter hosts", () => {
+  assert.deepEqual(parseVolumeBinds("/my/local/path:/data/library/admin"), [
+    { mount: "/data/library/admin", host: "/my/local/path" },
+  ]);
+  assert.deepEqual(parseVolumeBinds("C:\\photos:/mnt/photos:ro"), [{ mount: "/mnt/photos", host: "C:\\photos" }]);
+  assert.deepEqual(parseVolumeBinds("C:/photos:/mnt/photos"), [{ mount: "/mnt/photos", host: "C:/photos" }]);
+  // The older mount:host order still works when the host is not a POSIX path.
+  assert.deepEqual(parseVolumeBinds("/mnt/photos:\\\\god\\memories"), [{ mount: "/mnt/photos", host: "\\\\god\\memories" }]);
+  // Entries split on commas and semicolons, longest mount first.
+  assert.deepEqual(parseVolumeBinds("/my/local/path:/data/library/admin,/other:/mnt/photos;/third=/x"), [
+    { mount: "/data/library/admin", host: "/my/local/path" },
+    { mount: "/mnt/photos", host: "/other" },
+    { mount: "/third", host: "/x" },
+  ]);
+});
+
 test("mapImmichImportPathToHost applies VOLUME_BINDS over upload mapping", () => {
   const config: AppConfig = {
     dataDir: "/data",

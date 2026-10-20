@@ -116,6 +116,68 @@ public class PairStoreTests {
 	}
 
 	[Fact]
+	public void ANewFileInANarrowerRunNarrowsTheCoverage() {
+		var store = new PairScoreStore();
+		var full = Gray(96);
+		var a = Entry("a.jpg", TimeWindow.Epoch);
+		var b = Entry("b.jpg", TimeWindow.Epoch.AddDays(1));
+		store.MarkCovered(new[] { a, b }, 0, full);
+		Assert.Equal(0, store.CoverageWindowDays);
+
+		// The same files again: the wider claim stays. A new file: only this run's window is claimed.
+		var week = Gray(96, 7);
+		store.MarkCovered(new[] { a, b }, 7, week);
+		Assert.Equal(0, store.CoverageWindowDays);
+		var late = Entry("late.jpg", TimeWindow.Epoch.AddDays(40));
+		store.MarkCovered(new[] { a, b, late }, 7, week);
+		Assert.Equal(7, store.CoverageWindowDays);
+		Assert.Equal(PairCompareAction.Compute, store.Decide(a, late, full));
+	}
+
+	[Fact]
+	public void ALowerAiPercentLooksAtPairsThatHadNoAiRow() {
+		var store = new PairScoreStore();
+		var strict = new Settings { Percent = 96, UseAiMatching = true, AiPercent = 94 };
+		var a = Entry("a.jpg", TimeWindow.Epoch);
+		var b = Entry("b.jpg", TimeWindow.Epoch);
+		store.MarkCovered(new[] { a, b }, 0, strict);
+		Assert.Equal(94f, store.AiFloorPercent);
+		Assert.Equal(PairCompareAction.Skip, store.Decide(a, b, strict));
+		Assert.Equal(PairCompareAction.Skip, store.Decide(a, b, new Settings { Percent = 96, UseAiMatching = true, AiPercent = 97 }));
+
+		var loose = new Settings { Percent = 96, UseAiMatching = true, AiPercent = 80 };
+		Assert.Equal(PairCompareAction.ComputeAiOnly, store.Decide(a, b, loose));
+		PairSession session = store.BeginCompare(new[] { a, b }, loose);
+		Assert.False(session.AiCovered);
+		Assert.False(session.CanSkipCoveredPairs(loose));
+
+		store.Commit(session, new[] { a, b }, 0, loose);
+		Assert.Equal(80f, store.AiFloorPercent);
+		Assert.Equal(PairCompareAction.Skip, store.Decide(a, b, loose));
+	}
+
+	[Fact]
+	public void TheAiFloorIsSavedAndALaterHigherPercentKeepsTheOlderFloor() {
+		string folder = Path.Combine(Path.GetTempPath(), "vdf-pairstore-" + Guid.NewGuid().ToString("N"));
+		try {
+			var store = new PairScoreStore();
+			var a = Entry("a.jpg", TimeWindow.Epoch);
+			var b = Entry("b.jpg", TimeWindow.Epoch);
+			store.MarkCovered(new[] { a, b }, 0, new Settings { Percent = 96, UseAiMatching = true, AiPercent = 90 });
+			store.Save(folder);
+
+			PairScoreStore loaded = PairScoreStore.Load(folder);
+			Assert.Equal(90f, loaded.AiFloorPercent);
+			var higher = new Settings { Percent = 96, UseAiMatching = true, AiPercent = 95 };
+			loaded.MarkCovered(new[] { a, b }, 0, higher);
+			Assert.Equal(95f, loaded.AiFloorPercent);
+		}
+		finally {
+			if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+		}
+	}
+
+	[Fact]
 	public void AnOlderOrDamagedFileLoadsAsAnEmptyStore() {
 		string folder = Path.Combine(Path.GetTempPath(), "vdf-pairstore-" + Guid.NewGuid().ToString("N"));
 		try {

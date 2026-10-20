@@ -146,6 +146,8 @@ export type RunRecord = {
   slotKey: string | null;
   /** A scheduled slot that is due but has not run to the end yet. It survives a restart and is dropped after a day. */
   pendingSlot?: string | null;
+  /** How many times that slot was started. A server that dies in every attempt gives the slot up after a few. */
+  pendingAttempts?: number;
   at: string | null;
   status: "ok" | "error" | "skipped" | null;
   groupCount: number | null;

@@ -73,6 +73,9 @@ export function createLaneQueue(limit: () => number): LaneQueue {
   };
 }
 
+/** Once this many failures are remembered, the expired ones are dropped. */
+const FAILURE_PRUNE_AT = 500;
+
 export type CachedLoader<V> = {
   get: (key: string, arg: string, lane: ProbeLane) => Promise<V>;
   size: () => number;
@@ -125,6 +128,10 @@ export function createCachedLoader<V>(options: {
           flights.delete(key);
           const failure = error instanceof Error ? error : new Error("probe failed");
           failures.set(key, { until: now() + options.failureTtlMs, error: failure });
+          if (failures.size > FAILURE_PRUNE_AT) {
+            // A failure is only looked up again for the same key, so expired ones would stay for as long as the server runs.
+            for (const [failedKey, entry] of failures) if (entry.until <= now()) failures.delete(failedKey);
+          }
           throw failure;
         },
       );

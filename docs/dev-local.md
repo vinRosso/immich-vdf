@@ -61,7 +61,7 @@ The server listens on port **4747**. `npm run dev` builds `vdf-cli` from `engine
 
 `VOLUME_BINDS` maps **Immich container paths** to **host folders** when you run `npm run dev`. There is no `/immich` directory on the host; the app reads `IMMICH_PATH` and uses these overrides for scan paths and asset matching.
 
-Comma-separated entries. Each entry is either `mount=host` or `host:mount` (Compose-style). An optional `:ro` suffix is ignored.
+Comma- or semicolon-separated entries, so a folder name that contains either cannot be used. Each entry is either `mount=host` or `host:mount` (Compose order, the host first). An optional `:ro` suffix is ignored. The app does not create the host folders: a typo is reported as a missing folder instead of leaving a new empty one on your share.
 
 ```bash
 # Upload library admin folder lives on another share

@@ -244,3 +244,51 @@ test("burst groups and the window decide whether capture dates are read", () => 
   assert.equal(mod.prefixCacheKey("library", null), "library");
   assert.equal(mod.prefixCacheKey("library", { fingerprint: "dates" } as import("../src/lib/capture-times").CaptureTimes), "library:dates");
 });
+
+test("dates saved for another Immich server are not used", async () => {
+  await reset();
+  const inventory = [entry("/mnt/immich/a.jpg")];
+  const home = sources({
+    immichBaseUrl: "http://home:2283",
+    listImmichTimes: async () => [asset("/data/a.jpg", "2020-05-01T10:00:00.000Z")],
+  });
+  await mod.collectCaptureTimes("immich", inventory, home.value);
+
+  const other = sources({ immichBaseUrl: "http://other:2283", listImmichTimes: async (updatedAfter) => {
+    other.calls.immich.push(updatedAfter);
+    return [];
+  } });
+  const switched = await mod.collectCaptureTimes("immich", inventory, other.value);
+  assert.deepEqual(other.calls.immich, [undefined], "everything is asked for again");
+  assert.equal(switched.times.has("/mnt/immich/a.jpg"), false);
+});
+
+test("every asset is listed again after a week, so moved and deleted ones are forgotten", async () => {
+  await reset();
+  const inventory = [entry("/mnt/immich/gone.jpg"), entry("/mnt/immich/kept.jpg")];
+  let clock = Date.parse("2026-10-01T00:00:00.000Z");
+  const list = [
+    asset("/data/gone.jpg", "2020-01-01T00:00:00.000Z"),
+    asset("/data/kept.jpg", "2021-01-01T00:00:00.000Z"),
+  ];
+  const first = sources({ now: () => clock, listImmichTimes: async () => list });
+  await mod.collectCaptureTimes("immich", inventory, first.value);
+
+  // Two days later only changes are asked for, and the deleted asset is still remembered.
+  clock += 2 * 24 * 60 * 60 * 1000;
+  const soon = sources({ now: () => clock });
+  const within = await mod.collectCaptureTimes("immich", inventory, soon.value);
+  assert.notEqual(soon.calls.immich[0], undefined);
+  assert.equal(within.times.has("/mnt/immich/gone.jpg"), true);
+
+  // A week on, everything is listed again and the asset that left Immich is dropped.
+  clock += 6 * 24 * 60 * 60 * 1000;
+  const later = sources({ now: () => clock, listImmichTimes: async (updatedAfter) => {
+    later.calls.immich.push(updatedAfter);
+    return [list[1]!];
+  } });
+  const refreshed = await mod.collectCaptureTimes("immich", inventory, later.value);
+  assert.deepEqual(later.calls.immich, [undefined]);
+  assert.equal(refreshed.times.has("/mnt/immich/gone.jpg"), false);
+  assert.equal(refreshed.times.get("/mnt/immich/kept.jpg"), "2021-01-01T00:00:00.000Z");
+});

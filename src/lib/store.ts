@@ -68,10 +68,20 @@ async function fileStamp(file: string): Promise<string> {
   }
 }
 
-/** Changes whenever the saved results or the ignore list for a section change on disk. */
+/**
+ * Counts this process's writes to a section's results and ignore list. File times can be a second or two apart on a
+ * network share or FAT, so two writes of the same size can look identical on disk; the count tells them apart.
+ */
+const writeEpoch = new Map<SectionId, number>();
+
+function wrote(section: SectionId): void {
+  writeEpoch.set(section, (writeEpoch.get(section) ?? 0) + 1);
+}
+
+/** Changes whenever the saved results or the ignore list for a section change. */
 export async function resultsStamp(section: SectionId): Promise<string> {
   const [results, ignored] = await Promise.all([fileStamp(resultsPath(section)), fileStamp(ignorePath(section))]);
-  return `${results}|${ignored}`;
+  return `${results}|${ignored}|${writeEpoch.get(section) ?? 0}`;
 }
 
 function runsPath(): string {
@@ -241,6 +251,13 @@ function normalizeScanParallelism(fallback: ScanSettings, patch: Partial<ScanSet
 }
 
 let settingsCache: { stamp: string; settings: Settings } | null = null;
+/** Bumped by every save, so a read that started before a save never caches what it read. */
+let settingsGeneration = 0;
+
+function forgetSettings(): void {
+  settingsCache = null;
+  settingsGeneration += 1;
+}
 
 /** Settings are read on nearly every request, so reuse the parsed copy until the file changes. */
 export async function loadSettings(): Promise<Settings> {
@@ -252,20 +269,27 @@ export async function loadSettings(): Promise<Settings> {
     stamp = "missing";
   }
   if (settingsCache?.stamp === stamp) return structuredClone(settingsCache.settings);
+  const generation = settingsGeneration;
   const settings = normalizeStoredSettings(await readJson<StoredSettingsFile | null>(settingsPath(), null));
-  settingsCache = { stamp, settings };
+  if (generation === settingsGeneration) settingsCache = { stamp, settings };
   return structuredClone(settings);
 }
 
 export function saveSettings(settings: Settings): Promise<void> {
-  return exclusive(() => writeJson(settingsPath(), settings));
+  return exclusive(async () => {
+    forgetSettings();
+    await writeJson(settingsPath(), settings);
+    forgetSettings();
+  });
 }
 
 export function updateSettings(mutator: (settings: Settings) => Settings | Promise<Settings>): Promise<Settings> {
   return exclusive(async () => {
     const current = await loadSettings();
     const next = await mutator(current);
+    forgetSettings();
     await writeJson(settingsPath(), next);
+    forgetSettings();
     return next;
   });
 }
@@ -300,6 +324,7 @@ export function saveResults(section: SectionId, results: StoredResults): Promise
   return exclusive(async () => {
     await writeJson(resultsPath(section), results);
     membershipCache.delete(section);
+    wrote(section);
   });
 }
 
@@ -314,6 +339,7 @@ export function updateResults(
     if (!next || next === current) return current;
     await writeJson(resultsPath(section), next);
     membershipCache.delete(section);
+    wrote(section);
     return next;
   });
 }
@@ -328,7 +354,10 @@ export function loadIgnored(section: SectionId): Promise<IgnoredEntry[]> {
 }
 
 export function saveIgnored(section: SectionId, entries: IgnoredEntry[]): Promise<void> {
-  return exclusive(() => writeJson(ignorePath(section), entries));
+  return exclusive(async () => {
+    await writeJson(ignorePath(section), entries);
+    wrote(section);
+  });
 }
 
 export function updateIgnored(
@@ -338,7 +367,10 @@ export function updateIgnored(
   return exclusive(async () => {
     const current = await loadIgnored(section);
     const next = await mutator(current);
-    if (next !== current) await writeJson(ignorePath(section), next);
+    if (next !== current) {
+      await writeJson(ignorePath(section), next);
+      wrote(section);
+    }
     return next;
   });
 }

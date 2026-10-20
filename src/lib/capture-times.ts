@@ -29,11 +29,14 @@ export type CaptureTimes = {
 export type CaptureSources = {
   /** Assets Immich changed since `updatedAfter`; every asset when it is undefined. Missing when Immich is not set up. */
   listImmichTimes?: (updatedAfter: string | undefined) => Promise<ImmichAssetTime[]>;
+  /** The Immich server the dates come from. Dates saved for another server are not used. */
+  immichBaseUrl?: string;
   /** Immich's original paths to scan paths. */
   maps: PathMapEntry[];
   /** Dates read from the files themselves, by scan path. Throws when the files could not be read. */
   readFileDates: (paths: string[]) => Promise<Map<string, string>>;
   log: (line: string) => void;
+  now?: () => number;
 };
 
 type ImmichTimesCache = {
@@ -41,7 +44,14 @@ type ImmichTimesCache = {
   /** Newest `updatedAt` seen. The next run only asks for assets changed after it. */
   updatedAfter: string | null;
   byPath: Record<string, string>;
+  /** The server these dates came from. */
+  baseUrl?: string;
+  /** When every asset was last listed. Asking only for changes never hears about assets that were moved or deleted. */
+  fullAt?: string | null;
 };
+
+/** Every asset is listed again this often, which drops the dates of assets that left Immich or changed path. */
+const FULL_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 type FileDatesCache = {
   version: 1;
@@ -66,16 +76,32 @@ function updatedAfterWithMargin(updatedAfter: string | null): string | undefined
 async function immichDates(sources: CaptureSources): Promise<Map<string, string>> {
   const file = dataFile("immich-times.json");
   const cache = await readJson<ImmichTimesCache>(file, { version: 1, updatedAfter: null, byPath: {} });
-  if (cache.version !== 1) {
+  const otherServer =
+    cache.baseUrl !== undefined && sources.immichBaseUrl !== undefined && cache.baseUrl !== sources.immichBaseUrl;
+  if (cache.version !== 1 || otherServer) {
     cache.updatedAfter = null;
     cache.byPath = {};
+    cache.fullAt = null;
   }
   if (sources.listImmichTimes) {
     sources.log("[scan] Reading capture dates from Immich…");
+    const now = (sources.now ?? Date.now)();
+    const fullDue = !cache.fullAt || !(now - Date.parse(cache.fullAt) < FULL_REFRESH_MS);
     try {
-      const changes = await sources.listImmichTimes(updatedAfterWithMargin(cache.updatedAfter));
-      let newest = cache.updatedAfter;
+      const changes = await sources.listImmichTimes(fullDue ? undefined : updatedAfterWithMargin(cache.updatedAfter));
       let changed = false;
+      if (fullDue) {
+        // Everything was listed, so what is not in the list is gone.
+        cache.byPath = {};
+        cache.updatedAfter = null;
+        cache.fullAt = new Date(now).toISOString();
+        changed = true;
+      }
+      if (sources.immichBaseUrl !== undefined && cache.baseUrl !== sources.immichBaseUrl) {
+        cache.baseUrl = sources.immichBaseUrl;
+        changed = true;
+      }
+      let newest = cache.updatedAfter;
       for (const asset of changes) {
         const key = immichKey(asset.originalPath);
         if (cache.byPath[key] !== asset.fileCreatedAt) {

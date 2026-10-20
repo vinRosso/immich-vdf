@@ -29,33 +29,40 @@ async function tick(): Promise<void> {
       const decision = decideScheduled(schedule, now, runs[section], busy);
       if (decision.action === "none") continue;
       if (decision.action === "drop") {
-        await dropPending(section, decision.slot, decision.missed);
+        await dropPending(section, decision.slot, decision.missed, decision.tooManyTries === true);
         continue;
       }
       if (decision.action === "queue") {
-        await patchRun(section, { pendingSlot: decision.slot });
+        await patchRun(section, { pendingSlot: decision.slot, pendingAttempts: 0 });
         continue;
       }
-      await fire(section, decision.slot);
+      const run = runs[section];
+      await fire(section, decision.slot, run.pendingSlot === decision.slot ? (run.pendingAttempts ?? 0) : 0);
     }
   } finally {
     ticking = false;
   }
 }
 
-async function dropPending(section: SectionId, slot: string, missed: boolean): Promise<void> {
-  if (missed) await recordSkipped(section, slot);
-  else await patchRun(section, { pendingSlot: null });
+async function dropPending(section: SectionId, slot: string, missed: boolean, tooManyTries: boolean): Promise<void> {
+  if (tooManyTries) await recordSkipped(section, slot, "Given up: the server stopped during each of the last attempts to run it");
+  else if (missed) await recordSkipped(section, slot);
+  else await patchRun(section, { pendingSlot: null, pendingAttempts: 0 });
 }
 
-async function fire(section: SectionId, slot: string): Promise<void> {
-  // Written before the scan starts, so a stop or crash part-way leaves the slot to run again.
-  await patchRun(section, { pendingSlot: slot });
+async function fire(section: SectionId, slot: string, attempts: number): Promise<void> {
+  // Written before the scan starts, so a stop or crash part-way leaves the slot to run again, a limited number of times.
+  await patchRun(section, { pendingSlot: slot, pendingAttempts: attempts + 1 });
   const started = await startScan(section, "schedule", slot);
+  if (!started.ok && started.status === 409) {
+    // Another scan got in first, so this was not an attempt.
+    await patchRun(section, { pendingAttempts: attempts });
+  }
   if (!started.ok && started.status !== 409) {
     await patchRun(section, {
       slotKey: slot,
       pendingSlot: null,
+      pendingAttempts: 0,
       at: new Date().toISOString(),
       status: "error",
       groupCount: null,

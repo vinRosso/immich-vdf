@@ -32,18 +32,20 @@ function libraryFileNames(): string[] {
 }
 
 export type NativeFfmpegMode =
-  /** `VDF_NATIVE_FFMPEG=0`. */
-  | { kind: "off"; libDir: string | null }
+  /** `VDF_NATIVE_FFMPEG=0`, or the Docker image was built without its libraries (`imageLibsMissing`). */
+  | { kind: "off"; libDir: string | null; imageLibsMissing?: boolean }
   /** `VDF_NATIVE_FFMPEG=1`, or the Docker image's own libraries are all there. No check, no download. */
   | { kind: "on"; libDir: string | null }
-  /** The default: use native decoding when the libraries can be loaded, and fetch them when they cannot. */
+  /** The default outside the image: use native decoding when the libraries can be loaded, and fetch them when they cannot. */
   | { kind: "auto"; libDir: string | null };
 
 /**
  * `VDF_NATIVE_FFMPEG=0` keeps the ffmpeg program and `1` forces native mode. Unset is the default: automatic.
  * `VDF_FFMPEG_LIBS` names the folder the Docker image keeps the libraries in; when all of them are there, native mode is
- * used without further checks. The CLI refuses to scan when asked for native mode without the libraries, so an
- * unchecked "on" only comes from the setting or from that folder.
+ * used without further checks. When they are not (the download failed while the image was built), the image is not
+ * asked to fetch them: the installer writes next to vdf-cli, a folder the container user cannot write, so it would
+ * download about 90 MB again after every restart for nothing. The CLI refuses to scan when asked for native mode
+ * without the libraries, so an unchecked "on" only comes from the setting or from that folder.
  */
 export function nativeFfmpegMode(
   env: Env = process.env,
@@ -53,8 +55,9 @@ export function nativeFfmpegMode(
   const libDir = env.VDF_FFMPEG_LIBS?.trim() || null;
   if (setting === "0" || setting === "false" || setting === "off") return { kind: "off", libDir };
   if (setting === "1" || setting === "true" || setting === "on") return { kind: "on", libDir };
-  const shipped = libDir !== null && libraryFileNames().every((file) => exists(path.join(libDir, file)));
-  return shipped ? { kind: "on", libDir } : { kind: "auto", libDir };
+  if (libDir === null) return { kind: "auto", libDir };
+  const shipped = libraryFileNames().every((file) => exists(path.join(libDir, file)));
+  return shipped ? { kind: "on", libDir } : { kind: "off", libDir, imageLibsMissing: true };
 }
 
 export type NativeFfmpegDeps = {
@@ -87,7 +90,10 @@ export async function resolveNativeFfmpeg(
   state: NativeState = sharedState(),
 ): Promise<NativeFfmpegPlan> {
   const mode = nativeFfmpegMode(env, exists);
-  if (mode.kind === "off") return { enabled: false, libDir: mode.libDir };
+  if (mode.kind === "off") {
+    if (mode.imageLibsMissing) deps.log("[scan] This image has no FFmpeg 8 libraries (the download failed when it was built). Scanning with the ffmpeg program.");
+    return { enabled: false, libDir: mode.libDir };
+  }
   if (mode.kind === "on") return { enabled: true, libDir: mode.libDir };
   const on = { enabled: true, libDir: mode.libDir };
   const off = { enabled: false, libDir: mode.libDir };
@@ -128,11 +134,15 @@ export function nativeFfmpegEnv(
   return { ...env, LD_LIBRARY_PATH: current ? `${plan.libDir}:${current}` : plan.libDir } as unknown as NodeJS.ProcessEnv;
 }
 
-/** Native mode was requested and the scan failed with an exit code, so it is worth one more try without it. */
+/**
+ * Native mode was requested and the scan failed with an exit code, so it is worth one more try without it. Only
+ * decoding uses the libraries, so a failure after hashing finished (a compare that ran out of memory, say) has nothing
+ * to do with them, and running the whole scan again would only repeat it.
+ */
 export function shouldRetryWithoutNative(
   plan: NativeFfmpegPlan,
-  result: { code: number | null; spawnFailed: boolean },
+  result: { code: number | null; spawnFailed: boolean; hashingDone?: boolean },
   cancelled: boolean,
 ): boolean {
-  return plan.enabled && !cancelled && !result.spawnFailed && result.code !== 0;
+  return plan.enabled && !cancelled && !result.spawnFailed && result.code !== 0 && result.hashingDone !== true;
 }

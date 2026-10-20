@@ -433,6 +433,7 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
 
 const albumCache = new Map<string, { at: number; albums: ImmichAlbum[] }>();
 const ALBUM_TTL_MS = 60_000;
+const ALBUM_CACHE_PRUNE_AT = 500;
 const ALBUM_PARALLEL = 4;
 
 /** Albums for several assets with a small cache and a cap on parallel Immich calls. */
@@ -449,6 +450,10 @@ export async function albumsForAssets(assetIds: string[]): Promise<Record<string
   await runPool(missing, ALBUM_PARALLEL, async (id) => {
     const albums = await listAlbumsForAsset(settings.immich.baseUrl, settings.immich.apiKey, id);
     albumCache.set(id, { at: Date.now(), albums });
+    if (albumCache.size > ALBUM_CACHE_PRUNE_AT) {
+      // Entries are only ever looked up by id, so expired ones would otherwise stay for as long as the server runs.
+      for (const [key, entry] of albumCache) if (Date.now() - entry.at >= ALBUM_TTL_MS) albumCache.delete(key);
+    }
     out[id] = albums;
   });
   return out;

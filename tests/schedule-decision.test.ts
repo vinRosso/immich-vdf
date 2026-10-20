@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideScheduled, slotPatch } from "../src/lib/schedule";
+import { MAX_SLOT_ATTEMPTS, decideScheduled, slotPatch } from "../src/lib/schedule";
 import type { ScheduleSettings } from "../src/lib/types";
 
 const daily: ScheduleSettings = {
@@ -69,8 +69,18 @@ test("nothing is due and nothing is waiting", () => {
 });
 
 test("the slot is recorded when a scheduled run ends, except when the server cut it short", () => {
-  assert.deepEqual(slotPatch("schedule", "2026-10-20", false), { slotKey: "2026-10-20", pendingSlot: null });
-  assert.deepEqual(slotPatch("schedule", "2026-10-20", true), {});
+  assert.deepEqual(slotPatch("schedule", "2026-10-20", false), { slotKey: "2026-10-20", pendingSlot: null, pendingAttempts: 0 });
+  // Stopped in an orderly way: the slot stays pending and the stop does not count against it.
+  assert.deepEqual(slotPatch("schedule", "2026-10-20", true), { pendingAttempts: 0 });
   assert.deepEqual(slotPatch("manual", null, false), {});
   assert.deepEqual(slotPatch(null, null, false), {});
+});
+
+test("a slot that was started too many times without finishing is given up", () => {
+  const now = at("2026-10-20T03:30:00Z");
+  const worn = { slotKey: "2026-10-19", pendingSlot: "2026-10-20", pendingAttempts: MAX_SLOT_ATTEMPTS };
+  assert.deepEqual(decideScheduled(daily, now, worn, "idle"), { action: "drop", slot: "2026-10-20", missed: true, tooManyTries: true });
+  // One attempt short of the limit it still runs, and the next day's slot is not affected.
+  assert.deepEqual(decideScheduled(daily, now, { ...worn, pendingAttempts: MAX_SLOT_ATTEMPTS - 1 }, "idle"), { action: "start", slot: "2026-10-20" });
+  assert.deepEqual(decideScheduled(daily, at("2026-10-21T03:01:00Z"), worn, "idle"), { action: "start", slot: "2026-10-21" });
 });

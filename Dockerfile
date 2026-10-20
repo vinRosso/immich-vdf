@@ -8,13 +8,18 @@ FROM debian:bookworm-slim AS ffmpeg-libs
 # autobuild tag and its checksum from https://github.com/BtbN/FFmpeg-Builds/releases (an 8.1 "linux64-gpl-shared" file).
 ARG FFMPEG_LIBS_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-linux64-gpl-shared-8.1.tar.xz
 ARG FFMPEG_LIBS_SHA256=1550d95f723911d1bd356dabfc1c1b6d26b1e7adaa36a5eda203f8e089d2bbd2
-RUN mkdir -p /opt/ffmpeg/lib \
-  && ( apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates xz-utils \
-    && curl -fsSL -o /tmp/ffmpeg.tar.xz "$FFMPEG_LIBS_URL" \
-    && echo "$FFMPEG_LIBS_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
-    && tar -xJf /tmp/ffmpeg.tar.xz -C /opt/ffmpeg/lib --strip-components=2 --wildcards '*/lib/*.so*' \
-  ) || echo "FFmpeg 8 libraries not installed: scans will use the ffmpeg program"
+# A link that no longer downloads leaves the image without the libraries (scans use the ffmpeg program). A download that
+# does not match the checksum stops the build: that is a changed or damaged file, not a missing one.
+RUN set -eu; \
+  mkdir -p /opt/ffmpeg/lib; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends curl ca-certificates xz-utils; \
+  if curl -fsSL -o /tmp/ffmpeg.tar.xz "$FFMPEG_LIBS_URL"; then \
+    echo "$FFMPEG_LIBS_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /opt/ffmpeg/lib --strip-components=2 --wildcards '*/lib/*.so*'; \
+  else \
+    echo "FFmpeg 8 libraries not downloaded: scans will use the ffmpeg program"; \
+  fi
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS vdf
 WORKDIR /src

@@ -64,7 +64,6 @@ export function ensureRuntimeDirs(config: AppConfig): void {
     ...config.mediaRoots,
     config.immichLibrary,
     ...config.immichScanRoots,
-    ...config.volumeBinds.map((bind) => bind.host),
   ];
   for (const dir of dirs) {
     try {

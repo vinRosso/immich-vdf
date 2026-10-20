@@ -87,6 +87,12 @@ namespace VDF.Core {
 		public double CoverageWindowDays { get; private set; }
 		/// <summary>True when the covered files were already compared with AI matching on.</summary>
 		public bool AiCovered { get; private set; }
+		/// <summary>
+		/// The AI percent the covered files were compared at. A pair without an AI row is only known to be under
+		/// this, so a lower AI percent has to look at those pairs again.
+		/// </summary>
+		public float AiFloorPercent { get; private set; }
+		static readonly float DefaultAiPercent = new Settings().AiPercent;
 		public int Count {
 			get { lock (gate) return pairs.Count; }
 		}
@@ -124,6 +130,13 @@ namespace VDF.Core {
 
 		public bool GrayFlagsMatch(Settings settings) => Fingerprint == MatcherFingerprint(settings);
 
+		/// <summary>Whether the saved AI coverage reaches down to the AI percent in <paramref name="settings"/>.</summary>
+		bool AiCoveredFor(Settings settings) =>
+			AiCovered && (!settings.UseAiMatching || settings.AiPercent >= AiFloorPercent);
+
+		float NextAiFloor(Settings settings) =>
+			settings.UseAiMatching && AiCoveredFor(settings) ? Math.Max(AiFloorPercent, settings.AiPercent) : settings.AiPercent;
+
 		public void Clear() {
 			lock (gate) ClearUnlocked();
 		}
@@ -135,6 +148,7 @@ namespace VDF.Core {
 			Fingerprint = "";
 			CoverageWindowDays = 0;
 			AiCovered = false;
+			AiFloorPercent = 0;
 		}
 
 		public bool HasFullLibraryCoverage {
@@ -183,7 +197,7 @@ namespace VDF.Core {
 					if (a < 0 || b < 0 || !covered[a] || !covered[b]) continue;
 					rows[Key(a, b)] = pair.Value;
 				}
-				return new PairSession(rows, covered, usable, AiCovered, CoverageWindowDays);
+				return new PairSession(rows, covered, usable, AiCoveredFor(settings), CoverageWindowDays);
 			}
 		}
 
@@ -197,7 +211,10 @@ namespace VDF.Core {
 					ClearUnlocked();
 					return;
 				}
-				double window = NextCoverageWindow(windowDays);
+				double window = NextCoverageWindow(windowDays, session.HasUncovered);
+				float aiFloor = session.AiCovered && settings.UseAiMatching
+					? Math.Max(AiFloorPercent, settings.AiPercent)
+					: settings.AiPercent;
 				table.Clear();
 				tableIndex.Clear();
 				for (int i = 0; i < entries.Count; i++) {
@@ -207,6 +224,7 @@ namespace VDF.Core {
 				pairs = new Dictionary<long, StoredPair>(session.Rows);
 				Fingerprint = MatcherFingerprint(settings);
 				AiCovered = settings.UseAiMatching;
+				AiFloorPercent = aiFloor;
 				CoverageWindowDays = window;
 			}
 		}
@@ -218,12 +236,17 @@ namespace VDF.Core {
 			return false;
 		}
 
-		/// <summary>A narrower positive window is a subset of a wider one, and of a full library compare. Keep the wider coverage.</summary>
-		double NextCoverageWindow(double windowDays) {
+		/// <summary>
+		/// A narrower positive window is a subset of a wider one, and of a full library compare, so the wider coverage
+		/// stays when the same files were compared again. A file that was new or changed in this run was only compared
+		/// inside this run's window, so claiming more would leave its pairs outside the window unscored for good.
+		/// </summary>
+		double NextCoverageWindow(double windowDays, bool hadUncovered) {
 			// Window 0 replaces it: that scan compared every remaining pair.
+			if (windowDays <= 0) return 0;
+			if (hadUncovered) return windowDays;
 			bool hadFullCoverage = CoverageWindowDays <= 0 && HasCoveredFiles();
 			double previousWindow = CoverageWindowDays;
-			if (windowDays <= 0) return 0;
 			if (hadFullCoverage || previousWindow > windowDays) return hadFullCoverage ? 0 : previousWindow;
 			return windowDays;
 		}
@@ -242,7 +265,7 @@ namespace VDF.Core {
 					&& pairs.TryGetValue(Key(ia, ib), out StoredPair row))
 					return PairSession.ActionForRow(row, settings);
 				if (IsCovered(a) && IsCovered(b) && TimeWindow.SharesWindow(a.CaptureTime, b.CaptureTime, CoverageWindowDays))
-					return PairSession.ActionWhenCovered(AiCovered, settings);
+					return PairSession.ActionWhenCovered(AiCoveredFor(settings), settings);
 			}
 			return PairCompareAction.Compute;
 		}
@@ -284,7 +307,12 @@ namespace VDF.Core {
 		/// </summary>
 		public void MarkCovered(IReadOnlyList<FileEntry> entries, double windowDays, Settings settings) {
 			lock (gate) {
-				double window = NextCoverageWindow(windowDays);
+				bool hadUncovered = false;
+				foreach (FileEntry entry in entries) {
+					if (!IsCovered(entry)) { hadUncovered = true; break; }
+				}
+				double window = NextCoverageWindow(windowDays, hadUncovered);
+				float aiFloor = NextAiFloor(settings);
 				var byPath = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);
 				for (int i = 0; i < entries.Count; i++) byPath.TryAdd(entries[i].Path, i);
 
@@ -308,6 +336,7 @@ namespace VDF.Core {
 				pairs = kept;
 				Fingerprint = MatcherFingerprint(settings);
 				AiCovered = settings.UseAiMatching;
+				AiFloorPercent = aiFloor;
 				CoverageWindowDays = window;
 			}
 		}
@@ -367,6 +396,8 @@ namespace VDF.Core {
 						writer.Write(pair.Value.HasAi ? pair.Value.AiPercent : float.NaN);
 						writer.Write(pair.Value.Flipped);
 					}
+					// After the rows, so a file saved before this field existed still loads (see Load).
+					writer.Write(AiFloorPercent);
 				}
 				File.Move(temp, path, overwrite: true);
 			}
@@ -403,6 +434,10 @@ namespace VDF.Core {
 					bool flipped = reader.ReadBoolean();
 					store.pairs[Key(first, second)] = new StoredPair(gray, ai, flipped);
 				}
+				// Files saved before the AI floor was kept used the engine's own AI percent, as the app never changes it.
+				store.AiFloorPercent = stream.Position < stream.Length
+					? reader.ReadSingle()
+					: store.AiCovered ? DefaultAiPercent : 0;
 				return store;
 			}
 			catch (Exception) {
@@ -461,6 +496,12 @@ namespace VDF.Core {
 		public bool Usable { get; }
 
 		public bool IsCovered(FileEntry entry) => covered[entry.compareIndex];
+
+		/// <summary>True when a file in the list is new or changed since the saved scores, so this run is its first look at it.</summary>
+		internal bool HasUncovered => Array.IndexOf(covered, false) >= 0;
+
+		/// <summary>True when the saved scores include AI scores down to the AI percent of this run.</summary>
+		internal bool AiCovered => aiCovered;
 
 		/// <summary>
 		/// True when every pair of covered files is either stored or known to be under the floor, so the loops

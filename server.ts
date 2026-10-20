@@ -8,6 +8,7 @@ import { ensureRuntimeDirs, loadConfig } from "./src/lib/config";
 import { errorText } from "./src/lib/errors";
 import { passwordIsAcceptable } from "./src/lib/password";
 import { redact } from "./src/lib/redact";
+import { recordInterrupted } from "./src/lib/jobs";
 import { getScan } from "./src/lib/scan";
 import { requestIsHttps, stripUntrustedForwarding } from "./src/lib/request-meta";
 import { startScheduler } from "./src/lib/scheduler";
@@ -32,8 +33,15 @@ function stopOnSignal(signal: NodeJS.Signals): void {
   if (stopping) return;
   stopping = true;
   const scan = getScan();
-  if (scan.running) console.log(`${signal}: stopping the running scan before exit`);
-  void scan.shutDown().then(() => process.exit(0));
+  const running = scan.running && scan.section ? { section: scan.section, trigger: scan.trigger } : null;
+  if (running) console.log(`${signal}: stopping the running scan before exit`);
+  void scan
+    .shutDown()
+    .then(async (idle) => {
+      // The scan did not wind down in time, so it cannot record itself. Write the run here; a scheduled slot stays pending.
+      if (!idle && running) await recordInterrupted(running.section, running.trigger).catch(() => undefined);
+    })
+    .finally(() => process.exit(0));
 }
 process.on("SIGTERM", () => stopOnSignal("SIGTERM"));
 process.on("SIGINT", () => stopOnSignal("SIGINT"));

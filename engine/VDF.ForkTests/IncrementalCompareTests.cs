@@ -150,6 +150,25 @@ public sealed class IncrementalCompareTests : CompareHarness {
 	}
 
 	[Fact]
+	public void AFullCompareAfterANarrowRunStillComparesPairsOutsideTheNarrowWindow() {
+		var dates = new Random(6);
+		for (int i = 0; i < 30; i++)
+			Image($"s{i:00}.jpg", Noise(5000 + i), day.AddDays(dates.Next(0, 90)));
+		Run(Gray(96));
+
+		// Both files arrive during a run that only looks at a week, so their pair is not scored.
+		byte[] a = Noise(1);
+		Image("a1.jpg", a, day.AddDays(1));
+		Image("a2.jpg", Perturb(a, 2, 11), day.AddDays(40));
+		Run(Gray(96, s => s.TimeWindowDays = 7));
+
+		RunResult afterwards = Run(Gray(96));
+		RunResult full = FromScratch(Gray(96));
+		Assert.Equal(full.Groups, afterwards.Groups);
+		Assert.Contains(full.Groups, group => group.Contains("a1.jpg") && group.Contains("a2.jpg"));
+	}
+
+	[Fact]
 	public void VideosGiveTheSameGroupsEitherWay() {
 		for (int i = 0; i < 40; i++)
 			Video($"clip{i:00}.mp4", Noise(4000 + i), 10 + (i % 5));

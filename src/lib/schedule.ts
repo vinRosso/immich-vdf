@@ -113,6 +113,9 @@ export function dueSlot(schedule: ScheduleSettings, now: Date, lastSlotKey: stri
 /** How long after its time a slot that could not start is still worth running. */
 const CATCH_UP_MS = 24 * 60 * 60 * 1000;
 
+/** A slot is started at most this many times, so a scan that takes the server down is not repeated after every restart. */
+export const MAX_SLOT_ATTEMPTS = 3;
+
 function pendingSlotValid(schedule: ScheduleSettings, now: Date, pending: string, lastSlotKey: string | null): boolean {
   if (schedule.mode === "off" || pending === lastSlotKey) return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(pending);
@@ -129,8 +132,11 @@ export type ScheduleDecision =
   | { action: "start"; slot: string }
   /** The slot is due but a scan is running. Keep it until that scan is done. */
   | { action: "queue"; slot: string }
-  /** A pending slot that can no longer run. `missed` is false when it was simply finished or switched off. */
-  | { action: "drop"; slot: string; missed: boolean };
+  /**
+   * A pending slot that can no longer run. `missed` is false when it was simply finished or switched off, and
+   * `tooManyTries` is true when it was started `MAX_SLOT_ATTEMPTS` times without ever reaching its end.
+   */
+  | { action: "drop"; slot: string; missed: boolean; tooManyTries?: boolean };
 
 /**
  * What the scheduler should do for one section on this tick. A due slot that finds another scan running
@@ -140,17 +146,19 @@ export type ScheduleDecision =
 export function decideScheduled(
   schedule: ScheduleSettings,
   now: Date,
-  run: { slotKey: string | null; pendingSlot?: string | null },
+  run: { slotKey: string | null; pendingSlot?: string | null; pendingAttempts?: number },
   busy: "idle" | "this-section-scheduled" | "other",
 ): ScheduleDecision {
   const pending = run.pendingSlot ?? null;
   const pendingOk = pending !== null && pendingSlotValid(schedule, now, pending, run.slotKey);
+  const exhausted = pending !== null && (run.pendingAttempts ?? 0) >= MAX_SLOT_ATTEMPTS;
   const due = dueSlot(schedule, now, run.slotKey);
-  // A slot that is due now replaces an older one that is still waiting.
-  const slot = due ?? (pendingOk ? pending : null);
+  // A slot that is due now replaces an older one that is still waiting, unless it is the one that keeps failing.
+  const slot = due !== null && !(exhausted && due === pending) ? due : pendingOk && !exhausted ? pending : null;
   if (slot === null) {
     if (pending === null) return { action: "none" };
     const finished = pending === run.slotKey || schedule.mode === "off";
+    if (!finished && exhausted && pendingOk) return { action: "drop", slot: pending, missed: true, tooManyTries: true };
     return { action: "drop", slot: pending, missed: !finished };
   }
   if (busy === "this-section-scheduled") return { action: "none" };
@@ -158,13 +166,17 @@ export function decideScheduled(
   return { action: "start", slot };
 }
 
-/** What a finished run writes about its slot. A run the server cut short stays pending so the next start runs it again. */
+/**
+ * What a finished run writes about its slot. A run the server cut short stays pending so the next start runs it again;
+ * it ended in an orderly way, so it does not count as an attempt that took the server down.
+ */
 export function slotPatch(
   trigger: "manual" | "schedule" | null,
   slotKey: string | null,
   interrupted: boolean,
-): { slotKey?: string | null; pendingSlot?: null } {
-  return trigger === "schedule" && !interrupted ? { slotKey, pendingSlot: null } : {};
+): { slotKey?: string | null; pendingSlot?: null; pendingAttempts?: number } {
+  if (trigger !== "schedule") return {};
+  return interrupted ? { pendingAttempts: 0 } : { slotKey, pendingSlot: null, pendingAttempts: 0 };
 }
 
 export function isValidTimeZone(timeZone: string): boolean {

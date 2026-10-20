@@ -27,13 +27,17 @@ function folderWith(files: string[]) {
 
 test("the default is automatic", () => {
   assert.deepEqual(nativeFfmpegMode({}, () => false), { kind: "auto", libDir: null });
-  assert.equal(nativeFfmpegMode({ VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" }, folderWith([])).kind, "auto");
+});
+
+test("an image built without its libraries scans with the ffmpeg program and never downloads", () => {
+  const env = { VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" };
+  assert.deepEqual(nativeFfmpegMode(env, folderWith([])), { kind: "off", libDir: "/opt/ffmpeg/lib", imageLibsMissing: true });
 });
 
 test("the image's libraries turn it on without a check only when every one is there", () => {
   const env = { VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" };
   assert.deepEqual(nativeFfmpegMode(env, folderWith(libs)), { kind: "on", libDir: "/opt/ffmpeg/lib" });
-  assert.equal(nativeFfmpegMode(env, folderWith(libs.slice(1))).kind, "auto");
+  assert.equal(nativeFfmpegMode(env, folderWith(libs.slice(1))).kind, "off");
 });
 
 test("VDF_NATIVE_FFMPEG turns it off or forces it on", () => {
@@ -70,6 +74,14 @@ test("an explicit setting never checks or downloads", async () => {
   const forced = fakeDeps({ available: false });
   assert.deepEqual(await resolveNativeFfmpeg(forced.deps, { VDF_NATIVE_FFMPEG: "1" }, () => false, fresh()), { enabled: true, libDir: null });
   assert.equal(off.calls.probe + off.calls.install + forced.calls.probe + forced.calls.install, 0);
+});
+
+test("an image without its libraries uses the ffmpeg program, says so, and never downloads", async () => {
+  const { deps, calls } = fakeDeps({ available: false });
+  const plan = await resolveNativeFfmpeg(deps, { VDF_FFMPEG_LIBS: "/opt/ffmpeg/lib" }, folderWith([]), fresh());
+  assert.deepEqual(plan, { enabled: false, libDir: "/opt/ffmpeg/lib" });
+  assert.equal(calls.probe + calls.install, 0);
+  assert.ok(calls.log.some((line) => /no FFmpeg 8 libraries/.test(line)));
 });
 
 test("libraries that are already there are used and not downloaded", async () => {
@@ -153,6 +165,9 @@ test("a failed native scan is tried once more without it, unless it was cancelle
   assert.equal(shouldRetryWithoutNative(on, { code: 0, spawnFailed: false }, false), false);
   assert.equal(shouldRetryWithoutNative(on, { code: 1, spawnFailed: false }, true), false);
   assert.equal(shouldRetryWithoutNative(on, { code: null, spawnFailed: true }, false), false);
+  // Hashing is where the libraries are used; a later failure would only repeat.
+  assert.equal(shouldRetryWithoutNative(on, { code: 1, spawnFailed: false, hashingDone: false }, false), true);
+  assert.equal(shouldRetryWithoutNative(on, { code: 137, spawnFailed: false, hashingDone: true }, false), false);
   assert.equal(shouldRetryWithoutNative({ enabled: false, libDir: null }, { code: 1, spawnFailed: false }, false), false);
 });
 

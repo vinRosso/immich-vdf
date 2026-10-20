@@ -217,6 +217,23 @@ function originAllowed(request: IncomingMessage): boolean {
   });
 }
 
+/** Waits for the socket to drain. False when the client closed meanwhile, so a handler never waits on a gone socket. */
+async function waitForDrain(response: ServerResponse): Promise<boolean> {
+  if (response.destroyed) return false;
+  const closed = new AbortController();
+  const onClose = () => closed.abort();
+  response.once("close", onClose);
+  try {
+    await once(response, "drain", { signal: closed.signal });
+    return true;
+  } catch (error) {
+    if (closed.signal.aborted) return false;
+    throw error;
+  } finally {
+    response.off("close", onClose);
+  }
+}
+
 async function proxyImmichAsset(
   request: IncomingMessage,
   response: ServerResponse,
@@ -247,9 +264,13 @@ async function proxyImmichAsset(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!response.write(Buffer.from(value))) await once(response, "drain");
+      if (!response.write(Buffer.from(value)) && !(await waitForDrain(response))) {
+        stop();
+        break;
+      }
     }
   } finally {
+    request.off("close", stop);
     response.end();
   }
 }
@@ -284,7 +305,10 @@ async function proxyImmichVideo(request: IncomingMessage, response: ServerRespon
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!response.write(Buffer.from(value))) await once(response, "drain");
+      if (!response.write(Buffer.from(value)) && !(await waitForDrain(response))) {
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
     }
   } catch (error) {
     if (abort.signal.aborted && response.headersSent) return;
