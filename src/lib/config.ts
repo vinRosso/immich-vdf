@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { clampScanParallelism, maxScanParallelism, suggestScanParallelism } from "./scan-parallelism";
@@ -73,6 +73,35 @@ export function ensureRuntimeDirs(config: AppConfig): void {
       // A read-only Immich mount, or a host path that is not present yet, stays as configured.
     }
   }
+  removeStaleScanTemp(path.join(config.dataDir, "tmp"));
+}
+
+const STALE_SCAN_TEMP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Compare output and settings files are deleted when a scan finishes. A crash or a stopped server
+ * leaves them behind. Only files a day old are removed, so a scan running in another process is safe.
+ */
+export function removeStaleScanTemp(dir: string, maxAgeMs = STALE_SCAN_TEMP_MS, now = Date.now()): number {
+  let removed = 0;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (!name.startsWith("scan-") || !name.endsWith(".json")) continue;
+    const file = path.join(dir, name);
+    try {
+      if (now - statSync(file).mtimeMs < maxAgeMs) continue;
+      rmSync(file, { force: true });
+      removed += 1;
+    } catch {
+      // Still in use or already gone.
+    }
+  }
+  return removed;
 }
 
 /** File names to probe for a command on PATH (Windows PATHEXT, e.g. .cmd shims from dotnet tools). */

@@ -21,6 +21,7 @@ import { PREFIX_CACHE_REVISION, loadPrefixCache, prefixCacheAction, prefixRegrou
 import { parseResolution } from "./primary";
 import { resolveAgainstRoots, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
+import { cliFailure, type CliOutcome } from "./cli-failure";
 import { PhaseTimer } from "./phase-timer";
 import { TRASH_DIR } from "./trash-dir";
 import { redact } from "./redact";
@@ -35,6 +36,7 @@ import {
   patchRun,
   saveResults,
   updateIgnored,
+  updateResults,
   saveStoredInventory,
   sectionDbDir,
   secretValues,
@@ -100,7 +102,7 @@ export async function startScan(
     const outputFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-${stamp}.json`);
     const settingsFile = path.join(loadConfig().dataDir, "tmp", `scan-${section}-settings-${stamp}.json`);
     await writeFile(settingsFile, `${JSON.stringify(buildVdfCliSettingsFile(scanSettings, paths))}\n`);
-    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile }, startedAt);
+    void runScanPipeline(section, scanSettings, { ...paths, dbDir, outputFile, settingsFile }, startedAt).catch(() => undefined);
     return { ok: true };
   } catch (error) {
     const message = redact(errorText(error), secretValues(settings));
@@ -138,6 +140,7 @@ async function resolveScanPaths(
   return { includes, excludes };
 }
 
+/** Runs the scan steps. Whatever goes wrong, the run is recorded and the scan lock is released. */
 async function runScanPipeline(
   section: SectionId,
   scanSettings: ScanSettings,
@@ -146,6 +149,38 @@ async function runScanPipeline(
 ): Promise<void> {
   const scan = getScan();
   const timer = new PhaseTimer((line) => scan.addLine(line));
+  try {
+    await runScanSteps(section, scanSettings, paths, startedAt, timer);
+  } catch (error) {
+    const message = redact(errorText(error), scan.secrets);
+    scan.addLine(message);
+    try {
+      await finishScan(section, {
+        kind: "error",
+        code: 1,
+        paths,
+        scanSettings,
+        spawnFailed: false,
+        cancelled: false,
+        startedAt,
+        timer,
+        message,
+      });
+    } catch {
+      // Released below.
+    }
+    scan.finish(false, message, null);
+  }
+}
+
+async function runScanSteps(
+  section: SectionId,
+  scanSettings: ScanSettings,
+  paths: ScanPaths,
+  startedAt: number,
+  timer: PhaseTimer,
+): Promise<void> {
+  const scan = getScan();
   const cancelled = () =>
     finishScan(section, { kind: "error", code: null, paths, scanSettings, spawnFailed: false, cancelled: true, startedAt, timer });
 
@@ -160,7 +195,8 @@ async function runScanPipeline(
       }),
     );
   } catch (error) {
-    scan.addLine(redact(errorText(error), scan.secrets));
+    const message = `Could not read the library folders: ${redact(errorText(error), scan.secrets)}`;
+    scan.addLine(message);
     await finishScan(section, {
       kind: "error",
       code: 1,
@@ -170,6 +206,7 @@ async function runScanPipeline(
       cancelled: false,
       startedAt,
       timer,
+      message,
     });
     return;
   }
@@ -214,6 +251,7 @@ async function runScanPipeline(
     await finishScan(section, {
       kind: "error",
       code: scanResult.code,
+      signal: scanResult.signal,
       paths,
       scanSettings,
       spawnFailed: scanResult.spawnFailed,
@@ -233,6 +271,7 @@ async function runScanPipeline(
   await finishScan(section, {
     kind: "compare",
     code: compareResult.code,
+    signal: compareResult.signal,
     paths,
     scanSettings,
     inventory,
@@ -244,13 +283,18 @@ async function runScanPipeline(
   });
 }
 
-function spawnVdfCli(args: string[]): Promise<{ code: number | null; spawnFailed: boolean }> {
+function spawnVdfCli(args: string[]): Promise<CliOutcome> {
   return new Promise((resolve) => {
     const scan = getScan();
-    const child = spawn(resolveVdfCli(), args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    // Own process group on POSIX, so cancelling reaches the ffmpeg processes vdf-cli started.
+    const child = spawn(resolveVdfCli(), args, {
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
     scan.attach(child);
-    child.on("error", () => resolve({ code: null, spawnFailed: true }));
-    child.on("close", (code) => resolve({ code, spawnFailed: false }));
+    child.on("error", () => resolve({ code: null, signal: null, spawnFailed: true }));
+    child.on("close", (code, signal) => resolve({ code, signal, spawnFailed: false }));
   });
 }
 
@@ -269,6 +313,7 @@ type FinishInput = {
   | {
       kind: "compare";
       code: number | null;
+      signal: NodeJS.Signals | null;
       paths: ScanPaths;
       scanSettings: ScanSettings;
       inventory: InventoryEntry[];
@@ -279,50 +324,110 @@ type FinishInput = {
   | {
       kind: "error";
       code: number | null;
+      signal?: NodeJS.Signals | null;
       paths: ScanPaths;
       scanSettings: ScanSettings;
       spawnFailed: boolean;
       cancelled: boolean;
+      /** Shown as the run's error instead of describing the CLI exit. */
+      message?: string;
     }
 );
 
+type FinishOutcome = { ok: boolean; error: string | null; groupCount: number | null };
+
+function stoppedText(): string {
+  return getScan().interrupted ? "Interrupted by shutdown" : "Cancelled";
+}
+
+/** Saves the results and records the run. The scan lock is always released, even when saving fails. */
 async function finishScan(section: SectionId, input: FinishInput): Promise<void> {
   const scan = getScan();
   if (!scan.claim()) return;
-  const { timer } = input;
-  scan.addLine("[scan] Finishing up…");
-  const settings = await loadSettings();
+  const { timer, paths } = input;
+  let settings: Settings | null = null;
+  let outcome: FinishOutcome = { ok: false, error: null, groupCount: null };
+  try {
+    scan.addLine("[scan] Finishing up…");
+    settings = await loadSettings();
+    outcome = await collectResults(section, input, settings);
+  } catch (err) {
+    outcome = { ok: false, error: redact(errorText(err), scan.secrets), groupCount: null };
+  } finally {
+    await Promise.all([
+      rm(paths.outputFile, { force: true }).catch(() => undefined),
+      rm(paths.settingsFile, { force: true }).catch(() => undefined),
+    ]);
+  }
+  const { ok, groupCount } = outcome;
+  const message = scan.cancelled ? stoppedText() : outcome.error;
+  const status = ok && !scan.cancelled ? "ok" : "error";
+  try {
+    const timings = timer.summary();
+    if (timings) scan.addLine(timings);
+    await patchRun(section, {
+      phases: timer.record(),
+      at: new Date().toISOString(),
+      status,
+      groupCount,
+      error: message,
+      trigger: scan.trigger,
+      ...(scan.trigger === "schedule" ? { slotKey: scan.slotKey } : {}),
+    });
+    if (scan.trigger === "schedule" && settings?.webhookUrl) {
+      try {
+        await postWebhook(settings.webhookUrl, { section, status, groupCount: groupCount ?? 0 });
+      } catch (err) {
+        scan.addLine(redact(`Webhook failed: ${errorText(err)}`, scan.secrets));
+      }
+    }
+  } catch (err) {
+    scan.addLine(redact(`Could not save the run: ${errorText(err)}`, scan.secrets));
+  } finally {
+    scan.finish(ok && !scan.cancelled, message, groupCount);
+    if (ok && !scan.cancelled) void warmSections([section]).catch(() => undefined);
+  }
+}
+
+async function collectResults(section: SectionId, input: FinishInput, settings: Settings): Promise<FinishOutcome> {
+  const scan = getScan();
+  const { timer, paths } = input;
   const secrets = secretValues(settings);
-  const { paths } = input;
   let error: string | null = null;
   let groupCount: number | null = null;
   let ok = false;
   try {
-    if (input.cancelled || scan.cancelled) error = "Cancelled";
+    if (input.cancelled || scan.cancelled) error = stoppedText();
     else if (input.kind === "error") {
-      if (input.spawnFailed || input.code === null) error = "vdf-cli could not be started. Set VDF_CLI or run the Docker image.";
-      else if (input.code !== 0) error = `vdf-cli exited with code ${input.code}`;
+      error = input.message ?? cliFailure(input, scan.cliTail());
     } else if (input.kind === "reuse") {
       const existing = await loadResults(section);
       if (!existing) {
         error = "No saved duplicate groups to reuse.";
       } else {
-      const reused = await reusedGroups(section, existing, input.scanSettings, paths, input.decision.inventoryFingerprint);
-      await saveResults(section, {
-        ...existing,
-        groups: reused.groups,
-        finishedAt: new Date().toISOString(),
-        durationMs: pipelineDurationMs(input.startedAt),
-        error: null,
-        appliedPrefixSeconds: reused.appliedPrefixSeconds,
-      });
-      groupCount = await countVisibleGroups(section, reused.groups);
+        // Regrouping can be slow and takes the results lock itself, so it runs before the merge below.
+        const reused = await reusedGroups(section, existing, input.scanSettings, paths, input.decision.inventoryFingerprint);
+        const shapeBefore = groupShape(existing.groups);
+        let savedGroups = reused.groups;
+        await updateResults(section, (current) => {
+          if (!current) return null;
+          // A trash or stack action may have changed the groups while this ran. Keep its result.
+          const untouched = groupShape(current.groups) === shapeBefore;
+          savedGroups = untouched ? reused.groups : current.groups;
+          return {
+            ...current,
+            groups: savedGroups,
+            finishedAt: new Date().toISOString(),
+            durationMs: pipelineDurationMs(input.startedAt),
+            error: null,
+            appliedPrefixSeconds: untouched ? reused.appliedPrefixSeconds : current.appliedPrefixSeconds,
+          };
+        });
+        groupCount = await countVisibleGroups(section, savedGroups);
         ok = true;
       }
-    } else if (input.spawnFailed || input.code === null) {
-      error = "vdf-cli could not be started. Set VDF_CLI or run the Docker image.";
-    } else if (input.code !== 0) {
-      error = `vdf-cli exited with code ${input.code}`;
+    } else if (input.spawnFailed || input.code !== 0) {
+      error = cliFailure(input, scan.cliTail());
     } else {
       scan.addLine("[scan] Processing results…");
       const visualGroups = await timer.time("Parse results", async () =>
@@ -367,7 +472,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
         ),
       );
       if (scan.cancelled) {
-        error = "Cancelled";
+        error = stoppedText();
       } else {
       let warning: string | null = null;
       if (section === "immich") {
@@ -388,7 +493,12 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
                 originalPathsForGroups(groups, maps),
                 input.scanSettings.includeImages,
                 input.scanSettings.parallelism,
-                undefined,
+                {
+                  onSearch: (done, total) => {
+                    if (done === total || done % 200 === 0) scan.addLine(`[scan] Matching Immich library… ${done}/${total} assets`);
+                  },
+                  onLibraryFallback: () => scan.addLine("[scan] Matching Immich library… reading every asset"),
+                },
                 trashed.ids,
               ),
             );
@@ -416,7 +526,7 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
         }
       }
       if (scan.cancelled) {
-        error = "Cancelled";
+        error = stoppedText();
       } else {
       await timer.time("Save results", async () => {
         await saveStoredInventory(section, input.inventory);
@@ -445,34 +555,14 @@ async function finishScan(section: SectionId, input: FinishInput): Promise<void>
   } catch (err) {
     error = redact(errorText(err), secrets);
     ok = false;
-  } finally {
-    await Promise.all([
-      rm(paths.outputFile, { force: true }).catch(() => undefined),
-      rm(paths.settingsFile, { force: true }).catch(() => undefined),
-    ]);
   }
-  const message = scan.cancelled ? "Cancelled" : error;
-  const status = ok && !scan.cancelled ? "ok" : "error";
-  const timings = timer.summary();
-  if (timings) scan.addLine(timings);
-  await patchRun(section, {
-    phases: timer.record(),
-    at: new Date().toISOString(),
-    status,
-    groupCount,
-    error: message,
-    trigger: scan.trigger,
-    ...(scan.trigger === "schedule" ? { slotKey: scan.slotKey } : {}),
-  });
-  if (scan.trigger === "schedule" && settings.webhookUrl) {
-    try {
-      await postWebhook(settings.webhookUrl, { section, status, groupCount: groupCount ?? 0 });
-    } catch (err) {
-      scan.addLine(redact(`Webhook failed: ${errorText(err)}`, secrets));
-    }
-  }
-  scan.finish(ok && !scan.cancelled, message, groupCount);
-  if (ok && !scan.cancelled) void warmSections([section]).catch(() => undefined);
+  return { ok, error, groupCount };
+}
+
+function groupShape(groups: StoredGroup[]): string {
+  let items = 0;
+  for (const group of groups) items += group.items.length;
+  return `${groups.length}:${items}`;
 }
 
 /** Wall clock from scan button to saved results (index, hash, compare, Immich join). */

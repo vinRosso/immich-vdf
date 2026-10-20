@@ -20,7 +20,7 @@ Open **Immich** or **Files**, pick a profile, and press **Scan**. Only one scan 
 
 ![Scan profiles and the Scan button](images/scan.jpg)
 
-A scan runs `vdf-cli scan`, then `vdf-cli compare`. If the files and the settings have not changed, compare is skipped and the previous groups stay.
+A scan first lists the media files in your folders. If no file and no matching setting changed since the last run, both `vdf-cli` steps are skipped and the previous groups stay. Otherwise it runs `vdf-cli scan`, then `vdf-cli compare`. Changing Parallel does not count as a change. The log ends with how long each step took, and the run keeps those timings.
 
 ## Which profile
 

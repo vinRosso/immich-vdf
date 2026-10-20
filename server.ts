@@ -8,6 +8,7 @@ import { ensureRuntimeDirs, loadConfig } from "./src/lib/config";
 import { errorText } from "./src/lib/errors";
 import { passwordIsAcceptable } from "./src/lib/password";
 import { redact } from "./src/lib/redact";
+import { getScan } from "./src/lib/scan";
 import { requestIsHttps, stripUntrustedForwarding } from "./src/lib/request-meta";
 import { startScheduler } from "./src/lib/scheduler";
 import { loginUrlForPath, safeLoginNext } from "./src/lib/auth-redirect";
@@ -25,6 +26,17 @@ if (!passwordIsAcceptable(config.password)) {
 }
 ensureRuntimeDirs(config);
 startScheduler();
+
+let stopping = false;
+function stopOnSignal(signal: NodeJS.Signals): void {
+  if (stopping) return;
+  stopping = true;
+  const scan = getScan();
+  if (scan.running) console.log(`${signal}: stopping the running scan before exit`);
+  void scan.shutDown().then(() => process.exit(0));
+}
+process.on("SIGTERM", () => stopOnSignal("SIGTERM"));
+process.on("SIGINT", () => stopOnSignal("SIGINT"));
 
 const dev = nextDevMode();
 if (dev && process.env.NODE_ENV === "production") {

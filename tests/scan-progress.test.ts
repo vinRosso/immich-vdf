@@ -81,3 +81,45 @@ test("parseScanProgress shows post-compare phases", () => {
   assert.equal(prefix.label, "Grouping by name and time");
   assert.equal(prefix.indeterminate, true);
 });
+
+test("parseScanProgress shows the newest server step, not the first in the list", () => {
+  const afterGrouping = parseScanProgress([
+    "[scan] Finishing up…",
+    "[scan] Grouping images by file name and time (up to 4 workers, one prefix each)…",
+    "[scan] Processing results… 10/20 paths",
+  ]);
+  assert.equal(afterGrouping.label, "Processing results");
+
+  const grouping = parseScanProgress([
+    "[scan] Finishing up…",
+    "[scan] Processing results…",
+    "[scan] Grouping images by file name and time (up to 4 workers, one prefix each)…",
+  ]);
+  assert.equal(grouping.label, "Grouping by name and time");
+});
+
+test("parseScanProgress names the library check and gives way to CLI progress", () => {
+  const checking = parseScanProgress(["[scan] Checking whether the library changed…"]);
+  assert.equal(checking.label, "Checking the library");
+  assert.equal(checking.indeterminate, true);
+
+  const hashing = parseScanProgress([
+    "[scan] Checking whether the library changed…",
+    "[scan] Inventory took 3.1 s",
+    "[scan] 2 files changed, comparing the library.",
+    "[scan] File enumeration complete.",
+    "[ 40%] 8/20 ETA 0m04s file.mp4",
+  ]);
+  assert.equal(hashing.label, "Hashing files");
+  assert.equal(hashing.percent, 40);
+});
+
+test("parseScanProgress reports Immich asset and stack steps", () => {
+  const assets = parseScanProgress(["[scan] Matching Immich library… 200/3000 assets"]);
+  assert.equal(assets.label, "Matching Immich assets");
+  assert.equal(assets.detail, `${(200).toLocaleString()} of ${(3000).toLocaleString()} assets`);
+  assert.equal(assets.indeterminate, false);
+
+  const stacks = parseScanProgress(["[scan] Matching Immich library…", "[scan] Reading Immich stacks…"]);
+  assert.equal(stacks.label, "Reading Immich stacks");
+});
