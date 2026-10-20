@@ -573,6 +573,21 @@ export async function openImmichThumbnail(
   });
 }
 
+/** Immich's own playback video (its encoded copy, or the original when no copy is needed). Honors Range. */
+export async function openImmichVideo(
+  baseUrl: string,
+  apiKey: string,
+  assetId: string,
+  range: string | undefined,
+  signal: AbortSignal,
+): Promise<Response> {
+  if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
+  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/video/playback`, {
+    headers: { "x-api-key": apiKey, accept: "video/*", ...(range ? { range } : {}) },
+    signal,
+  });
+}
+
 /** Original file, for compare when the path is not on a mounted folder. */
 export async function openImmichOriginal(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");

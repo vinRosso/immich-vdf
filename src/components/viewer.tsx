@@ -758,6 +758,10 @@ function Player({
   const upgradeLead = useRef(2.5);
   const upgradeRestarts = useRef(0);
   const [sharp, setSharp] = useState(false);
+  // Matched Immich videos play Immich's own encoded copy: no probe and no transcode. The path is kept
+  // when the user asks for the original or Immich's copy fails, so the 240p to 720p path takes over.
+  const [originalFor, setOriginalFor] = useState<string | null>(null);
+  const viaImmich = section === "immich" && Boolean(item.assetId) && !item.isImage && originalFor !== item.path;
 
   useEffect(() => sync.register(side, apiRef), [side, sync]);
 
@@ -767,6 +771,10 @@ function Player({
     setClock(0);
     setScrub(null);
     setPaused(true);
+    if (viaImmich) {
+      setInfo({ mode: "direct", duration: item.durationSeconds, width: item.width, height: item.height, videoCodec: null, audioCodec: null });
+      return;
+    }
     void api<MediaInfo>(`/api/media/info?section=${section}&path=${encodeURIComponent(item.path)}`)
       .then((next) => {
         if (!cancelled) setInfo(next);
@@ -777,7 +785,7 @@ function Player({
     return () => {
       cancelled = true;
     };
-  }, [item.path, item.durationSeconds, item.width, item.height, section]);
+  }, [item.path, item.durationSeconds, item.width, item.height, section, viaImmich]);
 
   const playback = info?.mode ?? (likelyDirectPlayback(item.path, item.format) ? "direct" : null);
 
@@ -804,14 +812,26 @@ function Player({
     const direct = playback === "direct";
     base.current = direct ? 0 : start;
     loopStart.current = direct ? 0 : start;
-    const next = mediaSrc(section, item.path, direct ? null : start, playback, playId.current, playback === "transcode" ? qualityRef.current : undefined);
+    const next =
+      viaImmich && item.assetId
+        ? immichVideoSrc(item.assetId)
+        : mediaSrc(section, item.path, direct ? null : start, playback, playId.current, playback === "transcode" ? qualityRef.current : undefined);
     const current = node.getAttribute("src") ?? "";
     if (current === next || (next.startsWith("/") && current.endsWith(next))) return;
     reportedFileTime.current = null;
     node.loop = true;
     setTranscodeSpinner(transcodeSpinnerRef.current, !direct);
     node.src = next;
-  }, [playback, item.path, item.partialClipOffsetSeconds, other.partialClipOffsetSeconds, section]);
+  }, [playback, item.path, item.partialClipOffsetSeconds, other.partialClipOffsetSeconds, section, viaImmich]);
+
+  // Immich can answer slowly or serve a codec this browser cannot play. Without a picture soon, use the original.
+  useEffect(() => {
+    if (!viaImmich || !playback) return;
+    const timer = window.setTimeout(() => {
+      if ((lowRef.current?.readyState ?? 0) < 2) setOriginalFor(item.path);
+    }, IMMICH_VIDEO_PATIENCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [viaImmich, playback, item.path]);
 
   useEffect(() => {
     const low = lowRef.current;
@@ -1045,6 +1065,10 @@ function Player({
 
   function onActiveError(event: SyntheticEvent<HTMLVideoElement>) {
     if (!isShown(event)) return;
+    if (viaImmich) {
+      setOriginalFor(item.path);
+      return;
+    }
     setTranscodeSpinner(transcodeSpinnerRef.current, false);
   }
 
@@ -1125,6 +1149,16 @@ function Player({
             </>
           )}
         </span>
+        {viaImmich ? (
+          <button
+            type="button"
+            title="Immich's playback copy is shown. Play the original file instead."
+            onClick={() => setOriginalFor(item.path)}
+            className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] hover:bg-muted hover:text-foreground"
+          >
+            Original
+          </button>
+        ) : null}
         {mediaDate ? <span className="shrink-0 tabular-nums">{mediaDate}</span> : null}
       </p>
       <div className="relative min-h-0 flex-1">
@@ -1525,6 +1559,12 @@ function mediaSrc(
   const base = `/api/media?section=${section}&path=${encodeURIComponent(filePath)}&mode=${mode}&play=${encodeURIComponent(playId)}`;
   const timed = start === null ? base : `${base}&t=${start.toFixed(3)}`;
   return mode === "transcode" && height ? `${timed}&h=${height}` : timed;
+}
+
+const IMMICH_VIDEO_PATIENCE_MS = 6000;
+
+function immichVideoSrc(assetId: string): string {
+  return `/api/immich-video?id=${encodeURIComponent(assetId)}`;
 }
 
 function thumbSrc(section: SectionId, item: ClientItem): string {

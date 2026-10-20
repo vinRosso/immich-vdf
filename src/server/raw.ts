@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AppError, errorText } from "../lib/errors";
-import { openImmichOriginal, openImmichThumbnail } from "../lib/immich";
+import { openImmichOriginal, openImmichThumbnail, openImmichVideo } from "../lib/immich";
 import { loadConfig } from "../lib/config";
 import { PathJailError } from "../lib/path-jail";
 import { clientIp, mutationSiteAllowed, requestIsHttps } from "../lib/request-meta";
@@ -110,6 +110,10 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       );
       return true;
     }
+    if (request.method === "GET" && pathname === "/api/immich-video") {
+      await proxyImmichVideo(request, response, requiredQuery(url, "id"));
+      return true;
+    }
     if (request.method === "GET" && pathname === "/api/immich-original") {
       await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichOriginal, "Immich original failed");
       return true;
@@ -137,7 +141,8 @@ function isProtected(pathname: string): boolean {
     pathname === "/api/media" ||
     pathname === "/api/thumbs" ||
     pathname === "/api/immich-thumb" ||
-    pathname === "/api/immich-original"
+    pathname === "/api/immich-original" ||
+    pathname === "/api/immich-video"
   );
 }
 
@@ -246,6 +251,47 @@ async function proxyImmichAsset(
     }
   } finally {
     response.end();
+  }
+}
+
+/** Streams Immich's playback video with Range support so the player can seek without a transcode. */
+async function proxyImmichVideo(request: IncomingMessage, response: ServerResponse, assetId: string): Promise<void> {
+  const membership = await resultsMembership("immich");
+  if (!membership.found || !membership.assetIds.has(assetId)) throw new AppError("That asset is not in the current results", 404);
+  const settings = await loadSettings();
+  if (!settings.immich.baseUrl || !settings.immich.apiKey) throw new AppError("Immich is not configured");
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  response.on("close", stop);
+  try {
+    const range = typeof request.headers.range === "string" ? request.headers.range : undefined;
+    const upstream = await openImmichVideo(settings.immich.baseUrl, settings.immich.apiKey, assetId, range, abort.signal);
+    if ((upstream.status !== 200 && upstream.status !== 206) || !upstream.body) {
+      throw new AppError(`Immich video failed (${upstream.status})`, 502);
+    }
+    const headers: Record<string, string> = {
+      "Content-Type": upstream.headers.get("content-type") || "video/mp4",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    };
+    const length = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+    if (length) headers["Content-Length"] = length;
+    if (contentRange) headers["Content-Range"] = contentRange;
+    response.writeHead(upstream.status, headers);
+    const reader = upstream.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!response.write(Buffer.from(value))) await once(response, "drain");
+    }
+  } catch (error) {
+    if (abort.signal.aborted && response.headersSent) return;
+    throw error;
+  } finally {
+    response.off("close", stop);
+    if (!response.writableEnded) response.end();
   }
 }
 
