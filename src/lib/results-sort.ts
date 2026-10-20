@@ -25,7 +25,7 @@ export const RESULTS_GROUP_SORT_OPTIONS: { id: ResultsGroupSortId; label: string
   { id: "time-asc", label: "Date, oldest first" },
 ];
 
-type SortableItem = { similarity: number; sizeBytes: number; durationSeconds: number; dateCreatedMs: number };
+type SortableItem = { similarity: number; sizeBytes: number; durationSeconds: number; dateCreatedMs?: number };
 type GroupLike = { items: SortableItem[] };
 
 function maxSimilarity(group: GroupLike): number {
@@ -86,10 +86,13 @@ export function sortResultGroups<T extends GroupLike>(groups: T[], sortId: Resul
     sortId === "largest-desc" ||
     sortId === "duration-desc" ||
     sortId === "time-desc";
-  return [...groups].sort((a, b) => {
-    const delta = score(b) - score(a);
+  // Each group's key is computed once, not on every comparison of the sort.
+  const keyed = groups.map((group) => ({ group, key: score(group) }));
+  keyed.sort((a, b) => {
+    const delta = b.key - a.key;
     return descending ? delta : -delta;
   });
+  return keyed.map((entry) => entry.group);
 }
 
 export function isResultsGroupSortId(value: string): value is ResultsGroupSortId {

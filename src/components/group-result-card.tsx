@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Layers, Merge } from "lucide-react";
 import type { GroupDragBind } from "@/components/use-group-merge-drag";
 import { ThumbnailSkeleton } from "@/components/skeletons";
@@ -93,13 +93,22 @@ export function ResultGroupCard({
 
 function PosterImage({ src, sensitive = false }: { src: string; sensitive?: boolean }) {
   const [ready, setReady] = useState(false);
+  const imageRef = useRef<HTMLImageElement>(null);
+  // A poster the browser already has (after a sort, or scrolling back) is decoded before first paint,
+  // so it appears with no skeleton and no fade.
+  useLayoutEffect(() => {
+    const node = imageRef.current;
+    if (node?.complete && node.naturalWidth > 0) setReady(true);
+  }, [src]);
   return (
     <span className="relative block aspect-[4/3] w-full overflow-hidden bg-black">
       {!ready ? <ThumbnailSkeleton /> : null}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        ref={imageRef}
         alt=""
         draggable={false}
+        decoding="async"
         src={src}
         onLoad={() => setReady(true)}
         onError={() => setReady(true)}
