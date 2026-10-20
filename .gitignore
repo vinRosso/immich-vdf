@@ -53,6 +53,9 @@ next-env.d.ts
 # editor
 .cursor/
 
+# Claude Code local config (project notes, launch configs)
+.claude/
+
 # vendored engine build output
 engine/**/bin/
 engine/**/obj/

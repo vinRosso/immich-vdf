@@ -4,7 +4,7 @@ import {
   albumSetsMismatch,
   missingAlbumIds,
   removableAlbumIds,
-} from "../src/lib/immich-album-sync.ts";
+} from "../src/lib/immich-album-sync";
 
 describe("immich-album-sync", () => {
   const byAsset = {
