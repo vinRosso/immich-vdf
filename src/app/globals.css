@@ -197,3 +197,56 @@
     transform: translateX(420%);
   }
 }
+
+/* Skeletons: fade in after a beat, then a highlight sweeps across. --skeleton-i staggers the sweep between siblings. */
+@keyframes skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@layer components {
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: color-mix(in oklch, var(--muted) 82%, var(--foreground) 6%);
+    animation: skeleton-in 200ms 120ms both;
+  }
+
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(
+      100deg,
+      transparent 20%,
+      color-mix(in oklch, var(--foreground) 9%, transparent) 50%,
+      transparent 80%
+    );
+    transform: translateX(-100%);
+    animation: skeleton-sweep 1.6s ease-in-out calc(var(--skeleton-i, 0) * 70ms) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton {
+      animation: none;
+    }
+
+    .skeleton::after {
+      display: none;
+    }
+  }
+}

@@ -151,7 +151,7 @@ async function login(request: IncomingMessage, response: ServerResponse): Promis
   const limit = await loginAllowed(ip);
   if (!limit.ok) {
     response.setHeader("Retry-After", String(limit.retryAfter));
-    sendJson(response, 429, { error: "Too many sign-in attempts" });
+    sendJson(response, 429, { error: "Too many attempts. Wait a few minutes and try again." });
     return;
   }
   let password = "";
@@ -165,7 +165,7 @@ async function login(request: IncomingMessage, response: ServerResponse): Promis
   const expected = loadConfig().password;
   if (!expected || !passwordsMatch(password, expected)) {
     await recordLoginFailure(ip);
-    sendJson(response, 401, { error: "Wrong password" });
+    sendJson(response, 401, { error: "Wrong password. Try again." });
     return;
   }
   await clearLoginFailures(ip);

@@ -118,7 +118,7 @@ export function ScanLog({
         )}
       </div>
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span>{progress.detail ?? "Waiting for vdf-cli…"}</span>
+        <span>{progress.detail ?? "Getting started…"}</span>
         <span className="tabular-nums">{progress.indeterminate ? "…" : `${progress.percent}%`}</span>
       </div>
     </div>

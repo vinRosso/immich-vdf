@@ -46,7 +46,7 @@ test("parseScanProgress shows post-compare phases", () => {
     "[scan] Processing results…",
   ]);
   assert.equal(saving.label, "Processing results");
-  assert.equal(saving.detail, "Reading file metadata…");
+  assert.equal(saving.detail, "Reading file details…");
   assert.equal(saving.indeterminate, true);
 
   const paths = parseScanProgress([
@@ -140,7 +140,7 @@ test("parseScanProgress shows the AI embedding stage instead of a stuck 1 of 1 h
     "[ 99%] 35340/35349  ETA 0m03s  ...x.jpg    ",
     "[100%] 1/1  ETA ...    (computing AI embeddings)    ",
   ]);
-  assert.equal(info.label, "Computing AI embeddings");
+  assert.equal(info.label, "Analysing with AI");
   assert.equal(info.indeterminate, true);
 });
 
@@ -184,14 +184,14 @@ test("parseScanProgress is not fooled by a file name in parentheses", () => {
 
 test("parseScanProgress shows the one-time FFmpeg download with its megabytes", () => {
   const starting = parseScanProgress(["[scan] Native FFmpeg libraries not found. Downloading them once (about 90 MB, checked against the published checksum)."]);
-  assert.equal(starting.label, "Setting up native FFmpeg");
+  assert.equal(starting.label, "Setting up faster scanning");
   assert.equal(starting.indeterminate, true);
 
   const downloading = parseScanProgress([
     "[scan] Native FFmpeg libraries not found. Downloading them once (about 90 MB).",
     "[scan] Downloading FFmpeg... 45/90 MB",
   ]);
-  assert.equal(downloading.label, "Setting up native FFmpeg");
+  assert.equal(downloading.label, "Setting up faster scanning");
   assert.equal(downloading.detail, "45 of 90 MB");
   assert.equal(downloading.percent, 50);
   assert.equal(downloading.indeterminate, false);

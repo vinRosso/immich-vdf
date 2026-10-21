@@ -6,7 +6,7 @@ import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { UnmatchedScreenSkeleton } from "@/components/skeletons";
+import { Reveal, UnmatchedScreenSkeleton } from "@/components/skeletons";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import type { UnmatchedFile } from "@/lib/types";
@@ -84,7 +84,7 @@ export function UnmatchedScreen() {
       running: true,
       percent: 0,
       label: "Starting",
-      detail: "Waiting for server…",
+      detail: "Getting started…",
       indeterminate: true,
     });
     try {
@@ -111,19 +111,20 @@ export function UnmatchedScreen() {
         <h1 className="font-heading text-4xl">Unmatched</h1>
       </div>
       <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-        These files are in duplicate groups, but they are not linked to an Immich asset. Stack and trash skip them until the path map lines up with the path Immich stores.
+        These files are in duplicate groups but aren&apos;t linked to a photo in Immich, so they can&apos;t be stacked or trashed yet.
       </p>
       {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
       {notice ? <p className="mt-4 text-sm text-foreground">{notice}</p> : null}
       {!report ? <UnmatchedScreenSkeleton /> : null}
       {report ? (
         <div className="mt-6 space-y-8">
+          <Reveal index={0}>
           <section className="space-y-3">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h2 className="font-heading text-2xl">Path map</h2>
+                <h2 className="font-heading text-2xl">Folders</h2>
                 <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-                  Immich stores <span className="font-mono text-foreground">originalPath</span> under the left prefix. This app scans the folder on the right. A file matches when its scan path starts with a right-hand folder and the translated path is an Immich asset.
+                  Where Immich keeps your files (left) and the folder this app scans for them (right). A file can only be linked if it sits in one of the folders on the right.
                 </p>
               </div>
               <Button type="button" disabled={busy} onClick={() => void rematch()}>
@@ -138,7 +139,7 @@ export function UnmatchedScreen() {
               </Button>
             </div>
             {report.pathMap.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No path map yet. Connect Immich, then match again.</p>
+              <p className="text-sm text-muted-foreground">No folders listed yet. Connect Immich, then match again.</p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-border">
                 <table className="w-full min-w-[36rem] text-left text-xs">
@@ -161,26 +162,31 @@ export function UnmatchedScreen() {
             )}
             {busy && matchProgress ? <MatchProgressBar progress={matchProgress} /> : null}
           </section>
+          </Reveal>
           {report.items.length === 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle>Every file is matched</CardTitle>
-                <CardDescription>This scan has no unmatched files in the visible groups.</CardDescription>
+                <CardDescription>All files in your groups are linked to Immich.</CardDescription>
               </CardHeader>
             </Card>
           ) : null}
+          <Reveal index={1}>
           <ReasonSection
-            title="Outside the path map"
-            hint="The scan path does not start with any scan folder above. Mount that folder so it sits under a mapped path, then match again."
+            title="Not in a known folder"
+            hint="These files aren't in any of the folders listed above. Make their folder available under one of those paths, then match again."
             groups={noMap}
             showOriginal={false}
           />
+          </Reveal>
+          <Reveal index={2}>
           <ReasonSection
-            title="Mapped, missing in Immich"
-            hint="The scan path was translated, but no asset was linked. When two files would share a path, Immich keeps the uploaded name and stores the file as name+1.ext, then +2. Match again retries that lookup. If the Immich path itself differs from the one shown here, fix the path map first."
+            title="Not found in Immich"
+            hint="The folder is known, but Immich has no matching photo. Match again to retry. If the Immich path shown below looks wrong, check the folders listed above."
             groups={noAsset}
             showOriginal
           />
+          </Reveal>
         </div>
       ) : null}
     </AppShell>
@@ -255,7 +261,9 @@ function UnmatchedThumb({ item }: { item: UnmatchedFile }) {
         decoding="async"
         onLoad={() => setReady(true)}
         onError={() => setFailed(true)}
-        className={ready ? "size-14 rounded-md bg-muted object-cover" : "size-14 rounded-md object-cover opacity-0"}
+        className={ready
+            ? "size-14 rounded-md bg-muted object-cover transition-opacity duration-300"
+            : "size-14 rounded-md object-cover opacity-0 transition-opacity duration-300"}
         title={item.name}
       />
     </span>

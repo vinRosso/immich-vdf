@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { RestoreGroupButton, ResultGroupCard } from "@/components/group-result-card";
-import { GroupCardGridSkeleton } from "@/components/skeletons";
+import { GroupCardGridSkeleton, Reveal } from "@/components/skeletons";
 import { Viewer } from "@/components/viewer";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,7 +79,7 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
         <h1 className="font-heading text-4xl">{title} ignored</h1>
       </div>
       <p className="mt-2 text-sm whitespace-nowrap text-muted-foreground">
-        {title} groups stay hidden while they have the same files. If a later scan adds a file, the group shows up again.
+        Ignored groups stay hidden. A group comes back if a later scan finds a new matching file.
       </p>
       {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
       {!cards ? (
@@ -91,29 +91,32 @@ export function IgnoredScreen({ section }: { section: SectionId }) {
         <Card className="mt-6">
           <CardHeader>
             <CardTitle>Nothing is ignored</CardTitle>
-            <CardDescription>Groups you dismiss from {title} are listed here until you restore them.</CardDescription>
+            <CardDescription>Groups you ignore in {title} show up here, so you can bring them back.</CardDescription>
           </CardHeader>
         </Card>
       ) : null}
       {cards && cards.length > 0 ? (
         <div className={resultsCardGridClass(DEFAULT_RESULTS_CARD_SIZE) + " mt-6"}>
-          {cards.map((card) =>
+          {cards.map((card, index) =>
             card.group ? (
-              <ResultGroupCard
-                key={card.entry.key}
-                section={section}
-                group={card.group}
-                onSelect={() => setOpenGroupId(card.group!.groupId)}
-                topRight={<RestoreGroupButton onClick={() => void restore(card.entry.key)} />}
-              />
+              <Reveal key={card.entry.key} index={index}>
+                <ResultGroupCard
+                  section={section}
+                  group={card.group}
+                  onSelect={() => setOpenGroupId(card.group!.groupId)}
+                  topRight={<RestoreGroupButton onClick={() => void restore(card.entry.key)} />}
+                />
+              </Reveal>
             ) : (
-              <Card key={card.entry.key} className="flex flex-col justify-between p-4">
-                <div>
-                  <p className="font-medium">{card.entry.labels.join(", ") || card.entry.groupId}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Group no longer in scan results</p>
-                </div>
-                <RestoreGroupButton onClick={() => void restore(card.entry.key)} />
-              </Card>
+              <Reveal key={card.entry.key} index={index}>
+                <Card className="flex h-full flex-col justify-between p-4">
+                  <div>
+                    <p className="font-medium">{card.entry.labels.join(", ") || card.entry.groupId}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Not in the latest scan</p>
+                  </div>
+                  <RestoreGroupButton onClick={() => void restore(card.entry.key)} />
+                </Card>
+              </Reveal>
             ),
           )}
         </div>

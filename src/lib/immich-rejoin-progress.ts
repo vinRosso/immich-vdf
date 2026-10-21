@@ -38,7 +38,7 @@ export function tryBeginRejoin(): boolean {
     running: true,
     percent: 0,
     label: "Starting",
-    detail: "Connecting to match job…",
+    detail: "Getting started…",
     indeterminate: true,
   };
   return true;

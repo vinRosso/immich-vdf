@@ -17,22 +17,22 @@ const SERVER_PHASES = [
   },
   {
     test: /Native FFmpeg libraries not found|Downloading FFmpeg|Checking the FFmpeg download|Installing the FFmpeg/i,
-    label: "Setting up native FFmpeg",
-    detail: "Downloading the FFmpeg libraries once...",
+    label: "Setting up faster scanning",
+    detail: "A one-time download, this can take a minute…",
   },
   {
     test: /Reading capture dates/i,
     label: "Reading capture dates",
-    detail: "Dates from Immich, then from the files…",
+    detail: "Finding when each file was taken…",
   },
-  { test: /reusing last compare/i, label: "Reusing last compare", detail: "Library unchanged…" },
-  { test: /Matching Immich library/i, label: "Matching Immich assets", detail: "Linking files to the library…" },
+  { test: /reusing last compare/i, label: "Reusing last compare", detail: "Nothing has changed since the last scan…" },
+  { test: /Matching Immich library/i, label: "Matching Immich assets", detail: "Linking files to Immich…" },
   { test: /Reading Immich stacks/i, label: "Reading Immich stacks", detail: "Checking existing stacks…" },
-  { test: /Processing results/i, label: "Processing results", detail: "Reading file metadata…" },
+  { test: /Processing results/i, label: "Processing results", detail: "Reading file details…" },
   {
     test: /Grouping images by file name and time|Prefix groups reused|groups from saved times|Joining saved groups/i,
     label: "Grouping by name and time",
-    detail: "Applying burst and capture-time groups…",
+    detail: "Grouping photos taken close together…",
   },
   { test: /Finishing up/i, label: "Finishing up", detail: "Preparing your results…" },
 ] as const;
@@ -87,7 +87,7 @@ const STAGE_RE = /\s{2}\(([A-Za-z][^()]*?)(?:\s+(\d+)\/(\d+))?\)\s*$/;
  * embeddings) looked like a stuck "Hashing files" bar. Texts are the English ones in VDF.Core/Assets/Locales/en.json.
  */
 const STAGES = [
-  { test: /^computing AI embeddings$/i, label: "Computing AI embeddings", detail: "Finishing the AI frames…" },
+  { test: /^computing AI embeddings$/i, label: "Analysing with AI", detail: "Almost done…" },
   { test: /^validating duplicate groups$/i, label: "Checking duplicate groups", detail: null },
   { test: /^comparing partial clips$/i, label: "Comparing partial clips", detail: null },
   { test: /^verifying partial clips$/i, label: "Verifying partial clips", detail: null },
@@ -146,7 +146,7 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
     return {
       percent: 0,
       label: "Preparing comparison",
-      detail: "Checking files and building the compare list…",
+      detail: "Getting files ready to compare…",
       indeterminate: true,
     };
   }
@@ -174,7 +174,7 @@ export function parseScanProgress(lines: string[]): ScanProgressInfo {
     return {
       percent: 100,
       label: "Finishing comparison",
-      detail: "Writing compare output (large libraries can take a minute)…",
+      detail: "Saving results (large libraries can take a minute)…",
       indeterminate: true,
     };
   }

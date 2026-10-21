@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { resultsGridColumns, resultsGridGap, visibleRowRange } from "@/lib/results-sort";
 
 const OVERSCAN_ROWS = 2;
+const PAGE_PADDING = 48;
 
 type GridState = {
   columns: number;
@@ -27,6 +28,12 @@ export function ResultsGrid<T>({
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<GridState | null>(null);
+  // Cells in the first window fade in one after another. Cells that mount while scrolling later appear instantly.
+  const [intro, setIntro] = useState(true);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIntro(false), INTRO_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const grid = gridRef.current;
@@ -40,7 +47,9 @@ export function ResultsGrid<T>({
         const node = gridRef.current;
         if (!node) return;
         const width = node.clientWidth;
-        const columns = resultsGridColumns(cardSize, window.innerWidth);
+        // Column counts were tuned for a grid that fills the window minus the page padding, so measure
+        // the grid itself: it is narrower when a side column sits next to it.
+        const columns = resultsGridColumns(cardSize, width + PAGE_PADDING);
         const gap = resultsGridGap(cardSize);
         if (width <= 0 || columns <= 0) return;
         const cardWidth = (width - gap * (columns - 1)) / columns;
@@ -116,11 +125,21 @@ export function ResultsGrid<T>({
 
   return (
     <div ref={gridRef} className="relative" style={{ height: height || undefined }}>
-      {cells.map((cell) => (
+      {cells.map((cell, index) => (
         <div
           key={getKey(cell.item)}
-          className="absolute"
-          style={{ top: cell.top, left: cell.left, width: cardWidth, height: cardHeight }}
+          className={
+            intro
+              ? "absolute animate-in fade-in-0 slide-in-from-bottom-1 duration-300 fill-mode-backwards motion-reduce:slide-in-from-bottom-0"
+              : "absolute"
+          }
+          style={{
+            top: cell.top,
+            left: cell.left,
+            width: cardWidth,
+            height: cardHeight,
+            animationDelay: intro ? `${Math.min(index, 10) * 35}ms` : undefined,
+          }}
         >
           {renderItem(cell.item)}
         </div>
@@ -128,6 +147,9 @@ export function ResultsGrid<T>({
     </div>
   );
 }
+
+/** Long enough for the last intro fade (10 × 35 ms delay + 300 ms) to finish before the class is dropped. */
+const INTRO_MS = 800;
 
 function scrollParent(node: HTMLElement): HTMLElement {
   let current = node.parentElement;
