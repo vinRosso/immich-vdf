@@ -15,13 +15,17 @@ nav_next_title: Review
 - [Missed runs](#missed-runs)
 - [Webhook](#webhook)
 
-**Add schedule** sets up a daily or weekly scan for that page. A schedule has its own matching settings, separate from the ones on the page.
+**Add schedule** sets up a daily or weekly scan for that page. The schedule sheet has three steps:
+
+1. **Frequency**: Off, Daily or Weekly, with the time and time zone.
+2. **Settings**: the schedule's own matching settings, separate from the ones on the page.
+3. **Webhook**: optional. See [Webhook](#webhook).
 
 Scheduled scans never stack, trash or delete anything. They only find duplicates for you to review.
 
-![Schedule dialog with the webhook](images/schedule.jpg)
+![The schedule sheet, with the Webhook step open](images/schedule.jpg)
 
-Times use the time zone you pick, not the server's. To stop the scans, delete the schedule. That also removes the webhook. Your scan settings stay as they are.
+Times use the time zone you pick, not the server's. To stop the scans, set **Frequency** to **Off** and confirm. That deletes the schedule and also removes the webhook. Your scan settings stay as they are.
 
 ## Missed runs
 
@@ -31,7 +35,7 @@ A scan is tried at most three times. If it still hasn't run after three tries or
 
 ## Webhook
 
-The webhook is a single URL for the whole app. It's called when a **scheduled** scan finishes, and also when one is skipped. Scans you start yourself don't call it.
+The webhook is a single URL for the whole app, set in the **Webhook** step of the schedule sheet. It's called when a **scheduled** scan finishes, and also when one is skipped. Scans you start yourself don't call it.
 
 **Send test** posts a sample message and waits up to 10 seconds for a reply. The URL must start with `http` or `https`. Loopback, link-local and cloud-metadata addresses are refused, but LAN addresses work.
 

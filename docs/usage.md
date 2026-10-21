@@ -14,7 +14,7 @@ nav_next_title: Two libraries
 
 - [Pages](#pages)
 
-Sign in with your `APP_PASSWORD`. Home shows the latest duplicate groups from Immich and from Files.
+Sign in with your `APP_PASSWORD`. Home has a card for each page. The card shows when the last scan finished, how many groups it found, how long it took, and how much space you can free. Below the cards, **Space freed so far** adds up the space that trashed duplicates has freed, split between Immich and Files.
 
 The two pages are independent, each with its own results.
 

@@ -26,5 +26,3 @@ Immich keeps showing the photo until it rescans that library.
 ## Ignore
 
 Ignoring a group keeps it out of later scans. The files stay where they are, and you can restore the group from **Ignored**.
-
-In a group, **Keep best, trash rest** and **Keep smallest, trash rest** trash everything else. **Keep selected** trashes every file you didn't select.

@@ -11,7 +11,7 @@ Find duplicate photos and videos, compare them side by side, and clear the ones 
 
 Use **Immich** for your Immich library. Use **Files** for an external library that Immich also reads.
 
-![Duplicate groups in an Immich library](images/app.jpg)
+![Duplicate groups in a library, on the Files page](images/app.jpg)
 
 > DISCLAIMER: This whole app is vibe coded. Run it on your own network or behind a reverse proxy, and don't expose it directly to the internet.
 

@@ -30,4 +30,4 @@ If only one file would be left behind, it's removed from the results, because a 
 
 ## Ignore
 
-**Ignore group** hides a group from later scans. The files stay where they are. You can bring a group back from **Ignored**.
+**Ignore group** hides a group from later scans. The files stay where they are. You can bring a group back from **Ignored**. A group also comes back on its own if a later scan finds a new matching file.
