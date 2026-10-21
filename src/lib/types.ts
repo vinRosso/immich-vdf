@@ -248,6 +248,8 @@ export type RuntimeInfo = {
   cliAvailable: boolean;
   cliPath: string;
   cliVersion: string | null;
+  /** `mode` is the VDF_NATIVE_FFMPEG setting; `available` is whether vdf-cli can load the FFmpeg 8 libraries (null when not checked). */
+  nativeFfmpeg: { mode: "on" | "off" | "auto"; available: boolean | null };
   serverTimeZone: string;
 };
 

@@ -1,5 +1,22 @@
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+
+/** A short vdf-cli call whose output is not wanted. Resolves with the exit code, or null when it did not run. */
+export function runCliQuietly(cliPath: string, args: string[], timeoutMs = 60_000, env?: NodeJS.ProcessEnv): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn(cliPath, args, { shell: false, stdio: "ignore", env });
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
 
 /**
  * Shared libraries the engine's native FFmpeg binding loads, with their major versions.
