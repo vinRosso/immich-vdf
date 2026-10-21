@@ -86,6 +86,25 @@ test("a stack that covers only part of a group stays visible", () => {
   assert.equal(next[0].items.find((file) => file.assetId === "a")?.stackId, "s");
 });
 
+test("a stack with one live member is not a stack and its stale id is cleared", () => {
+  // Immich keeps trashed members out of GET /stacks/:id, so a stack whose other members are in the trash reports one asset.
+  const groups = [
+    group("g", [
+      item("/mnt/a.jpg", "a"),
+      item("/mnt/b.jpg", "b", { stackId: "s", stackPrimary: true }),
+    ]),
+  ];
+  const stacks = [{ id: "s", primaryAssetId: "b", assets: [{ id: "b", originalPath: "/data/b.jpg" }] }];
+  const next = applyStackMembership(groups, stacks, maps);
+  assert.equal(next.length, 1);
+  assert.equal(next[0].items.length, 2);
+  assert.equal(
+    next[0].items.every((entry) => !entry.stackId && !entry.stackPrimary),
+    true,
+  );
+  assert.equal(dropCompleteStacks(next).length, 1);
+});
+
 test("a group that is exactly one stack is hidden", () => {
   const stacked = group("g", [
     item("/mnt/a.jpg", "a", { stackId: "s", stackPrimary: true }),

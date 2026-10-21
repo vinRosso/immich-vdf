@@ -128,7 +128,11 @@ export function applyChangedStackMembership(
   return applyStackMembership(cleared, stacks, maps);
 }
 
-export function applyStackMembership(groups: StoredGroup[], stacks: ImmichStack[], maps: PathMapEntry[]): StoredGroup[] {
+export function applyStackMembership(groups: StoredGroup[], allStacks: ImmichStack[], maps: PathMapEntry[]): StoredGroup[] {
+  // Immich leaves trashed members out of a stack, so one that lost the rest of its members reports a single asset.
+  // That is not a stack, and a stack id saved for it earlier (scan cache, stored results) is stale.
+  const stacks = allStacks.filter((stack) => stack.assets.length >= 2);
+  const dissolved = new Set(allStacks.filter((stack) => stack.assets.length < 2).map((stack) => stack.id));
   const byAsset = new Map<string, { stackId: string; primary: boolean; originalPath: string }>();
   for (const stack of stacks) {
     for (const asset of stack.assets) {
@@ -142,7 +146,7 @@ export function applyStackMembership(groups: StoredGroup[], stacks: ImmichStack[
 
   let current = groups.map((group) => ({
     ...group,
-    items: group.items.map((item) => annotate(item, byAsset)),
+    items: group.items.map((item) => annotate(releaseDissolved(item, dissolved), byAsset)),
   }));
 
   for (let pass = 0; pass < 8; pass += 1) {
@@ -158,6 +162,12 @@ export function applyStackMembership(groups: StoredGroup[], stacks: ImmichStack[
   }
 
   return current.map((group) => ({ ...group, items: orderGroupItems(group.items) }));
+}
+
+function releaseDissolved(item: StoredItem, dissolved: ReadonlySet<string>): StoredItem {
+  const stackId = itemStackId(item);
+  if (!stackId || !dissolved.has(stackId)) return item;
+  return { ...item, stackId: null, stackPrimary: false };
 }
 
 function annotate(item: StoredItem, byAsset: Map<string, { stackId: string; primary: boolean; originalPath: string }>): StoredItem {

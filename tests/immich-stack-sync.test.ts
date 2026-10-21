@@ -64,7 +64,7 @@ test("fetch-shaped full stack membership inserts every member after a thin list 
   ];
   const groups = [group("g", [item("/mnt/a.jpg", "a"), item("/mnt/x.jpg", "x")])];
   const annotated = applyStackMembership(groups, thin, maps);
-  assert.equal(annotated[0].items.find((entry) => entry.assetId === "a")?.stackId, "s");
+  assert.equal(annotated[0].items.find((entry) => entry.assetId === "a")?.stackId ?? null, null);
   assert.equal(annotated[0].items.some((entry) => entry.assetId === "b"), false);
 
   const expanded = dropCompleteStacks(applyStackMembership(annotated, full, maps));
