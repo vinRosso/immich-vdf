@@ -7,8 +7,9 @@ import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { posterSrc } from "@/components/group-result-card";
 import { ImmichIcon } from "@/components/icons/immich-icon";
-import { HomeGroupGridSkeleton, ThumbnailSkeleton } from "@/components/skeletons";
-import { formatClock, formatScanDuration } from "@/lib/format";
+import { HomeGroupGridSkeleton, Reveal, ThumbnailSkeleton } from "@/components/skeletons";
+import { SpaceFreedCard } from "@/components/space-freed-card";
+import { formatBytes, formatClock, formatScanDuration } from "@/lib/format";
 import { DEFAULT_RESULTS_GROUP_SORT, isResultsGroupSortId, resultsSortStorageKey } from "@/lib/results-sort";
 import { sectionLabel } from "@/lib/section-label";
 import { useClientMounted } from "@/lib/use-client-mounted";
@@ -33,18 +34,18 @@ export function HomeScreen() {
     let cancelled = false;
     const serverSort = previewSort("server");
     const immichSort = previewSort("immich");
-    Promise.all([
-      api<ResultsPreviewResponse>(`/api/results?section=server&preview=1&sort=${serverSort}&limit=${PREVIEW_SLOTS}`),
-      api<ResultsPreviewResponse>(`/api/results?section=immich&preview=1&sort=${immichSort}&limit=${PREVIEW_SLOTS}`),
-    ])
-      .then(([nextServer, nextImmich]) => {
-        if (cancelled) return;
-        setServer(nextServer);
-        setImmich(nextImmich);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load groups");
-      });
+    // Each hub fills in as soon as its own preview arrives, so the faster library never waits on the slower one.
+    function load(section: SectionId, sort: string, set: (next: ResultsPreviewResponse) => void) {
+      api<ResultsPreviewResponse>(`/api/results?section=${section}&preview=1&sort=${sort}&limit=${PREVIEW_SLOTS}`)
+        .then((next) => {
+          if (!cancelled) set(next);
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : "Could not load your results");
+        });
+    }
+    load("immich", immichSort, setImmich);
+    load("server", serverSort, setServer);
     return () => {
       cancelled = true;
     };
@@ -66,6 +67,9 @@ export function HomeScreen() {
               <HomeHubPlaceholder section="server" />
             </>
           )}
+        </div>
+        <div className="mx-auto mt-10 mb-2 w-full max-w-[420px] shrink-0">
+          <SpaceFreedCard variant="home" />
         </div>
       </div>
     </AppShell>
@@ -152,16 +156,22 @@ function SectionHub({
         ) : null}
         {results?.scanned && totalGroups === 0 ? (
           <div className="flex aspect-[5/2] w-full flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-white/[0.015] p-3 text-center">
-            <p className="text-sm font-medium text-foreground/80">Clean library</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">No duplicate groups in the latest scan</p>
+            <p className="text-sm font-medium text-foreground/80">No duplicates</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">The latest scan found none</p>
           </div>
         ) : null}
         {results && groups.length > 0 ? (
           <div className="grid w-full grid-cols-5 gap-1.5">
-            {groups.map((group) => (
-              <HomeGroupThumb key={group.groupId} section={section} group={group} href={href} />
+            {groups.map((group, index) => (
+              <Reveal key={group.groupId} index={index}>
+                <HomeGroupThumb section={section} group={group} href={href} />
+              </Reveal>
             ))}
-            {hasMore ? <HomeMoreThumb href={href} extra={totalGroups - previewCount} /> : null}
+            {hasMore ? (
+              <Reveal index={groups.length}>
+                <HomeMoreThumb href={href} extra={totalGroups - previewCount} />
+              </Reveal>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -189,7 +199,7 @@ function HomeGroupThumb({ section, group, href }: { section: SectionId; group: R
           onLoad={() => setReady(true)}
           onError={() => setReady(true)}
           className={cn(
-            "size-full object-cover",
+            "size-full object-cover transition-opacity duration-300",
             ready ? "" : "opacity-0",
             group.immichArchived && "scale-110 blur-2xl",
           )}
@@ -240,6 +250,12 @@ function LastRunSummary({ results }: { results: ResultsPreviewResponse | null })
       Last run{" "}
       <span className="font-semibold text-foreground">{stamp}</span>
       {parts.length > 0 ? <> · {parts.join(" · ")}</> : null}
+      {results.reclaimableBytes > 0 ? (
+        <>
+          <br />
+          <span className="font-semibold text-primary">{formatBytes(results.reclaimableBytes)} can be freed</span>
+        </>
+      ) : null}
     </>
   );
 }

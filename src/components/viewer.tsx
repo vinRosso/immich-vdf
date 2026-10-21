@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { STRIP_FRAMES, TRANSCODE_FULL_HEIGHT, TRANSCODE_START_HEIGHT, sampleTimes } from "@/lib/ffmpeg-args";
 import { formatBytes, formatDuration, formatMediaDate, formatPercent } from "@/lib/format";
+import { publishUndo, undoIgnore, undoTrash } from "@/lib/undo-events";
 import {
   clampImageView,
   DEFAULT_RELATIVE_IMAGE_VIEW,
@@ -35,7 +36,7 @@ import {
 import { groupHasImmichArchived } from "@/lib/immich-archived";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import { flagLabel } from "@/lib/prefix-flag";
-import { publishTrashSavedBytes } from "@/lib/trash-events";
+import { publishTrashSaved } from "@/lib/trash-events";
 import type { ClientGroup, ClientItem, MediaInfo, SectionId } from "@/lib/types";
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Star, Volume2, VolumeX, XIcon } from "lucide-react";
 
@@ -196,12 +197,21 @@ export function Viewer({
     setPending(label);
     setError(null);
     try {
-      const result = await api<{ totalSavedBytes?: number }>(url, { method, body: JSON.stringify(body) });
-      if (typeof result.totalSavedBytes === "number") publishTrashSavedBytes(result.totalSavedBytes);
+      const result = await api<{ totalSavedBytes?: number; undoId?: string | null; moved?: number; key?: string }>(url, {
+        method,
+        body: JSON.stringify(body),
+      });
+      if (typeof result.totalSavedBytes === "number") publishTrashSaved();
+      if (result.undoId) {
+        const count = result.moved ?? 0;
+        publishUndo({ message: `Trashed ${count} ${count === 1 ? "file" : "files"}`, undo: undoTrash([result.undoId]) });
+      } else if (result.key && url === "/api/ignore" && method === "POST") {
+        publishUndo({ message: "Group ignored", undo: undoIgnore(section, result.key) });
+      }
       await onActionDone();
       setSelected(new Set());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed");
+      setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
     } finally {
       setPending(null);
     }
@@ -215,7 +225,7 @@ export function Viewer({
   function stackPrimary(item: ClientItem | undefined) {
     if (!group || !item) return;
     if (!item.assetId) {
-      setError("That file is not a matched Immich asset");
+      setError("That file isn't linked to Immich yet");
       return;
     }
     void act("Stack", "/api/immich/stack", { groupId: group.groupId, primaryId: item.assetId });
@@ -229,7 +239,7 @@ export function Viewer({
       return;
     }
     if (chosen.some((item) => !item.assetId)) {
-      setError("A selected file is not a matched Immich asset");
+      setError("One of the selected files isn't linked to Immich yet");
       return;
     }
     const preferred = chosen.find((item) => item.path === bestPath);
@@ -263,7 +273,7 @@ export function Viewer({
     const targets = chosen.length > 0 ? chosen : loose;
     const assetIds = targets.flatMap((item) => (item.assetId ? [item.assetId] : []));
     if (assetIds.length === 0) {
-      setError("Choose a file that is not already in a stack");
+      setError("Choose a file that isn't in a stack yet");
       return;
     }
     void act("Add to stack", "/api/immich/stack/join", { groupId: group.groupId, assetIds });
@@ -307,7 +317,7 @@ export function Viewer({
   function keepOne(item: ClientItem | undefined) {
     if (!group || !item) return;
     if (section === "immich" && !item.assetId) {
-      setError("That file is not a matched Immich asset");
+      setError("That file isn't linked to Immich yet");
       return;
     }
     void act(
@@ -323,7 +333,7 @@ export function Viewer({
     const victims = mode === "keep" ? group.items.filter((item) => !selected.has(item.path)) : chosen;
     if (victims.length === 0 || victims.length === group.items.length) return;
     if (section === "immich" && victims.some((item) => !item.assetId)) {
-      setError("A selected file is not a matched Immich asset");
+      setError("One of the selected files isn't linked to Immich yet");
       return;
     }
     void act(
@@ -528,7 +538,19 @@ export function Viewer({
             </Button>
           </DialogClose>
           <DialogTitle className="sr-only">Compare group</DialogTitle>
-          {index >= 0 ? <DialogDescription className="shrink-0 text-left">{`Group ${index + 1} of ${total}`}</DialogDescription> : null}
+          {index >= 0 ? (
+            <DialogDescription className="shrink-0 text-left tabular-nums">
+              {`Group ${index + 1} of ${total}`}
+              {group && bestItem ? (
+                <>
+                  {" · "}
+                  <span className="font-semibold text-primary">
+                    {formatBytes(group.items.reduce((sum, item) => sum + item.sizeBytes, 0) - bestItem.sizeBytes)} can be freed
+                  </span>
+                </>
+              ) : null}
+            </DialogDescription>
+          ) : null}
           <div className="flex min-w-0 flex-1 flex-wrap justify-center gap-2">
             {immich ? (
               <>
@@ -689,10 +711,10 @@ export function Viewer({
           {immichArchiveLocked ? (
             <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/70 p-6 backdrop-blur-sm">
               <p className="max-w-sm text-center text-sm text-muted-foreground">
-                This group includes archived Immich photos. Viewing is optional and applies only to this group.
+                This group includes archived Immich photos. Showing them applies to this group only.
               </p>
               <Button type="button" onClick={() => setImmichArchivedRevealed(true)}>
-                View archived content
+                Show archived photos
               </Button>
             </div>
           ) : null}
@@ -1271,7 +1293,7 @@ function Player({
           className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]"
         >
           <Loader2 className="size-8 animate-spin" aria-hidden />
-          <span className="text-xs">Transcoding…</span>
+          <span className="text-xs">Preparing video…</span>
         </div>
       ) : null}
       {!item.isImage ? (
@@ -1323,7 +1345,7 @@ function LoadingImage({ src, className }: { src: string; className?: string }) {
         src={src}
         onLoad={() => setReady(true)}
         onError={() => setReady(true)}
-        className={cn(className, ready ? "opacity-100" : "opacity-0")}
+        className={cn(className, "transition-opacity duration-300", ready ? "opacity-100" : "opacity-0")}
       />
     </span>
   );
@@ -1405,7 +1427,7 @@ function ImmichAlbumTags({ assetId, sync }: { assetId: string; sync: ImmichGroup
       setPendingRemove(null);
       refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Album update failed");
+      setActionError(err instanceof Error ? err.message : "Could not update the album");
     } finally {
       setBusy(false);
     }

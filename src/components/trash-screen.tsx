@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { baseName, formatBytes, mountMediaPath } from "@/lib/format";
 import { sectionLabel } from "@/lib/section-label";
-import { publishTrashSavedBytes } from "@/lib/trash-events";
+import { publishTrashSaved } from "@/lib/trash-events";
 import type { TrashEntry } from "@/lib/types";
 
 function trashKey(entry: TrashEntry): string {
@@ -102,8 +102,8 @@ export function TrashScreen() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ totalSavedBytes: number }>("/api/trash", { method: "DELETE" });
-      publishTrashSavedBytes(result.totalSavedBytes);
+      await api("/api/trash", { method: "DELETE" });
+      publishTrashSaved();
       setConfirming(false);
       await load();
     } catch (err) {
@@ -157,11 +157,11 @@ export function TrashScreen() {
           </div>
         </div>
         <p className="mt-2 shrink-0 text-sm whitespace-nowrap text-muted-foreground">
-          When you trash duplicates from {sectionLabel("server")}, they land in .vdf-trash on the same mount. Emptying trash deletes them for good.
+          Duplicates you trash from {sectionLabel("server")} wait here. Emptying the trash deletes them for good.
         </p>
         {error ? <p className="mt-2 shrink-0 text-sm text-destructive">{error}</p> : null}
         {!entries ? <TrashListSkeleton /> : null}
-        {entries && entries.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">Nothing is in .vdf-trash.</p> : null}
+        {entries && entries.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">The trash is empty.</p> : null}
         {hasFiles ? (
           <>
             <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
@@ -184,13 +184,14 @@ export function TrashScreen() {
               </Button>
             </div>
             <ul className="mt-3 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
-                {sorted.map((entry) => {
+                {sorted.map((entry, index) => {
                   const key = trashKey(entry);
                   const restoring = restoringKey === key;
                   return (
                     <li
                       key={key}
-                      className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-2 py-2"
+                      className="flex animate-in items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-2 py-2 duration-300 fade-in-0 fill-mode-backwards slide-in-from-bottom-1 motion-reduce:slide-in-from-bottom-0"
+                      style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
                     >
                       <button
                         type="button"

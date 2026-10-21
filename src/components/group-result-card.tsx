@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { groupHasImmichArchived } from "@/lib/immich-archived";
 import { BURST_LABEL, PREFIX_FLAG } from "@/lib/prefix-flag";
+import { groupReclaimBytes } from "@/lib/reclaim";
 import type { ClientGroup, SectionId } from "@/lib/types";
 
 export function ResultGroupCard({
@@ -56,7 +57,7 @@ export function ResultGroupCard({
         <PosterImage src={posterSrc(section, best)} sensitive={blurPoster} />
         <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/85 to-transparent px-3 pt-10 pb-2.5 text-sm text-white">
           <span className="tabular-nums">{similarityRange(group)}</span>
-          <span className="tabular-nums">{formatBytes(group.items.reduce((sum, item) => sum + item.sizeBytes, 0))}</span>
+          <span className="font-semibold tabular-nums text-[oklch(0.86_0.1_302)]">−{formatBytes(groupReclaimBytes(group.items))}</span>
         </span>
       </div>
       <span className="pointer-events-none absolute top-2 left-2 flex size-[1.875rem] items-center justify-center rounded-full bg-background/90 text-xs font-semibold tabular-nums text-foreground shadow-sm">
@@ -115,11 +116,11 @@ function PosterImage({ src, sensitive = false }: { src: string; sensitive?: bool
         className={
           ready
             ? sensitive
-              ? "aspect-[4/3] w-full scale-110 object-cover blur-2xl"
-              : "aspect-[4/3] w-full object-cover"
+              ? "aspect-[4/3] w-full scale-110 object-cover blur-2xl transition-opacity duration-300"
+              : "aspect-[4/3] w-full object-cover transition-opacity duration-300"
             : sensitive
-              ? "aspect-[4/3] w-full scale-110 object-cover opacity-0 blur-2xl"
-              : "aspect-[4/3] w-full object-cover opacity-0"
+              ? "aspect-[4/3] w-full scale-110 object-cover opacity-0 blur-2xl transition-opacity duration-300"
+              : "aspect-[4/3] w-full object-cover opacity-0 transition-opacity duration-300"
         }
       />
     </span>

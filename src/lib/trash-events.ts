@@ -1,5 +1,6 @@
 export const TRASH_SAVED_EVENT = "vdf:trash-saved";
 
-export function publishTrashSavedBytes(bytes: number): void {
-  window.dispatchEvent(new CustomEvent<number>(TRASH_SAVED_EVENT, { detail: bytes }));
+/** Tells the saved-space card that the numbers changed. The card reads them again itself. */
+export function publishTrashSaved(): void {
+  window.dispatchEvent(new Event(TRASH_SAVED_EVENT));
 }

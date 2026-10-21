@@ -4,9 +4,10 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
-import { FolderPicker, HintWrap } from "@/components/folder-picker";
-import { ScanProfilePicker } from "@/components/scan-profile-picker";
-import { TimezonePicker } from "@/components/timezone-picker";
+import { FolderPicker } from "@/components/folder-picker";
+import { ScanSettingsSheet, scanSettingsSummary } from "@/components/scan-settings-sheet";
+import { ScheduleSheet } from "@/components/schedule-sheet";
+import { SpaceFreedCard } from "@/components/space-freed-card";
 import { ScanLog, useScanFeed } from "@/components/scan-log";
 import { ResultGroupCard } from "@/components/group-result-card";
 import { useGroupMergeDrag } from "@/components/use-group-merge-drag";
@@ -14,8 +15,9 @@ import { ResultsGrid } from "@/components/results-grid";
 import {
   GroupCardGridSkeleton,
   ImmichConnectionSkeleton,
+  Reveal,
   ResultsToolbarSkeleton,
-  SectionSettingsSkeleton,
+  SectionRailSkeleton,
 } from "@/components/skeletons";
 import { Viewer } from "@/components/viewer";
 import { Badge } from "@/components/ui/badge";
@@ -25,17 +27,16 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatBytes, formatClock, formatCompactThousands, formatNextRun, formatScanDuration } from "@/lib/format";
+import { totalReclaimBytes } from "@/lib/reclaim";
+import { RESULTS_CHANGED_EVENT, publishUndo, undoIgnore, undoTrash } from "@/lib/undo-events";
 import { sectionLabel } from "@/lib/section-label";
-import { timeWindowHint } from "@/lib/time-window";
 import { mergeClientGroups } from "@/lib/merge-groups";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
@@ -49,13 +50,11 @@ import {
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
 import { cn } from "cn";
-import { CheckCircle2, EyeOff, LayoutGrid, Loader2, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronRight, Clock, EyeOff, LayoutGrid, Loader2, SlidersHorizontal, Trash2, XCircle } from "lucide-react";
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
-import { defaultScan, normalizeScan } from "@/lib/scan-defaults";
-import { publishTrashSavedBytes } from "@/lib/trash-events";
+import { matchingDefaults, normalizeScan } from "@/lib/scan-defaults";
+import { publishTrashSaved } from "@/lib/trash-events";
 import type { ClientGroup, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
-
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 type Draft = {
   scan: ScanSettings;
@@ -67,33 +66,55 @@ type Draft = {
   clearWebhook: boolean;
 };
 
-function SectionHeaderLinks({
-  section,
-  trashCount,
-  className,
-}: {
-  section: SectionId;
-  trashCount: number;
-  className?: string;
-}) {
+const railCardClass =
+  "rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.035] to-white/[0.01] p-3";
+
+/** Small, quiet links to the ignored list and (Files only) the trash. */
+function SectionQuietLinks({ section, ignoredCount, trashCount }: { section: SectionId; ignoredCount: number; trashCount: number }) {
+  const linkClass = "inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground";
   return (
-    <div className={cn("flex shrink-0 items-center gap-2", className)}>
-      <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 rounded-full px-3.5 font-normal">
-        <a href={`/ignored?section=${section}`}>
-          <EyeOff className="size-3.5 shrink-0 opacity-80" aria-hidden />
-          Ignored
-        </a>
-      </Button>
+    <div className="flex items-center gap-4 px-1 pt-1 text-xs">
+      <a href={`/ignored?section=${section}`} className={linkClass}>
+        <EyeOff className="size-3.5 shrink-0" aria-hidden />
+        {ignoredCount > 0 ? `${ignoredCount} Ignored` : "Ignored"}
+      </a>
       {section === "server" ? (
-        <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 rounded-full px-3.5 font-normal">
-          <a href="/trash">
-            <Trash2 className="size-3.5 shrink-0 opacity-80" aria-hidden />
-            Trash
-            {trashCount > 0 ? <span className="tabular-nums text-foreground">{trashCount}</span> : null}
-          </a>
-        </Button>
+        <a href="/trash" className={linkClass}>
+          <Trash2 className="size-3.5 shrink-0" aria-hidden />
+          {trashCount > 0 ? `${trashCount} Trashed` : "Trash"}
+        </a>
       ) : null}
     </div>
+  );
+}
+
+function RailButton({
+  icon,
+  title,
+  subtitle,
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left transition-colors outline-none hover:border-primary/40 hover:bg-white/[0.04] focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+    >
+      <span className="flex size-[1.875rem] shrink-0 items-center justify-center rounded-lg bg-accent text-primary [&_svg]:size-4">{icon}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-[13px] font-medium">{title}</span>
+        <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+    </button>
   );
 }
 
@@ -105,42 +126,49 @@ export function SectionScreen({ section }: { section: SectionId }) {
   const [results, setResults] = useState<ResultsResponse | null>(null);
   const [runs, setRuns] = useState<RunsResponse | null>(null);
   const [trash, setTrash] = useState<TrashEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const [matching, setMatching] = useState(false);
   const [matchProgress, setMatchProgress] = useState<RejoinProgress | null>(null);
 
+  /** Every request fills its own part of the page the moment it lands. The returned promise waits for all of them. */
   const reload = useCallback(async () => {
-    const [nextRuntime, nextSettings, nextResults, nextRuns] = await Promise.all([
-      api<RuntimeInfo>("/api/runtime"),
-      api<PublicSettings>("/api/settings"),
-      api<ResultsResponse>(`/api/results?section=${section}`),
-      api<RunsResponse>("/api/runs"),
-    ]);
-    setRuntime(nextRuntime);
-    setSettings(nextSettings);
-    setResults(nextResults);
-    setRuns(nextRuns);
-    const saved = nextSettings[section];
-    setDraft({
-      scan: normalizeScan(saved.scan, section),
-      schedule: saved.schedule,
-      baseUrl: nextSettings.immich.baseUrl,
-      apiKey: "",
-      clearApiKey: false,
-      webhookUrl: "",
-      clearWebhook: false,
+    const resultsRequest = api<ResultsResponse>(`/api/results?section=${section}`).then((next) => {
+      setResults(next);
+      return next;
     });
-    if (section === "server") {
-      const listed = await api<{ entries: TrashEntry[] }>("/api/trash");
-      setTrash(listed.entries);
-    } else {
-      setTrash([]);
-    }
-    return nextResults;
+    const settingsRequest = api<PublicSettings>("/api/settings").then((nextSettings) => {
+      setSettings(nextSettings);
+      const saved = nextSettings[section];
+      setDraft({
+        scan: normalizeScan(saved.scan, section),
+        schedule: saved.schedule,
+        baseUrl: nextSettings.immich.baseUrl,
+        apiKey: "",
+        clearApiKey: false,
+        webhookUrl: "",
+        clearWebhook: false,
+      });
+    });
+    const runtimeRequest = api<RuntimeInfo>("/api/runtime").then(setRuntime);
+    const runsRequest = api<RunsResponse>("/api/runs").then(setRuns);
+    const trashRequest =
+      section === "server"
+        ? api<{ entries: TrashEntry[] }>("/api/trash").then((listed) => setTrash(listed.entries))
+        : Promise.resolve(setTrash([]));
+    const settled = await Promise.allSettled([
+      resultsRequest,
+      settingsRequest,
+      runtimeRequest,
+      runsRequest,
+      trashRequest,
+    ]);
+    const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    if (failed) throw failed.reason;
+    return resultsRequest;
   }, [section]);
 
   /** Just the results, for after a viewer action. The full reload also refetches settings, runs and trash and resets the form. */
@@ -162,14 +190,9 @@ export function SectionScreen({ section }: { section: SectionId }) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    reload()
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load this section");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    reload().catch((err: unknown) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : "Could not load this section");
+    });
     return () => {
       cancelled = true;
     };
@@ -203,7 +226,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
       running: true,
       percent: 0,
       label: "Starting",
-      detail: "Waiting for server…",
+      detail: "Getting started…",
       indeterminate: true,
     });
     try {
@@ -305,28 +328,11 @@ export function SectionScreen({ section }: { section: SectionId }) {
 
   function resetMatchingDefaults() {
     if (!draft) return;
-    const defaults = defaultScan(section);
-    setDraft({
-      ...draft,
-      scan: {
-        ...draft.scan,
-        threshold: defaults.threshold,
-        percent: defaults.percent,
-        parallelism: runtime?.suggestedParallelism ?? defaults.parallelism,
-        includeImages: defaults.includeImages,
-        usePhash: defaults.usePhash,
-        partialClip: defaults.partialClip,
-        aiMatching: defaults.aiMatching,
-        aiPartial: defaults.aiPartial,
-        compareHorizontallyFlipped: defaults.compareHorizontallyFlipped,
-        ignoreBlackPixels: defaults.ignoreBlackPixels,
-        ignoreWhitePixels: defaults.ignoreWhitePixels,
-        timeWindowDays: defaults.timeWindowDays,
-        prefixSeconds: defaults.prefixSeconds,
-      },
-    });
+    setDraft({ ...draft, scan: { ...draft.scan, ...matchingDefaults(section, runtime?.suggestedParallelism) } });
   }
 
+  const ignoredCount = results?.hiddenIgnored ?? 0;
+  const reclaimBytes = useMemo(() => (results?.scanned ? totalReclaimBytes(results.groups) : 0), [results]);
   const runningHere = feed.running && feed.section === section;
   const last = runs?.[section].last;
   const scanLatestCaption =
@@ -336,190 +342,195 @@ export function SectionScreen({ section }: { section: SectionId }) {
         ? `Latest: ${formatClock(last.at)}`
         : null;
   return (
-    <AppShell>
-      <div className="space-y-4">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
-          <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-end lg:gap-4">
-            <div className="flex items-center justify-between gap-3 lg:justify-start">
-              <h1 className="min-w-0 shrink-0 font-heading text-3xl sm:text-4xl">{sectionLabel(section)}</h1>
-              <SectionHeaderLinks section={section} trashCount={trash.length} className="lg:hidden" />
-            </div>
+    <AppShell wide>
+      <div className="scrollbar-subtle min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
+        <div className="grid gap-3 lg:h-full lg:grid-cols-[18rem_minmax(0,1fr)] lg:pl-6">
+          <aside
+            aria-label={`${sectionLabel(section)} controls`}
+            className="scrollbar-subtle flex min-h-0 flex-col gap-3.5 px-4 pt-5 pb-5 sm:px-6 lg:overflow-y-auto lg:px-0 lg:pr-0.5"
+          >
+            <h1 className="sr-only">{sectionLabel(section)}</h1>
             {draft ? (
-              <ScanProfilePicker
-                scan={draft.scan}
-                onChange={(scan) => setDraft({ ...draft, scan })}
-                className="lg:min-w-0"
-              />
-            ) : null}
-          </div>
-          <SectionHeaderLinks section={section} trashCount={trash.length} className="hidden shrink-0 lg:flex" />
-        </div>
-        <div className="flex min-w-0 flex-col gap-4">
-            {draft ? (
-              <>
-                <div>
-                  <div className="flex w-full flex-wrap items-center justify-start gap-x-4 gap-y-2 sm:gap-x-5 lg:flex-nowrap lg:justify-between lg:gap-x-4">
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-5 lg:flex-nowrap lg:gap-x-3 xl:gap-x-4">
-                      <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={draft.scan.threshold} onChange={(threshold) => setDraft({ ...draft, scan: { ...draft.scan, threshold } })} />
-                      <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={draft.scan.percent} onChange={(percent) => setDraft({ ...draft, scan: { ...draft.scan, percent } })} />
-                      <NumberField
-                        label="Window"
-                        hint={timeWindowHint(draft.scan.timeWindowDays)}
-                        value={draft.scan.timeWindowDays}
-                        onChange={(timeWindowDays) => setDraft({ ...draft, scan: { ...draft.scan, timeWindowDays } })}
-                      />
-                      <NumberField
-                        label="Burst"
-                        hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
-                        value={draft.scan.prefixSeconds}
-                        onChange={(prefixSeconds) => setDraft({ ...draft, scan: { ...draft.scan, prefixSeconds } })}
-                      />
-                      <NumberField
-                        label="Parallel"
-                        hint={
-                          runtime
-                            ? `How many jobs run at once for hashing, probes, and thumbnails. This machine has ${runtime.cpuCount} cores. Suggested: ${runtime.suggestedParallelism}. Maximum: ${runtime.maxParallelism}.`
-                            : "How many jobs run at once for hashing, probes, and thumbnails."
-                        }
-                        value={draft.scan.parallelism}
-                        onChange={(parallelism) => setDraft({ ...draft, scan: { ...draft.scan, parallelism } })}
-                      />
-                    </div>
-                    <div className="flex flex-wrap items-center justify-start gap-x-3 gap-y-1 lg:shrink-0 lg:flex-nowrap lg:overflow-x-auto">
-                      <Flag label="Images" hint="Include image files as well as video." checked={draft.scan.includeImages} onChange={(includeImages) => setDraft({ ...draft, scan: { ...draft.scan, includeImages } })} />
-                      <Flag label="pHash" hint="Perceptual hash instead of grayscale frame sampling." checked={draft.scan.usePhash} onChange={(usePhash) => setDraft({ ...draft, scan: { ...draft.scan, usePhash } })} />
-                      <Flag
-                        label="Mirrored"
-                        hint="Also compare each pair against a horizontally flipped version to catch mirror re-uploads. Roughly doubles comparison work."
-                        checked={draft.scan.compareHorizontallyFlipped}
-                        onChange={(compareHorizontallyFlipped) => setDraft({ ...draft, scan: { ...draft.scan, compareHorizontallyFlipped } })}
-                      />
-                      <Flag label="Partial clips" hint="Find a clip inside a longer file using audio fingerprints." checked={draft.scan.partialClip} onChange={(partialClip) => setDraft({ ...draft, scan: { ...draft.scan, partialClip } })} />
-                      <Flag label="AI match" hint="Neural embeddings for cropped, mirrored, or heavily edited copies. Downloads about 100 MB on first use." checked={draft.scan.aiMatching} onChange={(aiMatching) => setDraft({ ...draft, scan: { ...draft.scan, aiMatching } })} />
-                      <Flag label="AI partial" hint="Visual partial matches without audio. Downloads the AI components on first use." checked={draft.scan.aiPartial} onChange={(aiPartial) => setDraft({ ...draft, scan: { ...draft.scan, aiPartial } })} />
-                      <Button type="button" size="xs" variant="ghost" className="h-7 shrink-0 gap-1 text-muted-foreground" onClick={resetMatchingDefaults}>
-                        <RotateCcw className="size-3" />
-                        Reset defaults
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="flex items-center py-2" aria-hidden>
-                    <div className="h-px w-full bg-border" />
-                  </div>
-                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-x-4">
-                    {section === "server" ? (
-                      <div className="min-w-0 w-full space-y-1.5 md:flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <FolderPicker
-                            section={section}
-                            label="Include folders"
-                            hint="Folders inside the mount to scan, including every subfolder."
-                            values={draft.scan.includes}
-                            onChange={(includes) => setDraft({ ...draft, scan: { ...draft.scan, includes } })}
-                          />
-                          {draft.scan.includes.length === 0 ? (
-                            <p className="text-xs text-destructive">Add at least one folder.</p>
-                          ) : null}
-                        </div>
-                        <FolderPicker
-                          section={section}
-                          label="Exclude folders"
-                          hint="Folders to skip, including their subfolders."
-                          values={draft.scan.excludes}
-                          onChange={(excludes) => setDraft({ ...draft, scan: { ...draft.scan, excludes } })}
-                        />
-                      </div>
-                    ) : (
-                      <div className="min-w-0 w-full md:flex-1">
-                        <ImmichConnectionFields
-                          draft={draft}
-                          setDraft={setDraft}
-                          settings={settings}
-                          busy={busy}
-                          onSave={persistDraft}
-                          onReload={reload}
-                        />
-                      </div>
-                    )}
-                    <div className="flex w-full shrink-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between md:w-auto md:justify-end md:gap-3">
-                      <div className="flex min-w-0 flex-col gap-1 sm:items-end">
-                        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                          <p className="whitespace-nowrap text-[11px] leading-snug text-muted-foreground">
-                            {runs?.[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 shrink-0"
-                            onClick={() => setScheduleDialogOpen(true)}
-                            disabled={busy}
-                          >
-                            {draft.schedule.mode === "off" ? "Add schedule" : "Edit schedule"}
-                          </Button>
-                        </div>
-                        {notice ? <p className="text-[11px] leading-snug text-primary sm:text-right">{notice}</p> : null}
-                      </div>
-                      <ScheduleSettingsDialog
-                        open={scheduleDialogOpen}
-                        onOpenChange={setScheduleDialogOpen}
-                        section={section}
-                        draft={draft}
-                        settings={settings}
-                        runtime={runtime}
-                        busy={busy}
-                        hasActiveSchedule={draft.schedule.mode !== "off"}
-                        onSave={(slice) => save(slice)}
-                      />
-                      <div className="grid w-full gap-1 sm:w-max">
-                        <Button
-                          className="h-11 w-full min-w-[6.5rem] px-6 text-base"
-                          title={runtime && !runtime.cliAvailable ? "vdf-cli is not installed on this machine" : undefined}
-                          onClick={() => void scan()}
-                          disabled={busy || matching || feed.running || !runtime?.cliAvailable}
-                        >
-                          {runningHere ? "Scanning" : "Scan"}
-                        </Button>
-                        {scanLatestCaption ? (
-                          <p className="text-center text-[10px] leading-snug text-muted-foreground/80 sm:whitespace-nowrap">
-                            {scanLatestCaption}
-                          </p>
-                        ) : null}
-                        {feed.running ? (
-                          <Button size="sm" variant="outline" onClick={() => void api("/api/scan/cancel", { method: "POST" })}>
-                            Cancel
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
+              <Reveal className="flex flex-1 flex-col gap-3.5">
+                {results?.scanned ? (
+                  <p className="text-xs tabular-nums text-muted-foreground">
+                    {results.groups.length} {results.groups.length === 1 ? "group" : "groups"} ·{" "}
+                    <b className="font-semibold text-primary">{formatBytes(reclaimBytes)}</b> can be freed
+                  </p>
+                ) : null}
+                <div className="grid gap-1">
+                  <Button
+                    className="h-11 w-full min-w-[6.5rem] px-6 text-base"
+                    title={runtime && !runtime.cliAvailable ? "Scanning isn't available right now" : undefined}
+                    onClick={() => void scan()}
+                    disabled={busy || matching || feed.running || !runtime?.cliAvailable}
+                  >
+                    {runningHere ? "Scanning" : "Scan"}
+                  </Button>
+                  {scanLatestCaption ? (
+                    <p className="mt-1 text-center text-[11px] leading-snug text-muted-foreground/85">{scanLatestCaption}</p>
+                  ) : null}
+                  {feed.running ? (
+                    <Button size="sm" variant="outline" onClick={() => void api("/api/scan/cancel", { method: "POST" })}>
+                      Cancel
+                    </Button>
+                  ) : null}
                 </div>
-              </>
+                {matching && matchProgress ? <MatchProgress progress={matchProgress} /> : null}
+                <ScanLog
+                  lines={feed.section === section ? feed.lines : []}
+                  running={runningHere}
+                  startedAtMs={runningHere ? feed.startedAt : 0}
+                />
+                <div className="space-y-2">
+                  <RailButton
+                    icon={<SlidersHorizontal />}
+                    title="Scan settings"
+                    subtitle={scanSettingsSummary(draft.scan)}
+                    onClick={() => setSettingsOpen(true)}
+                  />
+                  <RailButton
+                    icon={<Clock />}
+                    title={draft.schedule.mode === "off" ? "Add schedule" : "Edit schedule"}
+                    subtitle={!runs ? "Checking schedule…" : runs[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
+                    disabled={busy}
+                    onClick={() => setScheduleDialogOpen(true)}
+                  />
+                </div>
+                {section === "immich" && results && results.unmatched > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-destructive/35 bg-destructive/[0.12] px-3 py-2.5 text-xs">
+                    <a
+                      href="/immich/unmatched"
+                      title="See the unmatched files"
+                      className="min-w-[8.5rem] flex-1 hover:underline"
+                    >
+                      <b className="font-semibold text-[oklch(0.8_0.12_18)]">{results.unmatched} unmatched</b> files can&apos;t be stacked or trashed yet.
+                    </a>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      disabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
+                      onClick={() => void matchAgain()}
+                    >
+                      Match again
+                    </Button>
+                  </div>
+                ) : null}
+                {notice ? <p className="text-[11px] leading-snug text-primary">{notice}</p> : null}
+                <SectionQuietLinks section={section} ignoredCount={ignoredCount} trashCount={trash.length} />
+                <div className="mt-auto space-y-3 pt-2">
+                  {section === "server" ? (
+                    <div className={cn(railCardClass, "space-y-2.5")}>
+                      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+                        <span>Folders</span>
+                      </div>
+                      <FolderPicker
+                        section={section}
+                        label="Include"
+                        dialogTitle="Include folders"
+                        hint="Folders to scan, including their subfolders."
+                        values={draft.scan.includes}
+                        onChange={(includes) => setDraft({ ...draft, scan: { ...draft.scan, includes } })}
+                      />
+                      {draft.scan.includes.length === 0 ? (
+                        <p className="text-xs text-destructive">Add at least one folder.</p>
+                      ) : null}
+                      <FolderPicker
+                        section={section}
+                        label="Exclude"
+                        dialogTitle="Exclude folders"
+                        hint="Folders to skip, including their subfolders."
+                        values={draft.scan.excludes}
+                        onChange={(excludes) => setDraft({ ...draft, scan: { ...draft.scan, excludes } })}
+                        dashed
+                      />
+                    </div>
+                  ) : (
+                    <div className={railCardClass}>
+                      <ImmichConnectionFields
+                        draft={draft}
+                        setDraft={setDraft}
+                        settings={settings}
+                        busy={busy}
+                        onSave={persistDraft}
+                        onReload={reload}
+                      />
+                    </div>
+                  )}
+                  <SpaceFreedCard />
+                </div>
+              </Reveal>
             ) : (
-              <SectionSettingsSkeleton />
+              <SectionRailSkeleton />
             )}
+          </aside>
+          <section
+            aria-label="Duplicate groups"
+            className="scrollbar-subtle min-h-0 px-4 pb-10 sm:px-6 lg:overflow-y-auto lg:pr-6 lg:pl-3.5"
+          >
+            {error ? <p className="pt-4 text-sm text-destructive">{error}</p> : null}
+            {results ? (
+              <Reveal index={1}>
+                <Results
+                  section={section}
+                  results={results}
+                  onReload={reload}
+                  onReloadResults={reloadResults}
+                  matching={matching}
+                  matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
+                  onMatchAgain={() => void matchAgain()}
+                />
+              </Reveal>
+            ) : (
+            <Results
+              section={section}
+              results={results}
+              onReload={reload}
+              onReloadResults={reloadResults}
+              matching={matching}
+              matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
+              onMatchAgain={() => void matchAgain()}
+            />
+            )}
+          </section>
         </div>
-      <div className="space-y-4">
-        <section className="space-y-4">
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          {matching && matchProgress ? <MatchProgress progress={matchProgress} /> : null}
-          <ScanLog
-            lines={feed.section === section ? feed.lines : []}
-            running={runningHere}
-            startedAtMs={runningHere ? feed.startedAt : 0}
-          />
-          <Results
+      </div>
+      {draft ? (
+        <>
+          <ScanSettingsSheet
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
             section={section}
-            results={results}
-            loading={loading}
-            onReload={reload}
-            onReloadResults={reloadResults}
-            matching={matching}
-            matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
-            onMatchAgain={() => void matchAgain()}
+            scan={draft.scan}
+            onChange={(scan) => setDraft({ ...draft, scan })}
+            runtime={runtime}
+            busy={busy}
+            canScan={!matching && !feed.running && Boolean(runtime?.cliAvailable)}
+            onReset={resetMatchingDefaults}
+            onSave={() => {
+              setSettingsOpen(false);
+              void save();
+            }}
+            onSaveAndScan={() => {
+              setSettingsOpen(false);
+              void scan();
+            }}
           />
-        </section>
-      </div>
-      </div>
+          <ScheduleSheet
+            open={scheduleDialogOpen}
+            onOpenChange={setScheduleDialogOpen}
+            section={section}
+            draft={draft}
+            settings={settings}
+            runtime={runtime}
+            busy={busy}
+            hasActiveSchedule={draft.schedule.mode !== "off"}
+            nextRunText={runs?.[section].nextRun ? formatNextRun(runs[section].nextRun) : null}
+            onSave={(slice) => save(slice)}
+          />
+        </>
+      ) : null}
     </AppShell>
   );
 }
@@ -550,7 +561,6 @@ function MatchProgress({ progress }: { progress: RejoinProgress }) {
 function Results({
   section,
   results,
-  loading,
   onReload,
   onReloadResults,
   matching,
@@ -559,7 +569,6 @@ function Results({
 }: {
   section: SectionId;
   results: ResultsResponse | null;
-  loading: boolean;
   onReload: () => Promise<ResultsResponse>;
   onReloadResults: () => Promise<ResultsResponse>;
   matching: boolean;
@@ -638,6 +647,14 @@ function Results({
   useEffect(() => {
     setGroupOverride(null);
   }, [results]);
+
+  useEffect(() => {
+    function refresh() {
+      void onReloadResults().catch(() => undefined);
+    }
+    window.addEventListener(RESULTS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(RESULTS_CHANGED_EVENT, refresh);
+  }, [onReloadResults]);
   const openIndex = openGroupId === null ? -1 : sortedGroups.findIndex((group) => group.groupId === openGroupId);
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
@@ -658,14 +675,15 @@ function Results({
 
   async function ignoreGroup(groupId: string) {
     const fromIndex = openGroupId === groupId ? openIndex : -1;
-    await api("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
+    const ignored = await api<{ key?: string }>("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
+    if (ignored.key) publishUndo({ message: "Group ignored", undo: undoIgnore(section, ignored.key) });
     await openGroupAfterRefresh(fromIndex, groupId);
   }
 
   function requestStackAll(keepSmallest: boolean) {
     const targets = sortedGroups.filter((group) => !group.items.some((item) => item.stackId) && group.items.some((item) => item.assetId));
     if (targets.length === 0) {
-      window.alert("Every visible group already belongs to an Immich stack.");
+      window.alert("All visible groups are already stacked.");
       return;
     }
     setBulkConfirm({ kind: "stack", keepSmallest, count: targets.length });
@@ -701,7 +719,7 @@ function Results({
       setOpenGroupId(null);
       await onReload();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Bulk stack failed");
+      window.alert(err instanceof Error ? err.message : "Could not stack the groups");
     } finally {
       setBulkBusy(false);
     }
@@ -710,13 +728,18 @@ function Results({
   async function trashAllGroups(keepSmallest: boolean) {
     if (sortedGroups.length === 0) return;
     setBulkBusy(true);
+    const undoIds: string[] = [];
     try {
       for (const group of sortedGroups) {
         const index = keepSmallest ? pickSmallestIndex(group.items) : pickPrimaryIndex(group.items);
         const keep = group.items[index >= 0 ? index : 0];
         if (!keep) continue;
         if (section === "server") {
-          await api("/api/trash", { method: "POST", body: JSON.stringify({ groupId: group.groupId, keepPath: keep.path }) });
+          const outcome = await api<{ undoId?: string | null }>("/api/trash", {
+            method: "POST",
+            body: JSON.stringify({ groupId: group.groupId, keepPath: keep.path }),
+          });
+          if (outcome.undoId) undoIds.push(outcome.undoId);
         } else if (keep.assetId) {
           await api("/api/immich/trash", {
             method: "POST",
@@ -726,16 +749,21 @@ function Results({
       }
       setOpenGroupId(null);
       await onReload();
-      const summary = await api<{ savedBytes: number }>("/api/trash?summary=1");
-      publishTrashSavedBytes(summary.savedBytes);
+      publishTrashSaved();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Bulk trash failed");
+      window.alert(err instanceof Error ? err.message : "Could not trash the copies");
+      // Groups trashed before the failure are gone from the saved results, so the grid has to catch up.
+      await onReload().catch(() => undefined);
     } finally {
+      // Offered even after a failure, so what was already trashed can still be taken back.
+      if (undoIds.length > 0) {
+        publishUndo({ message: `Trashed copies from ${undoIds.length} groups`, undo: undoTrash(undoIds) });
+      }
       setBulkBusy(false);
     }
   }
 
-  if (loading || !results) {
+  if (!results) {
     return (
       <div className="space-y-3">
         <ResultsToolbarSkeleton />
@@ -750,8 +778,8 @@ function Results({
           <CardTitle>No scan yet</CardTitle>
           <CardDescription className="max-w-prose text-sm leading-relaxed">
             {section === "server"
-              ? "Add folders inside the media mount and run a scan. Nothing is deleted until you trash it."
-              : "Connect Immich, map original paths onto the read-only library mount, then scan."}
+              ? "Add the folders to check, then run a scan. Nothing is removed until you choose to."
+              : "Connect Immich, then run a scan. Nothing is removed until you choose to."}
           </CardDescription>
         </CardHeader>
       </Card>
@@ -759,21 +787,10 @@ function Results({
   }
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-4 lg:gap-y-2 text-xs">
+      <div className="sticky top-0 z-20 flex flex-col gap-3 border-b border-white/[0.06] bg-background pt-4 pb-2.5 text-xs shadow-[0_0_0_100vmax_var(--background)] [clip-path:inset(0_-100vmax)] lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-4 lg:gap-y-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           {results.error ? <Badge variant="destructive">Failed</Badge> : null}
           {results.warning ? <Badge variant="secondary">{results.warning}</Badge> : null}
-          {results.hiddenIgnored > 0 ? <Badge variant="outline">{results.hiddenIgnored} ignored</Badge> : null}
-          {section === "immich" && results.unmatched > 0 ? (
-            <Badge asChild variant="destructive" className="relative z-10 cursor-pointer hover:bg-destructive/80">
-              <a href="/immich/unmatched" title="Open unmatched files and how to match them">
-                {results.unmatched} unmatched
-              </a>
-            </Badge>
-          ) : null}
-          <span className="text-muted-foreground">
-            {sortedGroups.length} {sortedGroups.length === 1 ? "group" : "groups"}
-          </span>
           {mergeError ? <span className="text-destructive">{mergeError}</span> : null}
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span className="sr-only">Sort groups</span>
@@ -830,7 +847,7 @@ function Results({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-sm whitespace-normal">
-                  Link these saved groups to Immich again without comparing files. This picks up stack changes for photos already in the groups. A new file still needs a scan.
+                  Refresh how these groups line up with Immich, without a new scan. Use it after changing stacks in Immich. New files still need a scan.
                 </TooltipContent>
               </Tooltip>
             ) : null}
@@ -890,7 +907,7 @@ function Results({
         <Card>
           <CardHeader>
             <CardTitle>No groups to review</CardTitle>
-            <CardDescription>This scan did not leave a visible duplicate group. Ignored groups stay hidden until a new file joins them.</CardDescription>
+            <CardDescription>Nothing to review right now. Ignored groups stay hidden until a new matching file turns up.</CardDescription>
           </CardHeader>
         </Card>
       ) : (
@@ -957,15 +974,15 @@ function Results({
             </DialogTitle>
             <DialogDescription>
               {bulkConfirm?.kind === "stack"
-                ? `Create Immich stacks for ${bulkConfirm.count} groups that are not already stacked, using ${
+                ? `Stack ${bulkConfirm.count} groups that aren't stacked yet, with ${
                     bulkConfirm.keepSmallest ? "the smallest file" : "the best-quality file"
-                  } as the stack primary.`
+                  } on top.`
                 : bulkConfirm
-                  ? `Trash duplicates in all ${bulkConfirm.count} visible groups and ${
+                  ? `Trash the extra copies in all ${bulkConfirm.count} groups and ${
                       bulkConfirm.keepSmallest
-                        ? "keep the smallest copy in each group."
-                        : "keep the best-quality copy in each group."
-                    }`
+                        ? "keep the smallest file in each."
+                        : "keep the best-quality file in each."
+                    }${section === "server" ? " You can restore them from Trash." : ""}`
                   : null}
             </DialogDescription>
           </DialogHeader>
@@ -1084,44 +1101,53 @@ function ImmichConnectionFields({
 
   if (showForm) {
     return (
-      <div className="min-w-0 space-y-2">
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-          <div className="grid w-full max-w-md grid-cols-1 items-center gap-x-2 gap-y-2 sm:grid-cols-[5.75rem_12rem]">
-            <Label htmlFor="base-url" className="text-xs text-muted-foreground sm:text-right">Immich URL</Label>
-            <Input
-              id="base-url"
-              className="h-8 w-full"
-              value={draft.baseUrl}
-              onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
-              placeholder="http://immich:2283"
-            />
-            <Label htmlFor="api-key" className="text-xs text-muted-foreground sm:text-right">API key</Label>
-            <Input
-              id="api-key"
-              className="h-8 w-full"
-              type="password"
-              value={draft.apiKey}
-              placeholder={settings?.immich.apiKeyConfigured ? "Saved on the server. Enter a new key to replace it." : "Paste an API key"}
-              onChange={(event) => setDraft({ ...draft, apiKey: event.target.value, clearApiKey: false })}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" disabled={busy || connecting} onClick={() => void connect()}>
-              {connecting ? (
-                <>
-                  <Loader2 className="size-3.5 animate-spin" />
-                  Connecting…
-                </>
-              ) : (
-                "Connect"
-              )}
-            </Button>
-            {credentialsSaved ? (
-              <Button type="button" size="sm" variant="ghost" disabled={connecting} onClick={() => setEditing(false)}>
+      <div className="min-w-0 space-y-2 text-xs text-muted-foreground">
+        <div>Immich connection</div>
+        <div className="grid w-full grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+          <Label htmlFor="base-url" className="text-xs text-muted-foreground justify-end">URL</Label>
+          <Input
+            id="base-url"
+            className="h-[30px] w-full font-mono text-xs md:text-xs"
+            value={draft.baseUrl}
+            onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
+            placeholder="http://immich:2283"
+          />
+          <Label htmlFor="api-key" className="text-xs text-muted-foreground justify-end">API key</Label>
+          <Input
+            id="api-key"
+            className="h-[30px] w-full text-xs md:text-xs"
+            type="password"
+            value={draft.apiKey}
+            placeholder={settings?.immich.apiKeyConfigured ? "Saved. Type to replace." : "Paste an API key"}
+            onChange={(event) => setDraft({ ...draft, apiKey: event.target.value, clearApiKey: false })}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button type="button" size="xs" disabled={busy || connecting} onClick={() => void connect()}>
+            {connecting ? (
+              <>
+                <Loader2 className="size-3 animate-spin" />
+                Connecting…
+              </>
+            ) : (
+              "Connect"
+            )}
+          </Button>
+          {credentialsSaved ? (
+            <>
+              <Button type="button" size="xs" variant="outline" disabled={connecting} onClick={() => setEditing(false)}>
                 Cancel
               </Button>
-            ) : null}
-          </div>
+              <button
+                type="button"
+                disabled={busy || connecting}
+                className="ml-auto text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                onClick={() => void disconnect()}
+              >
+                Disconnect
+              </button>
+            </>
+          ) : null}
         </div>
         {formError ? <p className="text-xs text-destructive">{formError}</p> : null}
       </div>
@@ -1134,6 +1160,17 @@ function ImmichConnectionFields({
 
   return (
     <div className="min-w-0 space-y-1.5">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>Immich connection</span>
+        <button
+          type="button"
+          disabled={busy || connecting}
+          className="transition-colors hover:text-foreground disabled:opacity-50"
+          onClick={() => setEditing(true)}
+        >
+          Edit
+        </button>
+      </div>
       {statusLoading ? (
         <ImmichConnectionSkeleton />
       ) : connected ? (
@@ -1168,450 +1205,8 @@ function ImmichConnectionFields({
           <span className="truncate font-mono text-foreground/90">{displayUrl}</span>
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={busy || connecting} onClick={() => setEditing(true)}>
-          Edit connection
-        </Button>
-        <Button type="button" size="sm" variant="ghost" disabled={busy || connecting} onClick={() => void disconnect()}>
-          Disconnect
-        </Button>
-      </div>
       {formError ? <p className="text-xs text-destructive">{formError}</p> : null}
     </div>
   );
-}
-
-function NumberField({ label, hint, value, onChange }: { label: string; hint: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <HintWrap text={hint} className="shrink-0">
-      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-        {label}
-        <Input
-          className="h-7 w-9 border-0 bg-transparent px-0.5 text-left text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent"
-          type="text"
-          inputMode="numeric"
-          aria-label={label}
-          value={value}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isFinite(next)) onChange(next);
-          }}
-        />
-      </label>
-    </HintWrap>
-  );
-}
-
-function Flag({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  const row = (
-    <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs">
-      <span>{label}</span>
-      <Switch size="sm" checked={checked} onCheckedChange={onChange} />
-    </label>
-  );
-  if (!hint) return row;
-  return <HintWrap text={hint}>{row}</HintWrap>;
-}
-
-type ScheduleDialogSlice = Pick<Draft, "schedule" | "webhookUrl"> & { scan: ScanSettings; webhookEdited: boolean };
-
-function ScheduleSettingsDialog({
-  open,
-  onOpenChange,
-  section,
-  draft,
-  settings,
-  runtime,
-  busy,
-  hasActiveSchedule,
-  onSave,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  section: SectionId;
-  draft: Draft;
-  settings: PublicSettings | null;
-  runtime: RuntimeInfo | null;
-  busy: boolean;
-  hasActiveSchedule: boolean;
-  onSave: (slice: Pick<Draft, "schedule" | "webhookUrl" | "clearWebhook">) => Promise<void>;
-}) {
-  const [local, setLocal] = useState<ScheduleDialogSlice | null>(null);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [webhookTesting, setWebhookTesting] = useState(false);
-  const [webhookTestOk, setWebhookTestOk] = useState(false);
-  const [webhookTestError, setWebhookTestError] = useState<string | null>(null);
-  const [clock, setClock] = useState({ hour: "03", minute: "00" });
-  const [timeError, setTimeError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      setDeleteConfirmOpen(false);
-      setWebhookTestOk(false);
-      setWebhookTestError(null);
-      setTimeError(null);
-      return;
-    }
-    const schedule: ScheduleSettings = {
-      ...draft.schedule,
-      mode: draft.schedule.mode === "off" ? "daily" : draft.schedule.mode,
-    };
-    setClock(scheduleTimeParts(schedule.time));
-    setTimeError(null);
-    setLocal({
-      schedule,
-      scan: structuredClone(draft.schedule.scan ?? draft.scan),
-      webhookUrl: draft.webhookUrl,
-      webhookEdited: false,
-    });
-  }, [open, draft]);
-
-  function patchScan(patch: Partial<ScanSettings>) {
-    setLocal((current) => (current ? { ...current, scan: { ...current.scan, ...patch } } : current));
-  }
-
-  function resetScheduleMatching() {
-    const defaults = defaultScan(section);
-    patchScan({
-      threshold: defaults.threshold,
-      percent: defaults.percent,
-      parallelism: runtime?.suggestedParallelism ?? defaults.parallelism,
-      includeImages: defaults.includeImages,
-      usePhash: defaults.usePhash,
-      partialClip: defaults.partialClip,
-      aiMatching: defaults.aiMatching,
-      aiPartial: defaults.aiPartial,
-      compareHorizontallyFlipped: defaults.compareHorizontallyFlipped,
-      ignoreBlackPixels: defaults.ignoreBlackPixels,
-      ignoreWhitePixels: defaults.ignoreWhitePixels,
-      timeWindowDays: defaults.timeWindowDays,
-      prefixSeconds: defaults.prefixSeconds,
-    });
-  }
-
-  async function apply() {
-    if (!local) return;
-    const time = normalizeScheduleClock(clock.hour, clock.minute);
-    if (!time) {
-      setTimeError("Enter an hour from 00 to 23 and a minute from 00 to 59.");
-      return;
-    }
-    setTimeError(null);
-    const mode = local.schedule.mode === "off" ? "daily" : local.schedule.mode;
-    const webhookUrl = local.webhookUrl.trim();
-    const clearWebhook =
-      webhookUrl.length === 0 && local.webhookEdited && Boolean(settings?.webhookConfigured);
-    await onSave({
-      schedule: {
-        ...local.schedule,
-        mode,
-        time,
-        scan: { ...local.scan, includes: draft.scan.includes, excludes: draft.scan.excludes },
-      },
-      webhookUrl,
-      clearWebhook,
-    });
-    onOpenChange(false);
-  }
-
-  async function testWebhook() {
-    if (!local) return;
-    const webhookUrl = local.webhookUrl.trim();
-    if (!webhookUrl && !settings?.webhookConfigured) return;
-    setWebhookTesting(true);
-    setWebhookTestOk(false);
-    setWebhookTestError(null);
-    try {
-      await api("/api/webhook/test", {
-        method: "POST",
-        body: JSON.stringify({
-          section,
-          webhookUrl: webhookUrl || undefined,
-        }),
-      });
-      setWebhookTestOk(true);
-    } catch (err) {
-      setWebhookTestError(err instanceof Error ? err.message : "Webhook test failed");
-    } finally {
-      setWebhookTesting(false);
-    }
-  }
-
-  async function confirmDeleteSchedule() {
-    await onSave({
-      schedule: { ...draft.schedule, mode: "off" },
-      webhookUrl: "",
-      clearWebhook: true,
-    });
-    setDeleteConfirmOpen(false);
-    onOpenChange(false);
-  }
-
-  return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="w-max max-h-[calc(100dvh-2rem)] max-w-[calc(100%-2rem)] justify-items-start overflow-y-auto sm:max-w-[calc(100%-2rem)]">
-        <DialogHeader>
-          <DialogTitle>Schedule</DialogTitle>
-          <DialogDescription>
-            Scheduled runs only start a scan. They never stack, trash, or delete.
-            <br />
-            These matching options are used by the schedule and stay separate from the controls on the page.
-          </DialogDescription>
-        </DialogHeader>
-        {local ? (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                <NumberField label="Threshold" hint="Hash difference from 0 to 10. Lower is stricter." value={local.scan.threshold} onChange={(threshold) => patchScan({ threshold })} />
-                <NumberField label="Percent" hint="Minimum similarity to report as a duplicate." value={local.scan.percent} onChange={(percent) => patchScan({ percent })} />
-                <NumberField label="Window" hint={timeWindowHint(local.scan.timeWindowDays)} value={local.scan.timeWindowDays} onChange={(timeWindowDays) => patchScan({ timeWindowDays })} />
-                <NumberField
-                  label="Burst"
-                  hint="Also group images taken within this many seconds when their original file names share a prefix. Groups stay inside the Window setting. 0 turns this off."
-                  value={local.scan.prefixSeconds}
-                  onChange={(prefixSeconds) => patchScan({ prefixSeconds })}
-                />
-                <NumberField
-                  label="Parallel"
-                  hint={
-                    runtime
-                      ? `How many jobs run at once for hashing, probes, and thumbnails. This machine has ${runtime.cpuCount} cores. Suggested: ${runtime.suggestedParallelism}. Maximum: ${runtime.maxParallelism}.`
-                      : "How many jobs run at once for hashing, probes, and thumbnails."
-                  }
-                  value={local.scan.parallelism}
-                  onChange={(parallelism) => patchScan({ parallelism })}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Flag label="Images" hint="Include image files as well as video." checked={local.scan.includeImages} onChange={(includeImages) => patchScan({ includeImages })} />
-                <Flag label="pHash" hint="Perceptual hash instead of grayscale frame sampling." checked={local.scan.usePhash} onChange={(usePhash) => patchScan({ usePhash })} />
-                <Flag
-                  label="Mirrored"
-                  hint="Also compare each pair against a horizontally flipped version to catch mirror re-uploads. Roughly doubles comparison work."
-                  checked={local.scan.compareHorizontallyFlipped}
-                  onChange={(compareHorizontallyFlipped) => patchScan({ compareHorizontallyFlipped })}
-                />
-                <Flag label="Partial clips" hint="Find a clip inside a longer file using audio fingerprints." checked={local.scan.partialClip} onChange={(partialClip) => patchScan({ partialClip })} />
-                <Flag label="AI match" hint="Neural embeddings for cropped, mirrored, or heavily edited copies. Downloads about 100 MB on first use." checked={local.scan.aiMatching} onChange={(aiMatching) => patchScan({ aiMatching })} />
-                <Flag label="AI partial" hint="Visual partial matches without audio. Downloads the AI components on first use." checked={local.scan.aiPartial} onChange={(aiPartial) => patchScan({ aiPartial })} />
-                <Button type="button" size="xs" variant="ghost" className="h-7 gap-1 text-muted-foreground" onClick={resetScheduleMatching}>
-                  <RotateCcw className="size-3" />
-                  Reset defaults
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <ScheduleTimingRow
-                schedule={local.schedule}
-                hour={clock.hour}
-                minute={clock.minute}
-                timeError={timeError}
-                onClockChange={(next) => {
-                  setTimeError(null);
-                  setClock(next);
-                }}
-                onChange={(schedule) => setLocal({ ...local, schedule: { ...schedule, scan: local.scan } })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="schedule-webhook">Finish webhook</Label>
-              <p className="text-sm text-muted-foreground">A webhook fires when a scheduled scan finishes.</p>
-              <div className="flex max-w-[min(28rem,calc(100vw-3rem))] items-center gap-2">
-                <Input
-                  id="schedule-webhook"
-                  className="min-w-0 flex-1"
-                  placeholder={settings?.webhookConfigured ? "Saved. Enter a new URL to replace it." : "https://example.test/hook"}
-                  value={local.webhookUrl}
-                  onChange={(event) => {
-                    setWebhookTestOk(false);
-                    setWebhookTestError(null);
-                    setLocal({ ...local, webhookUrl: event.target.value, webhookEdited: true });
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 shrink-0"
-                  disabled={
-                    busy ||
-                    webhookTesting ||
-                    (!local.webhookUrl.trim() && !settings?.webhookConfigured)
-                  }
-                  onClick={() => void testWebhook()}
-                >
-                  {webhookTesting ? (
-                    <>
-                      <Loader2 className="size-3.5 animate-spin" />
-                      Test
-                    </>
-                  ) : (
-                    "Test"
-                  )}
-                </Button>
-              </div>
-              {webhookTestOk ? (
-                <p className="text-xs text-muted-foreground">Webhook accepted the test request.</p>
-              ) : null}
-              {webhookTestError ? <p className="text-xs text-destructive">{webhookTestError}</p> : null}
-            </div>
-          </div>
-        ) : null}
-        <DialogFooter className="mx-0 mb-0 mt-4 w-full flex-row items-center justify-between gap-2 border-t-0 bg-transparent p-0 sm:justify-between">
-          {hasActiveSchedule ? (
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={busy}
-              onClick={() => setDeleteConfirmOpen(true)}
-            >
-              Delete schedule
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className="flex flex-row-reverse gap-2 sm:flex-row">
-            <Button type="button" onClick={() => void apply()} disabled={busy || !local}>
-              Save schedule
-            </Button>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              Cancel
-            </Button>
-          </div>
-        </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={deleteConfirmOpen} onOpenChange={(next) => !busy && setDeleteConfirmOpen(next)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete schedule?</DialogTitle>
-            <DialogDescription>
-              Scheduled scans for this section will stop and the saved finish webhook will be removed. Scan settings on the page are not changed.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" disabled={busy} onClick={() => setDeleteConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="button" variant="destructive" disabled={busy} onClick={() => void confirmDeleteSchedule()}>
-              Delete schedule
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-function ScheduleTimingRow({
-  schedule,
-  onChange,
-  hour,
-  minute,
-  timeError,
-  onClockChange,
-}: {
-  schedule: ScheduleSettings;
-  onChange: (schedule: ScheduleSettings) => void;
-  hour: string;
-  minute: string;
-  timeError: string | null;
-  onClockChange: (clock: { hour: string; minute: string }) => void;
-}) {
-  const selectClass =
-    "h-7 rounded-md border-0 bg-transparent px-0.5 text-sm font-semibold text-foreground underline decoration-muted-foreground/50 underline-offset-4 [color-scheme:dark] hover:decoration-foreground focus-visible:decoration-foreground focus-visible:outline-none";
-  const timeFieldClass =
-    "h-7 w-9 border-0 bg-transparent px-0.5 text-center text-sm font-semibold tabular-nums shadow-none underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground focus-visible:border-0 focus-visible:decoration-foreground focus-visible:ring-0 md:text-sm dark:bg-transparent";
-  return (
-    <div className="space-y-1">
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-        Frequency
-        <select
-          className={selectClass}
-          aria-label="Frequency"
-          value={schedule.mode === "off" ? "daily" : schedule.mode}
-          onChange={(event) =>
-            onChange({ ...schedule, mode: event.target.value as Exclude<ScheduleSettings["mode"], "off"> })
-          }
-        >
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-        </select>
-      </label>
-      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-        Time
-        <Input
-          className={timeFieldClass}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={2}
-          aria-label="Hour"
-          aria-invalid={Boolean(timeError)}
-          value={hour}
-          onChange={(event) => onClockChange({ hour: event.target.value, minute })}
-        />
-        <span className="text-sm text-muted-foreground">:</span>
-        <Input
-          className={timeFieldClass}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={2}
-          aria-label="Minute"
-          aria-invalid={Boolean(timeError)}
-          value={minute}
-          onChange={(event) => onClockChange({ hour, minute: event.target.value })}
-        />
-      </label>
-      {schedule.mode === "weekly" ? (
-        <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-          Weekday
-          <select
-            className={selectClass}
-            aria-label="Weekday"
-            value={schedule.weekday}
-            onChange={(event) => onChange({ ...schedule, weekday: Number(event.target.value) })}
-          >
-            {WEEKDAYS.map((day, index) => (
-              <option key={day} value={index}>{day}</option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-        Timezone
-        <TimezonePicker
-          value={schedule.timezone || "UTC"}
-          onChange={(timezone) => onChange({ ...schedule, timezone })}
-        />
-      </label>
-    </div>
-    {timeError ? <p className="text-xs text-destructive">{timeError}</p> : null}
-    </div>
-  );
-}
-
-function scheduleTimeParts(time: string): { hour: string; minute: string } {
-  const match = /^(\d{2}):(\d{2})$/.exec(time);
-  if (!match) return { hour: "02", minute: "00" };
-  return { hour: match[1], minute: match[2] };
-}
-
-function normalizeScheduleClock(hourText: string, minuteText: string): string | null {
-  const hour = parseClockPart(hourText, 23);
-  const minute = parseClockPart(minuteText, 59);
-  if (hour == null || minute == null) return null;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
-
-function parseClockPart(value: string, max: number): number | null {
-  const trimmed = value.trim();
-  if (!/^\d{1,2}$/.test(trimmed)) return null;
-  const parsed = Number(trimmed);
-  if (parsed > max) return null;
-  return parsed;
 }
 

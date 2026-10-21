@@ -5,9 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "cn";
 import { api } from "@/components/api";
-import { Skeleton } from "@/components/ui/skeleton";
-import { formatBytes } from "@/lib/format";
-import { TRASH_SAVED_EVENT } from "@/lib/trash-events";
+import { UndoToast } from "@/components/undo-toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { sectionLabel } from "@/lib/section-label";
 import type { RuntimeInfo, SectionId } from "@/lib/types";
 
@@ -17,27 +16,11 @@ const links = [
   { href: "/server", label: sectionLabel("server") },
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+/** `wide` lets the page use the full window width and own its scrolling (the library pages). */
+export function AppShell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
-  const [trashSavedBytes, setTrashSavedBytes] = useState<number | null>(null);
-
-  function loadTrashSaved() {
-    return api<{ savedBytes: number }>("/api/trash?summary=1")
-      .then((summary) => setTrashSavedBytes(summary.savedBytes))
-      .catch(() => setTrashSavedBytes(null));
-  }
-
-  function loadRuntime() {
-    return api<RuntimeInfo>("/api/runtime")
-      .then((next) => {
-        setRuntime(next);
-      })
-      .catch(() => {
-        setRuntime(null);
-      });
-  }
 
   useEffect(() => {
     let cancelled = false;
@@ -48,30 +31,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .catch(() => {
         if (!cancelled) setRuntime(null);
       });
-    void loadTrashSaved();
     return () => {
       cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    void loadTrashSaved();
-  }, [pathname]);
-
-  useEffect(() => {
-    function refresh() {
-      void loadTrashSaved();
-    }
-    function onSaved(event: Event) {
-      const bytes = (event as CustomEvent<number>).detail;
-      if (typeof bytes === "number" && Number.isFinite(bytes)) setTrashSavedBytes(bytes);
-      else void loadTrashSaved();
-    }
-    window.addEventListener("focus", refresh);
-    window.addEventListener(TRASH_SAVED_EVENT, onSaved);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener(TRASH_SAVED_EVENT, onSaved);
     };
   }, []);
 
@@ -83,22 +44,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden">
-      <header className="sticky top-0 z-30 mb-4 w-full border-b border-white/[0.06] bg-background/75 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between md:gap-4">
+      <header
+        className={cn(
+          "sticky top-0 z-30 w-full border-b border-white/[0.06] bg-background/75 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.5)] backdrop-blur-xl",
+          !wide && "mb-4",
+        )}
+      >
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col gap-3 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between md:gap-4",
+            wide ? "max-w-none" : "max-w-7xl",
+          )}
+        >
           <div className="flex items-center justify-between gap-3 md:min-w-0 md:flex-1 md:justify-start">
             <div className="min-w-0">
               <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-                <Link
-                  href="/"
-                  className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
-                >
-                  immich-vdf
-                </Link>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Link
+                      href="/"
+                      className="block font-heading text-3xl leading-none text-foreground transition-colors hover:text-foreground/90"
+                    >
+                      immich-vdf
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start" className="space-y-1 text-xs">
+                    <p>vdf-cli {runtime?.cliVersion ?? (runtime ? "not found" : "…")}</p>
+                    <p>Native FFmpeg: {nativeFfmpegLabel(runtime)}</p>
+                  </TooltipContent>
+                </Tooltip>
                 {runtime && !runtime.cliAvailable ? (
-                  <p className="text-sm text-destructive">vdf-cli is not on this machine. You can still set folders and review saved results.</p>
-                ) : null}
-                {runtime?.cliVersion ? (
-                  <span className="block font-mono text-sm leading-none text-muted-foreground/80">{runtime.cliVersion}</span>
+                  <p className="text-sm text-destructive">Scanning isn&apos;t available right now. You can still review saved results.</p>
                 ) : null}
               </div>
             </div>
@@ -111,17 +87,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2 md:ml-auto md:flex-nowrap md:justify-end">
-            {trashSavedBytes === null ? (
-              <Skeleton className="h-8 w-[5.5rem] rounded-full" aria-label="Loading saved space" />
-            ) : (
-              <a
-                href="/trash"
-                className="rounded-full border border-white/[0.06] bg-white/[0.02] px-3.5 py-1.5 text-sm text-muted-foreground tabular-nums transition-colors hover:border-white/[0.12] hover:bg-white/[0.05] hover:text-foreground"
-                title="Duplicates removed via .vdf-trash (emptied) and Immich trash"
-              >
-                {formatBytes(trashSavedBytes)} saved
-              </a>
-            )}
             <Suspense
               fallback={
                 <nav className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.03] p-1 shadow-inner backdrop-blur-sm">
@@ -156,11 +121,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
       <div
         className={cn(
-          "scrollbar-subtle mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col overflow-auto px-4 pb-4 sm:px-6",
+          "flex min-h-0 w-full flex-1 flex-col",
+          wide
+            ? "overflow-hidden"
+            : "scrollbar-subtle mx-auto max-w-7xl overflow-auto px-4 pb-4 sm:px-6",
         )}
       >
         {children}
       </div>
+      <UndoToast />
     </div>
   );
 }
@@ -196,3 +165,10 @@ function navActive(pathname: string, href: string, ignoredSection: SectionId | n
   return pathname === href;
 }
 
+function nativeFfmpegLabel(runtime: RuntimeInfo | null): string {
+  if (!runtime) return "…";
+  if (runtime.nativeFfmpeg.mode === "off") return "off";
+  if (runtime.nativeFfmpeg.available === null) return "not checked";
+  if (runtime.nativeFfmpeg.available) return "loaded";
+  return runtime.nativeFfmpeg.mode === "on" ? "libraries missing" : "not installed, downloads on next scan";
+}
