@@ -31,7 +31,7 @@ import { parseResolution } from "./primary";
 import { createBatchResolver, resolveInside, resolveRoots } from "./path-jail";
 import { runPool } from "./concurrency";
 import { cliFailure, type CliOutcome } from "./cli-failure";
-import { nativeFfmpegEnv, resolveNativeFfmpeg, runCliQuietly, shouldRetryWithoutNative } from "./native-ffmpeg";
+import { nativeFfmpegEnv, nativeFfmpegMode, resolveNativeFfmpeg, runCliQuietly, shouldRetryWithoutNative } from "./native-ffmpeg";
 import { PhaseTimer } from "./phase-timer";
 import { slotPatch } from "./schedule";
 import { TRASH_DIR } from "./trash-dir";
@@ -278,7 +278,9 @@ async function runScanSteps(
   // downloaded once, and a scan that cannot have them uses the ffmpeg program.
   const native = await timer.time("Native FFmpeg check", () =>
     resolveNativeFfmpeg({
-      probe: async () => (await runCliQuietly(resolveVdfCli(), ["ffmpeg", "status"])) === 0,
+      // The probe gets the scan's environment, so it finds the libraries in VDF_FFMPEG_LIBS the same way the scan does.
+      probe: async () =>
+        (await runCliQuietly(resolveVdfCli(), ["ffmpeg", "status"], undefined, nativeFfmpegEnv({ enabled: true, libDir: nativeFfmpegMode().libDir }))) === 0,
       install: async () => {
         const installed = await spawnVdfCli(["ffmpeg", "install"]);
         return !installed.spawnFailed && installed.code === 0;
