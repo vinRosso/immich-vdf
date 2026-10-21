@@ -1,7 +1,7 @@
 import type { ScanSettings } from "./types";
 
 /** Mirrors upstream VDF.GUI/Data/ScanProfiles.cs (managed scan knobs). */
-export type ScanProfileId = "exact" | "edited" | "ai" | "deep";
+export type ScanProfileId = "recommended" | "exact" | "edited" | "ai" | "deep";
 
 type ProfilePatch = Pick<
   ScanSettings,
@@ -12,6 +12,8 @@ type ProfilePatch = Pick<
   | "partialClip"
   | "aiMatching"
   | "aiPartial"
+  | "timeWindowDays"
+  | "prefixSeconds"
 >;
 
 export type ScanProfile = {
@@ -23,6 +25,23 @@ export type ScanProfile = {
 };
 
 export const SCAN_PROFILES: ScanProfile[] = [
+  {
+    id: "recommended",
+    name: "Recommended",
+    hint: "A good starting point for most libraries.",
+    badge: "recommended",
+    patch: {
+      percent: 96,
+      compareHorizontallyFlipped: false,
+      ignoreBlackPixels: false,
+      ignoreWhitePixels: false,
+      partialClip: false,
+      aiMatching: true,
+      aiPartial: false,
+      timeWindowDays: 7,
+      prefixSeconds: 5,
+    },
+  },
   {
     id: "exact",
     name: "Exact & near",
@@ -36,13 +55,14 @@ export const SCAN_PROFILES: ScanProfile[] = [
       partialClip: false,
       aiMatching: false,
       aiPartial: false,
+      timeWindowDays: 1,
+      prefixSeconds: 2,
     },
   },
   {
     id: "edited",
     name: "Edited & altered",
     hint: "Also finds crops, watermarks, flips and quality changes.",
-    badge: "recommended",
     patch: {
       percent: 92,
       compareHorizontallyFlipped: true,
@@ -51,12 +71,14 @@ export const SCAN_PROFILES: ScanProfile[] = [
       partialClip: false,
       aiMatching: false,
       aiPartial: false,
+      timeWindowDays: 7,
+      prefixSeconds: 5,
     },
   },
   {
     id: "ai",
     name: "AI scan",
-    hint: "Cropped, mirrored and re-edited copies, and clips cut from longer videos — without decoding audio.",
+    hint: "Finds cropped, mirrored and edited copies, and clips cut from longer videos.",
     badge: "AI",
     patch: {
       percent: 92,
@@ -66,12 +88,14 @@ export const SCAN_PROFILES: ScanProfile[] = [
       partialClip: false,
       aiMatching: true,
       aiPartial: true,
+      timeWindowDays: 7,
+      prefixSeconds: 5,
     },
   },
   {
     id: "deep",
     name: "Deep clean",
-    hint: "Everything above, plus audio-fingerprint clip matching. Slowest first scan.",
+    hint: "Everything above, plus matching clips by sound. The slowest option.",
     badge: "slow",
     patch: {
       percent: 92,
@@ -81,6 +105,8 @@ export const SCAN_PROFILES: ScanProfile[] = [
       partialClip: true,
       aiMatching: true,
       aiPartial: true,
+      timeWindowDays: 0,
+      prefixSeconds: 10,
     },
   },
 ];
@@ -93,7 +119,9 @@ function knobsMatch(scan: ScanSettings, patch: ProfilePatch): boolean {
     scan.ignoreWhitePixels === patch.ignoreWhitePixels &&
     scan.partialClip === patch.partialClip &&
     scan.aiMatching === patch.aiMatching &&
-    scan.aiPartial === patch.aiPartial
+    scan.aiPartial === patch.aiPartial &&
+    scan.timeWindowDays === patch.timeWindowDays &&
+    scan.prefixSeconds === patch.prefixSeconds
   );
 }
 

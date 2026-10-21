@@ -27,6 +27,15 @@ export function defaultScan(section: SectionId = "server", cores?: number): Scan
   };
 }
 
+/** The matching options "Reset defaults" restores, leaving the folders alone. */
+export function matchingDefaults(section: SectionId, suggestedParallelism?: number): Partial<ScanSettings> {
+  const matching: Partial<ScanSettings> = defaultScan(section);
+  delete matching.includes;
+  delete matching.excludes;
+  if (suggestedParallelism !== undefined) matching.parallelism = suggestedParallelism;
+  return matching;
+}
+
 export function normalizeScan(scan: Partial<ScanSettings>, section: SectionId = "server"): ScanSettings {
   return { ...defaultScan(section), ...scan };
 }

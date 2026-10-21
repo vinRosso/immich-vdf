@@ -21,15 +21,21 @@ function folderName(path: string): string {
 export function FolderPicker({
   section,
   label,
+  dialogTitle,
   hint,
   values,
   onChange,
+  dashed = false,
 }: {
   section: SectionId;
   label: string;
+  /** Title of the Browse dialog. Defaults to `label`. */
+  dialogTitle?: string;
   hint: string;
   values: string[];
   onChange: (values: string[]) => void;
+  /** Dashed chips mark the exclude list. */
+  dashed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<Listing | null>(null);
@@ -66,37 +72,43 @@ export function FolderPicker({
   }
 
   return (
-    <HintWrap text={hint} className="flex min-w-0 flex-wrap items-center gap-2">
-      <Button type="button" size="xs" variant="outline" onClick={() => setOpen(true)}>
-        Browse
-      </Button>
-      <span className="shrink-0 text-xs">{label}</span>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+    <div className="grid min-w-0 grid-cols-[3.5rem_minmax(0,1fr)_auto] items-start gap-2 text-xs">
+      <HintWrap text={hint} className="pt-1 text-muted-foreground">
+        {label}
+      </HintWrap>
+      <div className="flex min-w-0 flex-wrap gap-1">
         {chosen.map((path) => (
           <Tooltip key={path}>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                className="inline-flex max-w-[12rem] truncate rounded-md bg-muted/70 px-2 py-0.5 font-mono text-[11px] hover:bg-destructive/15 hover:text-destructive"
+                className={cn(
+                  "inline-flex max-w-full items-center gap-1.5 rounded-[7px] border border-border bg-secondary py-0.5 pr-1.5 pl-2 font-mono text-[11px] hover:border-destructive hover:text-destructive",
+                  dashed && "border-dashed",
+                )}
                 onClick={() => remove(path)}
               >
-                {folderName(path)}
+                <span className="min-w-0 truncate">{folderName(path)}</span>
+                <span className="shrink-0 opacity-60" aria-hidden>×</span>
               </button>
             </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[min(36rem,calc(100vw-2rem))] font-mono whitespace-normal break-all">
+            <TooltipContent side="right" className="max-w-[min(36rem,calc(100vw-2rem))] font-mono whitespace-normal break-all">
               {path}
             </TooltipContent>
           </Tooltip>
         ))}
       </div>
+      <Button type="button" size="xs" variant="outline" onClick={() => setOpen(true)}>
+        Browse
+      </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
         >
           <DialogHeader>
-            <DialogTitle>{label}</DialogTitle>
-            <DialogDescription>{listing?.current ?? "Choose a mounted folder."}</DialogDescription>
+            <DialogTitle>{dialogTitle ?? label}</DialogTitle>
+            <DialogDescription>{listing?.current ?? "Choose a folder."}</DialogDescription>
           </DialogHeader>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <div className="flex gap-2">
@@ -133,7 +145,7 @@ export function FolderPicker({
           </ul>
         </DialogContent>
       </Dialog>
-    </HintWrap>
+    </div>
   );
 }
 
@@ -146,7 +158,7 @@ export function HintWrap({ text, children, className }: { text: string; children
           {children}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-sm whitespace-normal">{text}</TooltipContent>
+      <TooltipContent side="right" className="max-w-sm whitespace-normal">{text}</TooltipContent>
     </Tooltip>
   );
 }

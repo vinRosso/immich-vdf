@@ -14,3 +14,10 @@ test("scan profiles round-trip detect after apply", () => {
   assert.equal(deep.aiMatching, true);
   assert.equal(detectScanProfile(deep), "deep");
 });
+
+test("Recommended is detected after it is applied, and Custom is what matches no preset", () => {
+  const recommended = applyScanProfile(defaultScan(), "recommended");
+  assert.equal(detectScanProfile(recommended), "recommended");
+  const tweaked = { ...recommended, percent: 80 };
+  assert.equal(detectScanProfile(tweaked), "custom");
+});
