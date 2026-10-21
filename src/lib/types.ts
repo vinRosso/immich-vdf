@@ -235,6 +235,8 @@ export type ResultsPreviewResponse = {
   error: string | null;
   hiddenIgnored: number;
   groupCount: number;
+  /** Bytes freed by keeping only the best file of every visible group. */
+  reclaimableBytes: number;
   groups: ResultsPreviewGroup[];
 };
 

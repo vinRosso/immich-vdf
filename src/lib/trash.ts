@@ -53,9 +53,10 @@ export async function resolveMediaFile(roots: string[], candidate: string): Prom
   }
 }
 
-export async function moveToTrash(paths: string[]): Promise<number> {
+/** Moves files into `.vdf-trash`. Returns where each one went, so a move can be taken back. */
+export async function moveToTrash(paths: string[]): Promise<{ mount: string; relative: string; original: string }[]> {
   const roots = loadConfig().mediaRoots;
-  let moved = 0;
+  const moved: { mount: string; relative: string; original: string }[] = [];
   for (const candidate of paths) {
     const real = await resolveMediaFile(roots, candidate);
     const root = await containingRoot(roots, real);
@@ -78,8 +79,9 @@ export async function moveToTrash(paths: string[]): Promise<number> {
       // Destination is free.
     }
     await rename(real, target);
-    await rememberTrashAdded(root, path.relative(trashRoot, target));
-    moved += 1;
+    const trashRelative = path.relative(trashRoot, target);
+    await rememberTrashAdded(root, trashRelative);
+    moved.push({ mount: root, relative: trashRelative, original: candidate });
   }
   return moved;
 }
@@ -134,7 +136,8 @@ export async function trashThumbFile(mount: string, relative: string): Promise<{
   return { file: poster, contentType: "image/jpeg" };
 }
 
-export async function restoreTrashItem(mount: string, relative: string): Promise<void> {
+/** Returns the path the file now has, which differs from where it was when that place is taken. */
+export async function restoreTrashItem(mount: string, relative: string): Promise<string> {
   const roots = loadConfig().mediaRoots;
   const root = await resolveInside(roots, mount);
   const source = await trashItemPath(mount, relative);
@@ -166,6 +169,7 @@ export async function restoreTrashItem(mount: string, relative: string): Promise
   }
   await rename(source, target);
   await forgetTrashAdded([trashAddedKey(mount, safeRelative)]);
+  return target;
 }
 
 export async function restoreAllTrash(): Promise<number> {

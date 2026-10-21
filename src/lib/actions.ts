@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { gzip } from "node:zlib";
 import { baseName } from "./format";
@@ -38,6 +39,7 @@ import {
 } from "./immich-stacks";
 import { extractStoredGroup, mergeStoredGroups } from "./merge-groups";
 import { pickPrimaryIndex } from "./primary";
+import { totalReclaimBytes } from "./reclaim";
 import { DEFAULT_RESULTS_GROUP_SORT, sortResultGroups, type ResultsGroupSortId } from "./results-sort";
 import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
 import { resolveInside } from "./path-jail";
@@ -54,7 +56,8 @@ import {
   updateIgnored,
   updateResults,
 } from "./store";
-import { moveToTrash, resolveMediaFile } from "./trash";
+import { moveToTrash, resolveMediaFile, restoreTrashItem } from "./trash";
+import { keepTrashUndo, rememberTrashUndo, restoreGroups, takeTrashUndo } from "./undo";
 import type {
   ClientGroup,
   ClientItem,
@@ -157,6 +160,7 @@ export async function resultsPreview(
     error: null,
     hiddenIgnored: 0,
     groupCount: 0,
+    reclaimableBytes: 0,
     groups: [],
   };
   if (!results) return empty;
@@ -193,6 +197,7 @@ export async function resultsPreview(
     error: results.error,
     hiddenIgnored,
     groupCount: visible.length,
+    reclaimableBytes: totalReclaimBytes(visible),
     groups,
   };
 }
@@ -251,7 +256,8 @@ export async function mergeResultGroups(section: SectionId, sourceGroupId: strin
   await updateIgnored(section, (entries) => pruneIgnoredEntries(section, entries, saved.groups));
 }
 
-export async function ignoreGroup(section: SectionId, groupId: string): Promise<void> {
+/** Returns the ignore key, which is what restoring the group needs. */
+export async function ignoreGroup(section: SectionId, groupId: string): Promise<string> {
   const results = await requireResults(section);
   const group = requireGroup(results, groupId);
   const key = ignoreKey(memberIds(section, group.items));
@@ -268,13 +274,14 @@ export async function ignoreGroup(section: SectionId, groupId: string): Promise<
     ];
   });
   await cancelThumbJobs(section, group.items.map((item) => item.path));
+  return key;
 }
 
 export async function restoreIgnored(section: SectionId, key: string): Promise<void> {
   await updateIgnored(section, (entries) => entries.filter((entry) => entry.key !== key));
 }
 
-export async function trashServerGroup(groupId: string, keepPath: string): Promise<number> {
+export async function trashServerGroup(groupId: string, keepPath: string): Promise<ServerTrashOutcome> {
   const results = await requireResults("server");
   const group = requireGroup(results, groupId);
   const keep = await realResultPath("server", keepPath, group);
@@ -282,7 +289,7 @@ export async function trashServerGroup(groupId: string, keepPath: string): Promi
   return commitServerTrash(victims);
 }
 
-export async function trashServerItems(groupId: string, victimPaths: string[]): Promise<number> {
+export async function trashServerItems(groupId: string, victimPaths: string[]): Promise<ServerTrashOutcome> {
   const results = await requireResults("server");
   const group = requireGroup(results, groupId);
   if (victimPaths.length === 0) throw new AppError("Choose a file to trash");
@@ -526,7 +533,7 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
     const settings = await loadSettings();
     requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
     const creds = { baseUrl: settings.immich.baseUrl, apiKey: settings.immich.apiKey };
-    reportRejoin({ percent: 2, label: "Loading results", detail: "Reading saved Immich scan from disk…" });
+    reportRejoin({ percent: 2, label: "Loading results", detail: "Loading your last scan…" });
     const results = await requireResults("immich");
     const itemCount = results.groups.reduce((sum, group) => sum + group.items.length, 0);
     reportRejoin({
@@ -536,16 +543,16 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
     });
     let maps = settings.immich.pathMap;
     if (maps.length === 0) {
-      reportRejoin({ percent: 8, label: "Path map", detail: "Asking Immich for library paths (can be slow on network mounts)…" });
+      reportRejoin({ percent: 8, label: "Path map", detail: "Checking where Immich keeps your files…" });
       maps = await resolveImmichPathMap(creds);
     } else {
-      reportRejoin({ percent: 9, label: "Path map", detail: "Using path map from settings" });
+      reportRejoin({ percent: 9, label: "Path map", detail: "Using the saved folders" });
     }
     const paths = originalPathsForGroups(results.groups, maps);
     reportRejoin({
       percent: 11,
       label: "Asset index",
-      detail: "Opening local Immich path cache…",
+      detail: "Getting ready…",
     });
     const assets = await assetsForOriginalPaths(
       settings.immich.baseUrl,
@@ -577,13 +584,13 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
           reportRejoin({
             percent: 45,
             label: "Matching Immich library",
-            detail: "Name search unavailable — reading the full library…",
+            detail: "Reading your whole Immich library instead…",
             indeterminate: true,
           });
         },
       },
     );
-    reportRejoin({ percent: 90, label: "Immich stacks", detail: "Reading stacks already in Immich…", indeterminate: true });
+    reportRejoin({ percent: 90, label: "Immich stacks", detail: "Checking existing stacks…", indeterminate: true });
     let listed: Awaited<ReturnType<typeof listImmichStacks>> | null = null;
     let stackWarning: string | null = null;
     try {
@@ -591,7 +598,7 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
     } catch {
       stackWarning = "Immich stacks could not be read, so existing stacks may be missing.";
     }
-    reportRejoin({ percent: 92, label: "Saving", detail: "Updating linked assets in scan results…", indeterminate: false });
+    reportRejoin({ percent: 92, label: "Saving", detail: "Saving…", indeterminate: false });
     const saved = await updateResults("immich", async (current) => {
       const base = current ?? results;
       const attached = attachAssets(base.groups, assets, maps);
@@ -605,7 +612,7 @@ export async function rejoinImmich(): Promise<{ matched: number; warning: string
       );
       return { ...base, warning: stackWarning, groups };
     });
-    reportRejoin({ percent: 100, label: "Done", detail: "Match finished" });
+    reportRejoin({ percent: 100, label: "Done", detail: "All files checked" });
     return {
       matched: (saved?.groups ?? []).reduce((sum, group) => sum + group.items.filter((item) => item.assetId).length, 0),
       warning: stackWarning,
@@ -692,18 +699,73 @@ function matchedIds(group: StoredGroup): string[] {
 }
 
 function requireImmich(baseUrl: string, apiKey: string): void {
-  if (!baseUrl || !apiKey) throw new AppError("Save the Immich URL and API key first");
+  if (!baseUrl || !apiKey) throw new AppError("Connect Immich first");
 }
 
-async function commitServerTrash(victims: string[]): Promise<number> {
+export type ServerTrashOutcome = { moved: number; undoId: string | null };
+
+async function commitServerTrash(victims: string[]): Promise<ServerTrashOutcome> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
   cancelThumbWork(victims);
-  const moved = await moveToTrash(victims);
+  const before = await loadResults("server");
+  const groups = before ? before.groups.filter((group) => group.items.some((item) => victims.includes(item.path))) : [];
+  const items = await moveToTrash(victims);
   await updateResults("server", (current) => {
     if (!current) return current;
     return dropItems(current, (item) => victims.includes(item.path));
   });
-  return moved;
+  const undoId =
+    before && items.length > 0
+      ? rememberTrashUndo({ finishedAt: before.finishedAt, moved: items, groups: structuredClone(groups) })
+      : null;
+  return { moved: items.length, undoId };
+}
+
+/** Takes a Files trash back: files return from `.vdf-trash` and their groups reappear in the results. */
+export async function undoServerTrash(id: string): Promise<number> {
+  const record = takeTrashUndo(id);
+  if (!record) throw new AppError("This can no longer be undone. Restore the files from Trash instead", 410);
+  const current = await requireResults("server");
+  if (current.finishedAt !== record.finishedAt) {
+    throw new AppError("A newer scan replaced these results. Restore the files from Trash instead", 409);
+  }
+  // A file that cannot be restored is left in the trash and the record is kept for another try.
+  const restored = new Map<string, string>();
+  const failed: typeof record.moved = [];
+  for (const entry of record.moved) {
+    try {
+      restored.set(entry.original, await restoreTrashItem(entry.mount, entry.relative));
+    } catch {
+      failed.push(entry);
+    }
+  }
+  // Files that were trashed by a later action are not on disk, so their groups must not list them.
+  const alive = new Set<string>();
+  await Promise.all(
+    record.groups
+      .flatMap((group) => group.items)
+      .map((item) =>
+        stat(item.path).then(
+          () => void alive.add(item.path),
+          () => undefined,
+        ),
+      ),
+  );
+  let replaced = false;
+  await updateResults("server", (latest) => {
+    if (!latest) return latest;
+    if (latest.finishedAt !== record.finishedAt) {
+      replaced = true;
+      return latest;
+    }
+    return { ...latest, groups: restoreGroups(latest.groups, record.groups, restored, alive) };
+  });
+  if (replaced) throw new AppError("A newer scan replaced these results. Restore the files from Trash instead", 409);
+  if (failed.length > 0) {
+    keepTrashUndo({ ...record, moved: failed });
+    throw new AppError(`Restored ${restored.size} of ${record.moved.length} files. Try Undo again, or restore the rest from Trash`);
+  }
+  return restored.size;
 }
 
 async function commitImmichTrash(baseUrl: string, apiKey: string, victims: string[]): Promise<number> {

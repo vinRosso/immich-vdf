@@ -21,10 +21,10 @@ export const GET = api(async (request) => {
 export const POST = api(async (request) => {
   const body = (await request.json()) as { groupId?: string; keepPath?: string; trashPaths?: string[] };
   if (!body.groupId) throw new AppError("Choose a file to keep");
-  const moved = Array.isArray(body.trashPaths)
+  const outcome = Array.isArray(body.trashPaths)
     ? await trashServerItems(body.groupId, body.trashPaths)
     : await trashServerGroup(body.groupId, requiredKeep(body.keepPath));
-  return NextResponse.json({ moved });
+  return NextResponse.json(outcome);
 });
 
 export const PATCH = api(async (request) => {

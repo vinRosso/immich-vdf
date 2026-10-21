@@ -24,8 +24,8 @@ export const GET = api(async (request) => {
 export const POST = api(async (request) => {
   const body = (await request.json()) as { section?: string; groupId?: string };
   if (!body.groupId) throw new AppError("Missing group");
-  await ignoreGroup(sectionOf(body.section), body.groupId);
-  return NextResponse.json({ ok: true });
+  const key = await ignoreGroup(sectionOf(body.section), body.groupId);
+  return NextResponse.json({ ok: true, key });
 });
 
 export const DELETE = api(async (request) => {
