@@ -7,21 +7,21 @@ nav_next_title: Installation
 
 # immich-vdf
 
-Find duplicate photos and videos, compare them, and clear the ones you do not want.
+Find duplicate photos and videos, compare them side by side, and clear the ones you don't want.
 
-**Immich** is for an Immich library. **Files** is for an external library Immich already reads.
+Use **Immich** for your Immich library. Use **Files** for an external library that Immich also reads.
 
 ![Duplicate groups in an Immich library](images/app.jpg)
 
-> DISCLAIMER: This whole app is vibe coded. Use it locally, or behind a reverse proxy, to avoid potential security issues. Do not expose it directly to the internet.
+> DISCLAIMER: This whole app is vibe coded. Run it on your own network or behind a reverse proxy, and don't expose it directly to the internet.
 
 ## Users
 
 1. [Installation](install)
 2. [Usage](usage)
 
-There are also some [Shortcuts](shortcuts) for better UX.
+Keyboard [Shortcuts](shortcuts) make reviewing faster.
 
 ## Developers
 
-Start at [Development](development). The module map is [Code](code).
+Start at [Development](development). The module map is in [Code](code).

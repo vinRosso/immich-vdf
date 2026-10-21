@@ -16,20 +16,18 @@ nav_next_title: Shortcuts
 - [Extract](#extract)
 - [Ignore](#ignore)
 
-The scan's groups are a starting point. You can join two groups, or pull a few files out into their own group. That edit stays in the saved results until the next compare replaces them.
+Groups from a scan are a starting point. You can join two groups, or pull a few files out into their own group. Your changes stay until the next scan replaces the results.
 
 ## Merge
 
-On the results grid, drag a card onto another card. The card you drop onto keeps its place. The card you dragged is removed. Files that are the same path are kept once.
-
-A merged group needs two different files.
+On the results, drag one group onto another. The group you drop onto stays where it is, and the dragged group joins it. A file that's in both is kept once.
 
 ## Extract
 
-Inside a group, select at least two files and leave at least one behind. **Extract group** moves the selection into a new group.
+Open a group, select at least two files, and leave at least one unselected. **Extract group** moves your selection into a new group.
 
-If only one file would remain, that leftover is dropped from the results. A group is always at least two files. Selecting every file is refused.
+If only one file would be left behind, it's removed from the results, because a group needs at least two files. You can't select every file.
 
 ## Ignore
 
-**Ignore group** hides that set of files from later compares on this page. The files stay on disk. Restore it from **Ignored**.
+**Ignore group** hides a group from later scans. The files stay where they are. You can bring a group back from **Ignored**.

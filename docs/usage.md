@@ -14,26 +14,26 @@ nav_next_title: Two libraries
 
 - [Pages](#pages)
 
-Sign in with `APP_PASSWORD`. Home shows a preview of the latest Immich groups and the latest Files groups.
+Sign in with your `APP_PASSWORD`. Home shows the latest duplicate groups from Immich and from Files.
 
-The two pages do not share a scan database.
+The two pages are independent, each with its own results.
 
-| Page | Point it at | A delete |
+| Page | Use it for | Removing a duplicate |
 | --- | --- | --- |
-| **Immich** | Immich's upload library | Stack or trash through the Immich API |
-| **Files** | An external library Immich reads | Rename the file into `.vdf-trash/` on that folder |
+| **Immich** | Immich's upload library | Stack it or move it to Immich's trash |
+| **Files** | An external library Immich reads | Move it to a `.vdf-trash/` folder, which you can restore from |
 
 ```mermaid
 flowchart TB
   upload["Immich upload library"] --> immichPage["Immich page"]
   external["External library"] --> filesPage["Files page"]
-  immichPage --> api["API"]
+  immichPage --> api["Immich trash or stack"]
   filesPage --> bin[".vdf-trash/"]
 ```
 
-> Do not scan the same files on both pages.
+> Don't scan the same files on both pages.
 
-After a Files delete, Immich still lists the asset until it scans that external library again.
+After you trash a file on the Files page, Immich keeps showing it until it rescans that library.
 
 ## Pages
 

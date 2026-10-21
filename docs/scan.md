@@ -13,42 +13,43 @@ nav_next_title: Schedule and webhook
 
 ## On this page
 
-- [Which profile](#which-profile)
-- [Knobs worth leaving alone](#knobs-worth-leaving-alone)
+- [Pick a starting point](#pick-a-starting-point)
+- [Settings worth leaving alone](#settings-worth-leaving-alone)
 
-Open **Immich** or **Files**, pick a profile, and press **Scan**. Only one scan runs at a time, on either page.
+Open **Immich** or **Files**, choose your settings under **Scan settings**, and select **Scan**. Only one scan runs at a time, across both pages.
 
-![Scan profiles and the Scan button](images/scan.jpg)
+![Scan settings and the Scan button](images/scan.jpg)
 
-A scan first lists the media files in your folders. If no file and no matching setting changed since the last run, both `vdf-cli` steps are skipped and the previous groups stay. Otherwise it runs `vdf-cli scan-and-compare` as one process, so compare reuses what the scan just read. Changing Parallel does not count as a change. The log ends with how long each step took, and the run keeps those timings.
+Repeat scans are much faster. If no files and no settings have changed, the scan finishes right away and keeps your last results. When only some files changed, only those are checked again. The first scan after an update can take longer.
 
-The engine also keeps the pair scores it computed (`PairScores.db`, next to the scan database). When most files are unchanged, a repeat compare only scores pairs that involve a new or changed file and replays the stored matches. That is skipped for pHash and combined matching, for a percent under 85, and when the saved capture window or AI percent does not cover the current one, so those runs score every pair. The first scan after an upgrade that changes the file is a full compare.
+## Pick a starting point
 
-## Which profile
+Under **Scan settings**, the first step sets a starting point. You can fine-tune everything after that.
 
-| Profile | Use it when | Cost |
+| Starting point | Use it when | Cost |
 | --- | --- | --- |
-| **Exact & near** | Copies, renames, and re-encodes. Percent 98. | Fastest |
-| **Edited & altered** | Crops, watermarks, flips, quality changes. Percent 92. Mirrored on. | Recommended first pass |
-| **AI scan** | Re-edited copies and clips cut from longer videos, without decoding audio. | First run downloads about 100 MB |
-| **Deep clean** | Everything above, plus audio fingerprints for a clip inside a longer file. | Slowest |
+| **Recommended** | You're not sure. A good default for most libraries. | Balanced |
+| **Exact & near** | You want copies, renames and re-encodes. Similarity 98%. | Fastest |
+| **Edited & altered** | You also want crops, watermarks, flips and quality changes. Similarity 92%, Mirrored on. | Good first pass |
+| **AI scan** | Crops and re-edits are still being missed, or you want clips cut from longer videos. | Downloads about 100 MB the first time |
+| **Deep clean** | You also want clips matched by sound. | Slowest |
 
-> Start with **Edited & altered**. Move to **AI scan** when crops and re-edits are still missing. Use **Deep clean** only when you need those partial clips.
+> Start with **Recommended**. Move to **Edited & altered** or **AI scan** if edits are still missing. Use **Deep clean** only if you need clips inside longer videos.
 
-## Knobs worth leaving alone
+## Settings worth leaving alone
 
-| Control | Suggestion |
+| Setting | Suggestion |
 | --- | --- |
-| Threshold | Leave at 5. Lower is stricter and drops real duplicates. |
-| Percent | Let the profile set it (98 or 92). A much lower percent fills the grid with weak matches. |
-| Window | Immich defaults to 7 days, so a burst of the same event is compared. Files defaults to 0, the whole library. Raise the Immich window only when the same photo was imported months apart. The date is the one Immich shows, including dates you edited there. The app asks Immich only for dates changed since the last scan, and lists every asset again once a week, so moved and deleted assets are forgotten. Files Immich does not know use the date inside the file (EXIF, or the video's creation tag), then the file's own date. |
-| Prefix | Also group images taken within this many seconds when their original file names share a prefix, even if they are not visual duplicates. Default is 5. 0 turns it off. |
-| Parallel | Use the suggested value for the CPUs inside the container. |
+| Hash tolerance | Leave at 5. Lower is stricter and can miss real duplicates. |
+| Similarity | Let the starting point set it. A much lower value fills your results with weak matches. |
+| Time window | Immich starts at 7 days, so photos from the same event are compared. Files starts at 0, which compares your whole library. Raise it only if the same photo was imported months apart. Dates come from Immich first, including dates you edited there, then from the file itself. |
+| Bursts | Also groups photos taken within this many seconds of each other that share a file-name prefix, even if they don't look alike. Starts at 5. Set 0 to turn it off. |
+| Parallel jobs | Use the suggested number. |
 | Images | Leave on unless you only care about video. |
-| pHash | Off unless you already know you want perceptual hashes instead of frame samples. |
+| pHash | Leave off unless you know you want it. |
 
-**Reset defaults** returns the knobs to the built-in baseline, which is not the same as a profile. Pick the profile again after a reset.
+**Reset defaults** restores the built-in settings. Pick a starting point again afterwards.
 
-Include at least one folder. Exclude a folder when you know it should never be compared.
+On the Files page, add at least one folder. Exclude any folder you never want compared.
 
-A schedule is separate from the controls on the page. See [Schedule and webhook](schedule).
+A schedule has its own settings, separate from the ones on the page. See [Schedule and webhook](schedule).

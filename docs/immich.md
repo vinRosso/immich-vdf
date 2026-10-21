@@ -12,25 +12,35 @@ nav_next_title: Files
 
 ## On this page
 
+- [Connect](#connect)
 - [In a group](#in-a-group)
+- [Match again](#match-again)
+- [Unmatched files](#unmatched-files)
 
-Open **Immich**, save the server URL and an API key, and check the connection. The key stays on the data volume. The browser is told only that a key is saved.
+## Connect
 
-Use the Immich user's key for the library you want to clean. It can stack and trash that user's assets. Use the server's LAN address or its Docker service name. `localhost` and `127.0.0.1` are refused.
+Open **Immich**, enter your server URL and an API key, and select **Connect**. The key is stored on the server and never sent back to your browser.
 
-Card posters for matched assets come from the Immich API. Playback still needs the original on the read-only mount.
+Use the key of the Immich user whose library you want to clean. It lets immich-vdf stack and trash that user's photos. Enter your server's LAN address or Docker service name. `localhost` and `127.0.0.1` won't work.
 
 ## In a group
 
-- **Stack all**, **Stack selected**, **Add to stack**, **Merge stacks**
-- **Remove from stack** when the selection is one stack
-- **Keep best, trash rest** and **Trash selected**
-- Set the stack cover from the filmstrip
+- **Stack best** and **Stack smallest** stack every group at once.
+- **Stack selected**, **Add to stack** and **Merge stacks** work on the files you pick.
+- **Remove from stack** appears when your selection is a single stack.
+- **Keep best, trash rest** and **Trash selected** move files to Immich's trash.
+- Choose a stack's cover from the filmstrip.
 
-Loose items are shown before stacks. Inside a stack, the cover comes first. Items follow capture date.
+Files that aren't in a stack come first, then stacks. Within a stack, the cover comes first. Everything else is ordered by date taken.
 
-**Match again**, on the results line, links the saved groups to Immich again without comparing files. It reads the current stacks for photos already in those groups. A new file still needs a scan. A group that is already one Immich stack is hidden. A stack that still has a loose duplicate stays visible, with the other photos from that stack pulled in (via `GET /api/stacks/:id`, not only the stack list). Immich's file search often omits stack membership, so this step reads the stack list and then loads each stack by id.
+A group that is already one stack is hidden. If a stack still has a loose duplicate, the group stays visible and shows the stack's other photos too.
 
-A file can fail to match an asset when its path is outside the mount, or when Immich stored a collision name (`name+1.ext`). Mount that folder the same way Immich does (Compose volumes, or `VOLUME_BINDS` on [local dev](dev-local#volume-binds)), then match again.
+## Match again
 
-Scanning and comparing are on [Scan](scan) and [Review](review).
+**Match again** refreshes how your groups line up with Immich, without a new scan. Use it after you change stacks in Immich. New files still need a scan.
+
+## Unmatched files
+
+A file can fail to link to a photo in Immich if its folder isn't available to immich-vdf, or Immich stored it under a different name. Make that folder available at the same path Immich uses (Compose volumes, or `VOLUME_BINDS` for [local development](dev-local#volume-binds)), then select **Match again**. The **Unmatched** page lists the affected files.
+
+Next: [Scan](scan) and [Review](review).

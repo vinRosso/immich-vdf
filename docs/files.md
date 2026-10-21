@@ -15,16 +15,16 @@ nav_next_title: Scan
 - [Trash](#trash)
 - [Ignore](#ignore)
 
-Set the external library as `MEDIA_PATH`. On the Files page, include that folder (or a subfolder) and scan it. This page does not call the Immich API.
+Set your external library as `MEDIA_PATH`. On the Files page, add that folder (or a subfolder) and scan it. This page doesn't use Immich.
 
 ## Trash
 
-Trashing a file renames it into `.vdf-trash/` on the same folder. Restoring moves it back. The container user must be allowed to rename files there.
+Trashing a file moves it into a `.vdf-trash/` folder in the same library. **Restore** puts it back. The container's user must be allowed to rename files there.
 
-Immich keeps the asset until its next scan of that library.
+Immich keeps showing the photo until it rescans that library.
 
 ## Ignore
 
-Ignoring a file or a group keeps it out of later compares on this page. The file stays where it is.
+Ignoring a group keeps it out of later scans. The files stay where they are, and you can restore the group from **Ignored**.
 
-In a group, **Keep best** and **Keep smallest** trash the other files. **Keep selected** trashes everything you did not select.
+In a group, **Keep best, trash rest** and **Keep smallest, trash rest** trash everything else. **Keep selected** trashes every file you didn't select.

@@ -12,25 +12,28 @@ nav_next_title: Review
 
 ## On this page
 
+- [Missed runs](#missed-runs)
 - [Webhook](#webhook)
 
-**Add schedule** saves a daily or weekly run for that page only. The matching options in the dialog belong to the schedule. They do not change the controls on the page.
+**Add schedule** sets up a daily or weekly scan for that page. A schedule has its own matching settings, separate from the ones on the page.
 
-A scheduled run only starts a scan. It never stacks, trashes, or deletes.
+Scheduled scans never stack, trash or delete anything. They only find duplicates for you to review.
 
-If a scan is already running when the time comes, the scheduled run waits in line and starts when that scan ends. If the server stops first, the run starts again after the restart, up to a day late. A run is started at most three times: when the server went down during each of three tries, the run is given up. A run that waited more than a day is also given up. A run given up is recorded as **skipped** on the page. A scan that is stopped by a normal shutdown is recorded as interrupted and does not count as a try.
+![Schedule dialog with the webhook](images/schedule.jpg)
 
-![Schedule dialog with the finish webhook](images/schedule.jpg)
+Times use the time zone you pick, not the server's. To stop the scans, delete the schedule. That also removes the webhook. Your scan settings stay as they are.
 
-The clock uses the time zone you pick, not the host zone. Delete the schedule to stop the runs. That also removes the saved webhook. Scan settings on the page stay as they are.
+## Missed runs
+
+If another scan is running at the scheduled time, the scheduled scan starts when that one finishes. If the server is down, it runs after the server restarts, up to a day late.
+
+A scan is tried at most three times. If it still hasn't run after three tries or a day of waiting, it's skipped and shown as **Skipped** on the page. A scan stopped by a normal shutdown is marked as interrupted and doesn't count as a try.
 
 ## Webhook
 
-The finish webhook is one URL for the app. It runs when a **scheduled** scan finishes. Pressing **Scan** does not call it.
+The webhook is a single URL for the whole app. It's called when a **scheduled** scan finishes, and also when one is skipped. Scans you start yourself don't call it.
 
-It also runs, with status `skipped`, when a scheduled run is given up as described above.
-
-**Test** sends a sample and waits for a response under 10 seconds. The URL has to be `http` or `https`. Loopback, link-local, and cloud metadata addresses are refused. A LAN address is allowed.
+**Send test** posts a sample message and waits up to 10 seconds for a reply. The URL must start with `http` or `https`. Loopback, link-local and cloud-metadata addresses are refused, but LAN addresses work.
 
 ```json
 {
@@ -43,7 +46,7 @@ It also runs, with status `skipped`, when a scheduled run is given up as describ
 | Field | Values |
 | --- | --- |
 | `section` | `immich` for the Immich page, `server` for the Files page |
-| `status` | `ok`, `error`, or `skipped` |
-| `groupCount` | Groups left after a finished scan. `0` on a test or a skip. |
+| `status` | `ok`, `error` or `skipped` |
+| `groupCount` | Duplicate groups after the scan. `0` for a test or a skipped run. |
 
-A response of 300 or higher is a failure. The scan itself is already saved. The failure is only a line in the scan log.
+If the webhook replies with an error (status 300 or higher), your scan results are still saved. The failure is only noted in the scan log.
