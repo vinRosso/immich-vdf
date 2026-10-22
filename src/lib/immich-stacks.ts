@@ -164,6 +164,16 @@ export function applyStackMembership(groups: StoredGroup[], allStacks: ImmichSta
   return current.map((group) => ({ ...group, items: orderGroupItems(group.items) }));
 }
 
+/** Unstack the items that carry one of these stack ids. */
+export function releaseStacks(groups: StoredGroup[], stackIds: string[]): StoredGroup[] {
+  if (stackIds.length === 0) return groups;
+  const gone = new Set(stackIds);
+  return groups.map((group) => {
+    if (!group.items.some((item) => gone.has(itemStackId(item) ?? ""))) return group;
+    return { ...group, items: orderGroupItems(group.items.map((item) => releaseDissolved(item, gone))) };
+  });
+}
+
 function releaseDissolved(item: StoredItem, dissolved: ReadonlySet<string>): StoredItem {
   const stackId = itemStackId(item);
   if (!stackId || !dissolved.has(stackId)) return item;

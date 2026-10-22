@@ -1,6 +1,6 @@
 import { runPool } from "./concurrency";
 import { fetchImmichStack, listImmichStacks, type ImmichStack } from "./immich";
-import { applyStackMembership, dropCompleteStacks, itemStackId, stacksTouchingGroups } from "./immich-stacks";
+import { applyStackMembership, dropCompleteStacks, itemStackId, releaseStacks, stacksTouchingGroups } from "./immich-stacks";
 import type { PathMapEntry, StoredGroup } from "./types";
 
 const cache = new Map<string, { at: number; stack: ImmichStack | null }>();
@@ -15,34 +15,38 @@ export function rememberImmichStack(stack: ImmichStack): void {
   cache.set(stack.id, { at: Date.now(), stack });
 }
 
+/** `gone` lists the ids Immich no longer has. A failed lookup is in neither list. */
 export async function loadImmichStacks(
   baseUrl: string,
   apiKey: string,
   stackIds: string[],
   parallelism: number,
-): Promise<ImmichStack[]> {
+): Promise<{ stacks: ImmichStack[]; gone: string[] }> {
   const now = Date.now();
   const stacks: ImmichStack[] = [];
+  const gone: string[] = [];
   const missing: string[] = [];
   for (const id of [...new Set(stackIds)]) {
     const hit = cache.get(id);
     if (hit && now - hit.at < ttlMs) {
       if (hit.stack) stacks.push(hit.stack);
+      else gone.push(id);
       continue;
     }
     missing.push(id);
   }
   await runPool(missing, parallelism, async (id) => {
-    let stack: ImmichStack | null = null;
+    let stack: ImmichStack | null;
     try {
       stack = await fetchImmichStack(baseUrl, apiKey, id);
     } catch {
-      stack = null;
+      return;
     }
     cache.set(id, { at: Date.now(), stack });
     if (stack) stacks.push(stack);
+    else gone.push(id);
   });
-  return stacks;
+  return { stacks, gone };
 }
 
 function stackIdsInGroups(groups: StoredGroup[]): string[] {
@@ -117,7 +121,9 @@ export async function expandImmichGroups(
   if (stackIds.length === 0) return groups;
   // Drop cached list entries so a thin GET /stacks payload cannot block full members.
   forgetImmichStacks(stackIds);
-  const stacks = await loadImmichStacks(baseUrl, apiKey, stackIds, parallelism);
-  if (stacks.length === 0) return groups;
-  return applyStackMembership(groups, stacks, maps);
+  const { stacks, gone } = await loadImmichStacks(baseUrl, apiKey, stackIds, parallelism);
+  // Immich deletes a stack once its other members are deleted, so a saved id can point at nothing.
+  const released = releaseStacks(groups, gone);
+  if (stacks.length === 0) return released;
+  return applyStackMembership(released, stacks, maps);
 }

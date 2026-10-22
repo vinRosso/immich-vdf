@@ -520,7 +520,8 @@ export async function fetchImmichStack(baseUrl: string, apiKey: string, stackId:
     headers: headers(apiKey),
     signal: AbortSignal.timeout(20_000),
   });
-  if (response.status === 404) return null;
+  // A stack Immich deleted answers 400 "Not found or no stack.read access", not 404.
+  if (response.status === 404 || response.status === 400) return null;
   if (!response.ok) throw new Error(`Immich stack lookup failed (${response.status})`);
   return parseImmichStack(await response.json());
 }

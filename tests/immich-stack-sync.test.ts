@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { applyListedStacks } from "../src/lib/immich-stack-sync";
+import test, { afterEach } from "node:test";
+import { applyListedStacks, expandImmichGroups, forgetImmichStacks } from "../src/lib/immich-stack-sync";
 import { applyStackMembership, dropCompleteStacks } from "../src/lib/immich-stacks";
 import type { StoredGroup, StoredItem } from "../src/lib/types";
 
@@ -73,4 +73,35 @@ test("fetch-shaped full stack membership inserts every member after a thin list 
     expanded[0].items.map((entry) => entry.assetId).sort(),
     ["a", "b", "c", "x"],
   );
+});
+
+const realFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  forgetImmichStacks([GONE, FLAKY]);
+});
+
+// A documentation address: it is neither loopback nor private, so the fetch guard lets it through.
+const BASE = "http://203.0.113.7:2283";
+const GONE = "faafd0cb-74ce-4c66-be0d-ae987bfc90ad";
+const FLAKY = "0b8f3c2e-1d4a-4e6f-9a7b-2c3d4e5f6a7b";
+
+test("a stack Immich deleted is cleared from the group", async () => {
+  // Immich deletes a stack once its other members are permanently deleted, and answers 400 for its id.
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ message: "Not found or no stack.read access" }), { status: 400 })) as typeof fetch;
+  const groups = [group("g", [item("/mnt/a.jpg", "a"), item("/mnt/b.jpg", "b", { stackId: GONE, stackPrimary: false })])];
+  const expanded = await expandImmichGroups(groups, BASE, "key", maps, 2);
+  assert.deepEqual(
+    expanded[0].items.map((entry) => entry.stackId ?? null),
+    [null, null],
+  );
+});
+
+test("a stack lookup that fails keeps the saved stack id", async () => {
+  globalThis.fetch = (async () => new Response("down", { status: 502 })) as typeof fetch;
+  const groups = [group("g", [item("/mnt/a.jpg", "a"), item("/mnt/b.jpg", "b", { stackId: FLAKY, stackPrimary: true })])];
+  const expanded = await expandImmichGroups(groups, BASE, "key", maps, 2);
+  assert.equal(expanded[0].items.find((entry) => entry.assetId === "b")?.stackId, FLAKY);
 });
