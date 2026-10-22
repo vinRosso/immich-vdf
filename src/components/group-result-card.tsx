@@ -57,7 +57,7 @@ export function ResultGroupCard({
         <PosterImage src={posterSrc(section, best)} sensitive={blurPoster} />
         <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/85 to-transparent px-3 pt-10 pb-2.5 text-sm text-white">
           <span className="tabular-nums">{similarityRange(group)}</span>
-          <span className="font-semibold tabular-nums text-[oklch(0.86_0.1_302)]">−{formatBytes(groupReclaimBytes(group.items))}</span>
+          <span className="font-semibold tabular-nums text-white">{formatBytes(groupReclaimBytes(group.items))}</span>
         </span>
       </div>
       <span className="pointer-events-none absolute top-2 left-2 flex size-[1.875rem] items-center justify-center rounded-full bg-background/90 text-xs font-semibold tabular-nums text-foreground shadow-sm">
