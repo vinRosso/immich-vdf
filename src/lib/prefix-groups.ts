@@ -205,7 +205,9 @@ function prefixWorkerFile(): string {
 function runPrefixWorker<T>(workerData: object): Promise<T> {
   const workerFile = prefixWorkerFile();
   return new Promise((resolve, reject) => {
-    const worker = new Worker(workerFile, { workerData });
+    // Not `new Worker(file)`: Turbopack treats that as a module reference and, with a runtime
+    // path, tries to bundle every file in the project (turbopackIgnore has no effect there).
+    const worker: Worker = Reflect.construct(Worker, [workerFile, { workerData }]);
     let settled = false;
     const finish = (settle: () => void) => {
       if (settled) return;

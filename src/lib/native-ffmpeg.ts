@@ -73,7 +73,8 @@ export function nativeFfmpegMode(
   if (setting === "0" || setting === "false" || setting === "off") return { kind: "off", libDir };
   if (setting === "1" || setting === "true" || setting === "on") return { kind: "on", libDir };
   if (libDir === null) return { kind: "auto", libDir };
-  const shipped = libraryFileNames().every((file) => exists(path.join(libDir, file)));
+  // turbopackIgnore: a runtime folder; otherwise the build traces the whole project.
+  const shipped = libraryFileNames().every((file) => exists(path.join(/* turbopackIgnore: true */ libDir, file)));
   return shipped ? { kind: "on", libDir } : { kind: "off", libDir, imageLibsMissing: true };
 }
 

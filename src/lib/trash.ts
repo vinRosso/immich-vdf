@@ -156,7 +156,7 @@ export async function restoreTrashItem(mount: string, relative: string): Promise
     throw new PathJailError("Restore path escapes the mount");
   }
   try {
-    await stat(target);
+    await stat(/* turbopackIgnore: true */ target);
     const suffix = path.extname(target);
     const stem = target.slice(0, target.length - suffix.length);
     target = `${stem}-restored-${Date.now()}${suffix}`;
