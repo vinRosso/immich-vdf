@@ -3,7 +3,6 @@ import { resultsPreview, resultsView, resultsViewGzip } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { DEFAULT_RESULTS_GROUP_SORT, isResultsGroupSortId } from "@/lib/results-sort";
 import { api } from "@/lib/route";
-import type { SectionId } from "@/lib/types";
 
 export const GET = api(async (request) => {
   const section = request.nextUrl.searchParams.get("section");

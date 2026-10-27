@@ -1,6 +1,6 @@
 import { loadConfig } from "./config";
 import { maxScanParallelism } from "./scan-parallelism";
-import { resolveImmichScanRoots, type ImmichCredentials } from "./immich-mounts";
+import { type ImmichCredentials } from "./immich-mounts";
 import { IMMICH_GENERATED_DIRS, immichScanFolderPlan } from "./immich-scan-scope";
 import { AppError } from "./errors";
 import { resolveImmichPathMap } from "./immich-path-map";

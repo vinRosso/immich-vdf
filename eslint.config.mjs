@@ -22,6 +22,7 @@ const eslintConfig = defineConfig([
     "upstream/**",
     "data/**",
     "agent-tools/**",
+    ".claude/**",
   ]),
 ]);
 

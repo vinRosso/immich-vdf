@@ -24,7 +24,6 @@ import {
 } from "@/lib/image-view";
 import { driftAction } from "@/lib/playback-sync";
 import { likelyDirectPlayback } from "@/lib/playback";
-import type { ImmichAlbum } from "@/lib/immich";
 import {
   albumName,
   albumSetsMismatch,
@@ -301,7 +300,7 @@ export function Viewer({
     setPending("Extract");
     setError(null);
     try {
-      const result = await api<{ groupId: string }>("/api/results/extract", {
+      await api<{ groupId: string }>("/api/results/extract", {
         method: "POST",
         body: JSON.stringify({ section, groupId: group.groupId, paths }),
       });
