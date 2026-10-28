@@ -40,6 +40,7 @@ import {
 import { extractStoredGroup, mergeStoredGroups } from "./merge-groups";
 import { pickPrimaryIndex } from "./primary";
 import { totalReclaimBytes } from "./reclaim";
+import type { ResultsPatch } from "./results-patch";
 import { DEFAULT_RESULTS_GROUP_SORT, sortResultGroups, type ResultsGroupSortId } from "./results-sort";
 import { cancelThumbJobs, cancelThumbWork } from "./thumb-sessions";
 import { resolveInside } from "./path-jail";
@@ -67,6 +68,7 @@ import type {
   ResultsPreviewResponse,
   ResultsResponse,
   SectionId,
+  Settings,
   StoredGroup,
   StoredItem,
   StoredResults,
@@ -145,6 +147,19 @@ async function buildResultsView(section: SectionId): Promise<ResultsResponse> {
     hiddenIgnored,
     unmatched,
     groups,
+  };
+}
+
+/** The touched groups as they are now (or as removed), so a client can update its list without a full reload. */
+export async function resultsPatch(section: SectionId, touchedIds: string[]): Promise<ResultsPatch> {
+  const view = await resultsView(section);
+  const byId = new Map(view.groups.map((group) => [group.groupId, group]));
+  const ids = [...new Set(touchedIds)];
+  return {
+    removedIds: ids.filter((id) => !byId.has(id)),
+    groups: ids.flatMap((id) => byId.get(id) ?? []),
+    hiddenIgnored: view.hiddenIgnored,
+    unmatched: view.unmatched,
   };
 }
 
@@ -293,6 +308,30 @@ export async function restoreIgnored(section: SectionId, key: string): Promise<v
   await updateIgnored(section, (entries) => entries.filter((entry) => entry.key !== key));
 }
 
+/** Trashes the copies in many groups as one move and one undo record. Groups that do not check out are listed. */
+export async function trashServerGroups(
+  entries: { groupId: string; keepPath: string }[],
+): Promise<ServerTrashOutcome & { failed: BulkFailure[]; touched: string[] }> {
+  const results = await requireResults("server");
+  const failed: BulkFailure[] = [];
+  const touched: string[] = [];
+  const victims = new Set<string>();
+  await runPool(entries, RESOLVE_PARALLEL, async (entry) => {
+    try {
+      const group = requireGroup(results, entry.groupId);
+      const keep = await realResultPath("server", entry.keepPath, group);
+      const extra = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keep);
+      if (extra.length === 0) return;
+      for (const itemPath of extra) victims.add(itemPath);
+      touched.push(entry.groupId);
+    } catch (err) {
+      failed.push({ groupId: entry.groupId, error: bulkError(err, "Could not check this group") });
+    }
+  });
+  if (victims.size === 0) return { moved: 0, undoId: null, failed, touched };
+  return { ...(await commitServerTrash([...victims])), failed, touched };
+}
+
 export async function trashServerGroup(groupId: string, keepPath: string): Promise<ServerTrashOutcome> {
   const results = await requireResults("server");
   const group = requireGroup(results, groupId);
@@ -306,17 +345,23 @@ export async function trashServerItems(groupId: string, victimPaths: string[]): 
   const group = requireGroup(results, groupId);
   if (victimPaths.length === 0) throw new AppError("Choose a file to trash");
   const victims: string[] = [];
-  for (const victimPath of victimPaths) victims.push(await realResultPath("server", victimPath, group));
+  await runPool(victimPaths, RESOLVE_PARALLEL, async (victimPath, index) => {
+    victims[index] = await realResultPath("server", victimPath, group);
+  });
   const unique = [...new Set(victims)];
   if (unique.length >= group.items.length) throw new AppError("Keep at least one file in this group");
   return commitServerTrash(unique);
 }
 
-export async function stackImmichGroup(groupId: string, primaryId: string, assetIds?: string[]): Promise<void> {
-  const settings = await loadSettings();
-  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
-  const results = await requireResults("immich");
-  const group = requireGroup(results, groupId);
+export type BulkFailure = { groupId: string; error: string };
+
+/** Creates the Immich stack for one group and returns the change to apply to the saved group. Saves nothing. */
+async function createImmichStack(
+  settings: Settings,
+  group: StoredGroup,
+  primaryId: string,
+  assetIds?: string[],
+): Promise<(g: StoredGroup) => StoredGroup> {
   const ids = matchedIds(group);
   const chosen = assetIds?.length ? ids.filter((id) => assetIds.includes(id) || id === primaryId) : ids;
   if (!chosen.includes(primaryId)) throw new AppError("The primary file is not a matched Immich asset");
@@ -327,7 +372,41 @@ export async function stackImmichGroup(groupId: string, primaryId: string, asset
   rememberImmichStack(created);
   const previousStacks = stackIdsInGroup(group).filter((id) => id !== created.id);
   if (previousStacks.length > 0) forgetImmichStacks(previousStacks);
-  await saveImmichStackGroup(groupId, (fresh) => assignSelectionToStack(fresh, ordered, created.id, created.primaryAssetId || primaryId));
+  return (fresh) => assignSelectionToStack(fresh, ordered, created.id, created.primaryAssetId || primaryId);
+}
+
+export async function stackImmichGroup(groupId: string, primaryId: string, assetIds?: string[]): Promise<void> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const group = requireGroup(results, groupId);
+  const apply = await createImmichStack(settings, group, primaryId, assetIds);
+  await saveImmichStackGroup(groupId, apply);
+}
+
+function bulkError(err: unknown, fallback: string): string {
+  return err instanceof AppError ? err.message : fallback;
+}
+
+/** Stacks many groups a few Immich calls at a time and saves once. A group that fails stays as it was. */
+export async function stackImmichGroups(
+  entries: { groupId: string; primaryId: string }[],
+): Promise<{ failed: BulkFailure[]; touched: string[] }> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const failed: BulkFailure[] = [];
+  const done: { groupId: string; apply: (g: StoredGroup) => StoredGroup }[] = [];
+  await runPool(entries, settings.immich.scan.parallelism, async (entry) => {
+    try {
+      const group = requireGroup(results, entry.groupId);
+      done.push({ groupId: entry.groupId, apply: await createImmichStack(settings, group, entry.primaryId) });
+    } catch (err) {
+      failed.push({ groupId: entry.groupId, error: bulkError(err, "Could not stack this group") });
+    }
+  });
+  await saveImmichStackGroups(done);
+  return { failed, touched: done.map((entry) => entry.groupId) };
 }
 
 /** Add loose files in a group onto its single existing Immich stack. */
@@ -430,13 +509,21 @@ export async function makeImmichStackPrimary(groupId: string, assetId: string): 
 }
 
 async function saveImmichStackGroup(groupId: string, apply: (group: StoredGroup) => StoredGroup): Promise<void> {
+  await saveImmichStackGroups([{ groupId, apply }]);
+}
+
+async function saveImmichStackGroups(updates: { groupId: string; apply: (group: StoredGroup) => StoredGroup }[]): Promise<void> {
+  if (updates.length === 0) return;
   await updateResults("immich", (current) => {
     if (!current) return current;
-    const fresh = current.groups.find((group) => group.groupId === groupId);
-    if (!fresh) return current;
-    const next = apply(fresh);
-    const kept = groupIsOneCompleteStack(next) ? null : next;
-    return { ...current, groups: replaceGroup(current.groups, groupId, kept) };
+    let groups = current.groups;
+    for (const { groupId, apply } of updates) {
+      const fresh = groups.find((group) => group.groupId === groupId);
+      if (!fresh) continue;
+      const next = apply(fresh);
+      groups = replaceGroup(groups, groupId, groupIsOneCompleteStack(next) ? null : next);
+    }
+    return { ...current, groups };
   });
 }
 
@@ -450,6 +537,34 @@ export async function trashImmichGroup(groupId: string, keepId: string): Promise
   return commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, ids.filter((id) => id !== keepId));
 }
 
+/** Trashes the copies in many groups with one Immich call and one save. Groups that do not check out are listed. */
+export async function trashImmichGroups(
+  entries: { groupId: string; keepId: string }[],
+): Promise<{ trashed: number; failed: BulkFailure[]; touched: string[] }> {
+  const settings = await loadSettings();
+  requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const results = await requireResults("immich");
+  const failed: BulkFailure[] = [];
+  const touched: string[] = [];
+  const victims: string[] = [];
+  for (const entry of entries) {
+    try {
+      const ids = matchedIds(requireGroup(results, entry.groupId));
+      if (!ids.includes(entry.keepId)) throw new AppError("The kept file is not a matched Immich asset");
+      const extra = ids.filter((id) => id !== entry.keepId);
+      if (extra.length === 0) continue;
+      victims.push(...extra);
+      touched.push(entry.groupId);
+    } catch (err) {
+      failed.push({ groupId: entry.groupId, error: bulkError(err, "Could not check this group") });
+    }
+  }
+  if (victims.length === 0) return { trashed: 0, failed, touched };
+  const trashed = await commitImmichTrash(settings.immich.baseUrl, settings.immich.apiKey, [...new Set(victims)]);
+  return { trashed, failed, touched };
+}
+
+const RESOLVE_PARALLEL = 8;
 const albumCache = new Map<string, { at: number; albums: ImmichAlbum[] }>();
 const ALBUM_TTL_MS = 60_000;
 const ALBUM_CACHE_PRUNE_AT = 500;

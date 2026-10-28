@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { removeFromImmichStack } from "@/lib/actions";
+import { removeFromImmichStack, resultsPatch } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 
@@ -8,5 +8,5 @@ export const POST = api(async (request) => {
   if (!body.groupId) throw new AppError("Choose a group");
   if (!body.assetIds?.length) throw new AppError("Choose a file to remove from the stack");
   await removeFromImmichStack(body.groupId, body.assetIds);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, patch: await resultsPatch("immich", [body.groupId]) });
 });

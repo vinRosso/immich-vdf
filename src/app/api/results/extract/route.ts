@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { extractResultGroup } from "@/lib/actions";
+import { extractResultGroup, resultsPatch } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 import type { SectionId } from "@/lib/types";
@@ -15,6 +15,7 @@ export const POST = api(async (request) => {
   if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== "string")) {
     throw new AppError("Choose files to extract");
   }
-  const groupId = await extractResultGroup(sectionOf(body.section), body.groupId, body.paths);
-  return NextResponse.json({ groupId });
+  const section = sectionOf(body.section);
+  const groupId = await extractResultGroup(section, body.groupId, body.paths);
+  return NextResponse.json({ groupId, patch: await resultsPatch(section, [body.groupId, groupId]) });
 });

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ignoredGroupsView, ignoreGroup, restoreIgnored } from "@/lib/actions";
+import { ignoredGroupsView, ignoreGroup, restoreIgnored, resultsPatch } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 import { loadIgnored } from "@/lib/store";
@@ -24,8 +24,9 @@ export const GET = api(async (request) => {
 export const POST = api(async (request) => {
   const body = (await request.json()) as { section?: string; groupId?: string };
   if (!body.groupId) throw new AppError("Missing group");
-  const key = await ignoreGroup(sectionOf(body.section), body.groupId);
-  return NextResponse.json({ ok: true, key });
+  const section = sectionOf(body.section);
+  const key = await ignoreGroup(section, body.groupId);
+  return NextResponse.json({ ok: true, key, patch: await resultsPatch(section, [body.groupId]) });
 });
 
 export const DELETE = api(async (request) => {

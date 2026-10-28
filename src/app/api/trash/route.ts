@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { trashServerGroup, trashServerItems } from "@/lib/actions";
+import { resultsPatch, trashServerGroup, trashServerGroups, trashServerItems } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 import { loadTrashStats, trashStatsSavedTotal } from "@/lib/store";
@@ -19,12 +19,27 @@ export const GET = api(async (request) => {
 });
 
 export const POST = api(async (request) => {
-  const body = (await request.json()) as { groupId?: string; keepPath?: string; trashPaths?: string[] };
+  const body = (await request.json()) as {
+    groupId?: string;
+    keepPath?: string;
+    trashPaths?: string[];
+    groups?: { groupId?: string; keepPath?: string }[];
+  };
+  if (Array.isArray(body.groups)) {
+    const entries = body.groups.flatMap((entry) =>
+      typeof entry?.groupId === "string" && typeof entry.keepPath === "string"
+        ? [{ groupId: entry.groupId, keepPath: entry.keepPath }]
+        : [],
+    );
+    if (entries.length === 0 || entries.length !== body.groups.length) throw new AppError("Choose groups to trash");
+    const { touched, ...outcome } = await trashServerGroups(entries);
+    return NextResponse.json({ ...outcome, patch: await resultsPatch("server", touched) });
+  }
   if (!body.groupId) throw new AppError("Choose a file to keep");
   const outcome = Array.isArray(body.trashPaths)
     ? await trashServerItems(body.groupId, body.trashPaths)
     : await trashServerGroup(body.groupId, requiredKeep(body.keepPath));
-  return NextResponse.json(outcome);
+  return NextResponse.json({ ...outcome, patch: await resultsPatch("server", [body.groupId]) });
 });
 
 export const PATCH = api(async (request) => {
