@@ -51,17 +51,6 @@ export function GroupCardGridSkeleton({ count = 8, cardSize = DEFAULT_RESULTS_CA
   );
 }
 
-export function ResultsToolbarSkeleton() {
-  return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <Skeleton index={0} className="h-5 w-24" />
-      <Skeleton index={1} className="h-5 w-20" />
-      <Skeleton index={2} className="h-6 w-36" />
-      <Skeleton index={3} className="h-3 w-28" />
-    </div>
-  );
-}
-
 export function HomeGroupGridSkeleton() {
   return (
     <div className="grid w-full grid-cols-5 gap-1.5" aria-busy="true" aria-label="Loading groups">
@@ -156,12 +145,3 @@ export function ThumbnailSkeleton({ className }: { className?: string }) {
   return <Skeleton className={cn("absolute inset-0 rounded-none", className)} aria-hidden />;
 }
 
-export function SectionRailSkeleton() {
-  return (
-    <div className="space-y-3.5" aria-busy="true" aria-label="Loading settings">
-      <Skeleton index={0} className="h-11 w-full rounded-lg" />
-      <Skeleton index={1} className="h-14 w-full rounded-xl" />
-      <Skeleton index={2} className="h-14 w-full rounded-xl" />
-    </div>
-  );
-}

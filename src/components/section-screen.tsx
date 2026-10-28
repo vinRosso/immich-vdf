@@ -16,9 +16,9 @@ import {
   GroupCardGridSkeleton,
   ImmichConnectionSkeleton,
   Reveal,
-  ResultsToolbarSkeleton,
-  SectionRailSkeleton,
+  SkeletonText,
 } from "@/components/skeletons";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Viewer } from "@/components/viewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,7 +99,7 @@ function RailButton({
 }: {
   icon: React.ReactNode;
   title: string;
-  subtitle: string;
+  subtitle: React.ReactNode;
   disabled?: boolean;
   onClick: () => void;
 }) {
@@ -113,7 +113,7 @@ function RailButton({
       <span className="flex size-[1.875rem] shrink-0 items-center justify-center rounded-lg bg-accent text-primary [&_svg]:size-4">{icon}</span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-[13px] font-medium">{title}</span>
-        <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+        <span className="truncate text-xs text-muted-foreground">{subtitle ?? "\u00a0"}</span>
       </span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
     </button>
@@ -366,8 +366,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
             className="scrollbar-subtle flex min-h-0 flex-col gap-3.5 px-4 pt-5 pb-5 sm:px-6 lg:overflow-y-auto lg:px-0 lg:pr-0.5"
           >
             <h1 className="sr-only">{sectionLabel(section)}</h1>
-            {draft ? (
-              <Reveal className="flex flex-1 flex-col gap-3.5">
+            <Reveal className="flex flex-1 flex-col gap-3.5">
                 {results?.scanned ? (
                   <p className="text-xs tabular-nums text-muted-foreground">
                     {results.groups.length} {results.groups.length === 1 ? "group" : "groups"} ·{" "}
@@ -379,7 +378,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                     className="h-11 w-full min-w-[6.5rem] px-6 text-base"
                     title={runtime && !runtime.cliAvailable ? "Scanning isn't available right now" : undefined}
                     onClick={() => void scan()}
-                    disabled={busy || matching || feed.running || !runtime?.cliAvailable}
+                    disabled={busy || matching || feed.running || !runtime?.cliAvailable || !draft}
                   >
                     {runningHere ? "Scanning" : "Scan"}
                   </Button>
@@ -402,14 +401,15 @@ export function SectionScreen({ section }: { section: SectionId }) {
                   <RailButton
                     icon={<SlidersHorizontal />}
                     title="Scan settings"
-                    subtitle={scanSettingsSummary(draft.scan)}
+                    subtitle={draft ? scanSettingsSummary(draft.scan) : <SkeletonText className="mt-0.5 w-32" />}
+                    disabled={!draft}
                     onClick={() => setSettingsOpen(true)}
                   />
                   <RailButton
                     icon={<Clock />}
-                    title={draft.schedule.mode === "off" ? "Add schedule" : "Edit schedule"}
-                    subtitle={!runs ? "Checking schedule…" : runs[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
-                    disabled={busy}
+                    title={draft && draft.schedule.mode !== "off" ? "Edit schedule" : "Schedule"}
+                    subtitle={!runs ? <SkeletonText className="mt-0.5 w-28" /> : runs[section].nextRun ? `Next ${formatNextRun(runs[section].nextRun)}` : "Not scheduled"}
+                    disabled={busy || !draft}
                     onClick={() => setScheduleDialogOpen(true)}
                   />
                 </div>
@@ -441,45 +441,55 @@ export function SectionScreen({ section }: { section: SectionId }) {
                       <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
                         <span>Folders</span>
                       </div>
-                      <FolderPicker
-                        section={section}
-                        label="Include"
-                        dialogTitle="Include folders"
-                        hint="Folders to scan, including their subfolders."
-                        values={draft.scan.includes}
-                        onChange={(includes) => setDraft({ ...draft, scan: { ...draft.scan, includes } })}
-                      />
-                      {draft.scan.includes.length === 0 ? (
-                        <p className="text-xs text-destructive">Add at least one folder.</p>
-                      ) : null}
-                      <FolderPicker
-                        section={section}
-                        label="Exclude"
-                        dialogTitle="Exclude folders"
-                        hint="Folders to skip, including their subfolders."
-                        values={draft.scan.excludes}
-                        onChange={(excludes) => setDraft({ ...draft, scan: { ...draft.scan, excludes } })}
-                        dashed
-                      />
+                      {draft ? (
+                        <>
+                          <FolderPicker
+                            section={section}
+                            label="Include"
+                            dialogTitle="Include folders"
+                            hint="Folders to scan, including their subfolders."
+                            values={draft.scan.includes}
+                            onChange={(includes) => setDraft({ ...draft, scan: { ...draft.scan, includes } })}
+                          />
+                          {draft.scan.includes.length === 0 ? (
+                            <p className="text-xs text-destructive">Add at least one folder.</p>
+                          ) : null}
+                          <FolderPicker
+                            section={section}
+                            label="Exclude"
+                            dialogTitle="Exclude folders"
+                            hint="Folders to skip, including their subfolders."
+                            values={draft.scan.excludes}
+                            onChange={(excludes) => setDraft({ ...draft, scan: { ...draft.scan, excludes } })}
+                            dashed
+                          />
+                        </>
+                      ) : (
+                        <div className="space-y-2.5" aria-busy="true" aria-label="Loading folders">
+                          <Skeleton className="h-8 w-full rounded-lg" />
+                          <Skeleton className="h-8 w-full rounded-lg" />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className={railCardClass}>
-                      <ImmichConnectionFields
-                        draft={draft}
-                        setDraft={setDraft}
-                        settings={settings}
-                        busy={busy}
-                        onSave={persistDraft}
-                        onReload={reload}
-                      />
+                      {draft ? (
+                        <ImmichConnectionFields
+                          draft={draft}
+                          setDraft={setDraft}
+                          settings={settings}
+                          busy={busy}
+                          onSave={persistDraft}
+                          onReload={reload}
+                        />
+                      ) : (
+                        <ImmichConnectionSkeleton />
+                      )}
                     </div>
                   )}
                   <SpaceFreedCard />
                 </div>
-              </Reveal>
-            ) : (
-              <SectionRailSkeleton />
-            )}
+            </Reveal>
           </aside>
           <section
             aria-label="Duplicate groups"
@@ -805,15 +815,8 @@ function Results({
     }
   }
 
-  if (!results || !prefsReady) {
-    return (
-      <div className="space-y-3">
-        <ResultsToolbarSkeleton />
-        <GroupCardGridSkeleton count={12} cardSize={cardSize} />
-      </div>
-    );
-  }
-  if (!results.scanned) {
+  const loading = !results || !prefsReady;
+  if (results && prefsReady && !results.scanned) {
     return (
       <Card className="border border-dashed border-border bg-transparent shadow-none ring-0">
         <CardHeader className="py-8">
@@ -831,12 +834,14 @@ function Results({
     <div className="space-y-3">
       <div className="sticky top-0 z-20 flex flex-col gap-3 border-b border-white/[0.06] bg-background pt-4 pb-2.5 text-xs shadow-[0_0_0_100vmax_var(--background)] [clip-path:inset(0_-100vmax)] lg:flex-row lg:flex-wrap lg:items-center lg:gap-x-4 lg:gap-y-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          {results.error ? <Badge variant="destructive">Failed</Badge> : null}
-          {results.warning ? <Badge variant="secondary">{results.warning}</Badge> : null}
+          {results?.error ? <Badge variant="destructive">Failed</Badge> : null}
+          {results?.warning ? <Badge variant="secondary">{results.warning}</Badge> : null}
           {mergeError ? <span className="text-destructive">{mergeError}</span> : null}
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <span className="sr-only">Sort groups</span>
+            {!prefsReady ? <Skeleton className="h-6 w-40 rounded-md" /> : null}
             <select
+              hidden={!prefsReady}
               className="h-6 max-w-full truncate rounded-md border border-border bg-popover px-2 text-xs text-foreground [color-scheme:dark] sm:max-w-[14rem]"
               value={sortId}
               onChange={(event) => {
@@ -858,7 +863,9 @@ function Results({
             title="Drag to make group cards larger or smaller"
           >
             <LayoutGrid className="size-3.5 shrink-0" aria-hidden />
+            {!prefsReady ? <Skeleton className="h-1.5 w-14 sm:w-24" /> : null}
             <input
+              hidden={!prefsReady}
               type="range"
               min={1}
               max={9}
@@ -945,7 +952,9 @@ function Results({
           </div>
         </div>
       </div>
-      {sortedGroups.length === 0 ? (
+      {loading ? (
+        <GroupCardGridSkeleton count={12} cardSize={cardSize} />
+      ) : sortedGroups.length === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>No groups to review</CardTitle>
