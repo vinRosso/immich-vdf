@@ -12,6 +12,7 @@ import { SpaceFreedCard } from "@/components/space-freed-card";
 import { formatBytes, formatClock, formatScanDuration } from "@/lib/format";
 import { DEFAULT_RESULTS_GROUP_SORT, isResultsGroupSortId, resultsSortStorageKey } from "@/lib/results-sort";
 import { sectionLabel } from "@/lib/section-label";
+import { readViewPref } from "@/lib/view-prefs";
 import { useClientMounted } from "@/lib/use-client-mounted";
 import type { ResultsPreviewGroup, ResultsPreviewResponse, SectionId } from "@/lib/types";
 
@@ -20,7 +21,7 @@ const PREVIEW_ROWS = 2;
 const PREVIEW_SLOTS = PREVIEW_COLS * PREVIEW_ROWS;
 
 function previewSort(section: SectionId) {
-  const stored = sessionStorage.getItem(resultsSortStorageKey(section));
+  const stored = readViewPref(resultsSortStorageKey(section));
   return stored && isResultsGroupSortId(stored) ? stored : DEFAULT_RESULTS_GROUP_SORT;
 }
 

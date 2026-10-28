@@ -38,6 +38,7 @@ import { totalReclaimBytes } from "@/lib/reclaim";
 import { RESULTS_CHANGED_EVENT, publishUndo, undoIgnore, undoTrash } from "@/lib/undo-events";
 import { sectionLabel } from "@/lib/section-label";
 import { mergeClientGroups } from "@/lib/merge-groups";
+import { readViewPref, writeViewPref } from "@/lib/view-prefs";
 import { applyResultsPatch, type ResultsPatch } from "@/lib/results-patch";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
@@ -605,19 +606,22 @@ function Results({
   const [mergeBusy, setMergeBusy] = useState(false);
   const [groupOverride, setGroupOverride] = useState<ClientGroup[] | null>(null);
 
+  // Saved after the first client render, so the server and the first client render agree. The grid waits for it.
+  const [prefsReady, setPrefsReady] = useState(false);
   useEffect(() => {
-    const stored = sessionStorage.getItem(resultsSortStorageKey(section));
+    const stored = readViewPref(resultsSortStorageKey(section));
     if (stored && isResultsGroupSortId(stored)) setSortId(stored);
-    const storedSize = sessionStorage.getItem(resultsCardSizeStorageKey(section));
+    const storedSize = readViewPref(resultsCardSizeStorageKey(section));
     if (storedSize) {
       const parsed = Number(storedSize);
       if (parsed >= 1 && parsed <= 9) setCardSize(parsed);
     }
+    setPrefsReady(true);
   }, [section]);
 
   function changeSort(next: ResultsGroupSortId) {
     setSortId(next);
-    sessionStorage.setItem(resultsSortStorageKey(section), next);
+    writeViewPref(resultsSortStorageKey(section), next);
   }
 
   const listedGroups = groupOverride ?? results?.groups;
@@ -801,7 +805,7 @@ function Results({
     }
   }
 
-  if (!results) {
+  if (!results || !prefsReady) {
     return (
       <div className="space-y-3">
         <ResultsToolbarSkeleton />
@@ -865,7 +869,7 @@ function Results({
               onChange={(event) => {
                 const next = Number(event.target.value);
                 setCardSize(next);
-                sessionStorage.setItem(resultsCardSizeStorageKey(section), String(next));
+                writeViewPref(resultsCardSizeStorageKey(section), String(next));
               }}
             />
           </label>
