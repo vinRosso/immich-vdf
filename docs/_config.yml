@@ -21,5 +21,6 @@ footer_content: 'Built on <a href="https://github.com/0x90d/videoduplicatefinder
 exclude:
   - project-context.md
   - immich-vdf-plan.md
+  - roadmap.md
   - vdf-web-plan.md
   - images/app.jpg.old

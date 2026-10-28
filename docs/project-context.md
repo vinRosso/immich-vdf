@@ -14,6 +14,7 @@ Users copy `docker-compose.example.yml` and pull `vinrosso/immich-vdf`. In this 
 ## Key docs
 
 - [immich-vdf-plan.md](./immich-vdf-plan.md) — full product and architecture plan.
+- [roadmap.md](./roadmap.md) — planned releases 0.3.0 to 0.6.0 and what each item changes.
 - [../README.md](../README.md) — what it is, and the user quick start.
 - Sidebar sections: Installation (`install.md`, `security.md`), Usage, Development (`dev-*.md`, `code.md`).
 - [development.md](./development.md) — local build and image publish.
