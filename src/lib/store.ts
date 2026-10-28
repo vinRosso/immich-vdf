@@ -72,7 +72,9 @@ async function fileStamp(file: string): Promise<string> {
  * Counts this process's writes to a section's results and ignore list. File times can be a second or two apart on a
  * network share or FAT, so two writes of the same size can look identical on disk; the count tells them apart.
  */
-const writeEpoch = new Map<SectionId, number>();
+const epochHolder = globalThis as typeof globalThis & { __vdfWriteEpoch?: Map<SectionId, number> };
+epochHolder.__vdfWriteEpoch ??= new Map();
+const writeEpoch = epochHolder.__vdfWriteEpoch;
 
 function wrote(section: SectionId): void {
   writeEpoch.set(section, (writeEpoch.get(section) ?? 0) + 1);
