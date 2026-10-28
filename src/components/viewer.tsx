@@ -170,16 +170,37 @@ export function Viewer({
   }, [group, imageOnly, previewIndex, section]);
 
   // Once this group has had its turn, warm the next and previous ones: posters, the first photo, and the
-  // media info for videos, so stepping to them shows pictures at once.
-  const neighborKey = neighbors.map((entry) => entry?.groupId ?? "").join("|");
+  // media info for videos, so stepping to them shows pictures at once. The header puts the encodes behind
+  // this group's own work. Loads for a group that is no longer this one or a neighbour, or whose items
+  // changed, are cancelled; the one being stepped to keeps its load, so an encode already running for it
+  // is not thrown away.
+  const neighborKey = neighbors.map((entry) => (entry ? prefetchKey(entry) : "")).join("|");
+  const prefetches = useRef(new Map<string, AbortController>());
   useEffect(() => {
+    const loads = prefetches.current;
+    return () => {
+      for (const controller of loads.values()) controller.abort();
+      loads.clear();
+    };
+  }, [section]);
+  useEffect(() => {
+    const keep = new Set(group ? [group, ...neighbors].map((entry) => (entry ? prefetchKey(entry) : "")) : []);
+    for (const [key, controller] of prefetches.current) {
+      if (keep.has(key)) continue;
+      controller.abort();
+      prefetches.current.delete(key);
+    }
     if (!group) return;
     const timer = window.setTimeout(() => {
       for (const neighbor of neighbors) {
-        if (!neighbor) continue;
-        neighbor.items.slice(0, 6).forEach((item, position) => {
-          const img = new Image();
-          img.src = item.isImage && position === 0 ? previewImageSrc(section, item) : posterSrc(section, item);
+        if (!neighbor || prefetches.current.has(prefetchKey(neighbor))) continue;
+        const controller = new AbortController();
+        prefetches.current.set(prefetchKey(neighbor), controller);
+        neighbor.items.slice(0, PREFETCH_ITEMS).forEach((item, position) => {
+          const src = item.isImage && position === 0 ? previewImageSrc(section, item) : posterSrc(section, item);
+          void fetch(src, { signal: controller.signal, headers: { "X-Vdf-Prefetch": "1" } })
+            .then((response) => response.blob())
+            .catch(() => undefined);
           if (!item.isImage && !(section === "immich" && item.assetId)) void loadMediaInfo(section, item.path).catch(() => undefined);
         });
       }
@@ -1680,6 +1701,13 @@ function viewerImageSources(section: SectionId, item: ClientItem): string[] {
 }
 
 /** What the viewer paints first for this photo, so the next and previous ones can load ahead. */
+const PREFETCH_ITEMS = 6;
+
+/** A group and the items it loads ahead, so a group whose items change is loaded ahead again. */
+function prefetchKey(group: ClientGroup): string {
+  return [group.groupId, ...group.items.slice(0, PREFETCH_ITEMS).map((item) => item.path)].join("\0");
+}
+
 function previewImageSrc(section: SectionId, item: ClientItem): string {
   return viewerImageSources(section, item)[0] ?? thumbSrc(section, item);
 }

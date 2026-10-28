@@ -90,7 +90,7 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
           url.searchParams.get("kind") || "poster",
           Number(url.searchParams.get("index") || 0),
           {
-            priority: thumbPriority(url.searchParams.get("priority")),
+            priority: thumbPriority(request.headers["x-vdf-prefetch"], url.searchParams.get("priority")),
             signal: clientAbortSignal(request, response),
           },
         );
@@ -337,7 +337,12 @@ async function sendStatic(
   request.on("close", () => stream.destroy());
 }
 
-function thumbPriority(value: string | null): "thumb" | "strip" | "thumbnail" {
+/** The prefetch lane comes from a header, so the URL, and the browser cache entry, match the request it warms. */
+export function thumbPriority(
+  prefetch: string | string[] | undefined,
+  value: string | null,
+): "thumb" | "strip" | "thumbnail" | "prefetch" {
+  if (prefetch === "1") return "prefetch";
   if (value === "thumb" || value === "viewer") return "thumb";
   if (value === "strip") return "strip";
   return "thumbnail";

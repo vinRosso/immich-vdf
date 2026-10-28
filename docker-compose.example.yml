@@ -9,6 +9,8 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD}
       TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-}
       IMMICH_SCAN_ROOTS: ${IMMICH_SCAN_ROOTS:-}
+      # Thumbnail and playback encodes at once while no scan runs. Empty: three quarters of the cores.
+      VDF_FFMPEG_SLOTS: ${VDF_FFMPEG_SLOTS:-}
       # Account that owns MEDIA_PATH. Startup gives ./data to this id.
       PUID: ${PUID:-1000}
       PGID: ${PGID:-100}
