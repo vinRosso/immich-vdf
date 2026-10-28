@@ -112,3 +112,35 @@ test("bulk trash on Files moves every copy at once with one undo record", async 
   const patch = await resultsPatch("server", outcome.touched);
   assert.deepEqual([...patch.removedIds].sort(), ["ga", "gb"]);
 });
+
+test("one file that cannot be moved does not lose the undo for the files that were", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "vdf-bulk-"));
+  const media = await realpath(await mkdtemp(path.join(os.tmpdir(), "vdf-media-")));
+  process.env.DATA_DIR = dir;
+  process.env.MEDIA_ROOTS = media;
+  const files = ["a1", "a2", "b1", "b2"].map((name) => path.join(media, `${name}.jpg`));
+  for (const file of files.slice(0, 3)) await writeFile(file, "x");
+  await writeResults(dir, "server", [
+    { groupId: "ga", items: [item(files[0], null), item(files[1], null)] },
+    { groupId: "gb", items: [item(files[2], null), item(files[3], null)] },
+  ]);
+  const { trashServerGroups, resultsPatch } = await import("../src/lib/actions");
+  const outcome = await trashServerGroups([
+    { groupId: "ga", keepPath: files[0] },
+    { groupId: "gb", keepPath: files[2] },
+  ]);
+  assert.equal(outcome.moved, 1);
+  assert.ok(outcome.undoId);
+  assert.equal(outcome.unmoved, 1);
+  assert.ok(!existsSync(files[1]));
+  const patch = await resultsPatch("server", ["ga", "gb"]);
+  assert.deepEqual(patch.removedIds, ["ga"]);
+});
+
+test("a patch carries the results it was built from", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "vdf-bulk-"));
+  process.env.DATA_DIR = dir;
+  await writeResults(dir, "server", [{ groupId: "ga", items: [item("/m/a1.jpg", null), item("/m/a2.jpg", null)] }]);
+  const { resultsPatch } = await import("../src/lib/actions");
+  assert.equal((await resultsPatch("server", ["ga"])).finishedAt, "2026-01-01T00:00:00Z");
+});

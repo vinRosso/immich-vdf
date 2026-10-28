@@ -156,6 +156,7 @@ export async function resultsPatch(section: SectionId, touchedIds: string[]): Pr
   const byId = new Map(view.groups.map((group) => [group.groupId, group]));
   const ids = [...new Set(touchedIds)];
   return {
+    finishedAt: view.finishedAt,
     removedIds: ids.filter((id) => !byId.has(id)),
     groups: ids.flatMap((id) => byId.get(id) ?? []),
     hiddenIgnored: view.hiddenIgnored,
@@ -328,7 +329,7 @@ export async function trashServerGroups(
       failed.push({ groupId: entry.groupId, error: bulkError(err, "Could not check this group") });
     }
   });
-  if (victims.size === 0) return { moved: 0, undoId: null, failed, touched };
+  if (victims.size === 0) return { moved: 0, undoId: null, unmoved: 0, failed, touched };
   return { ...(await commitServerTrash([...victims])), failed, touched };
 }
 
@@ -829,23 +830,29 @@ function requireImmich(baseUrl: string, apiKey: string): void {
   if (!baseUrl || !apiKey) throw new AppError("Connect Immich first");
 }
 
-export type ServerTrashOutcome = { moved: number; undoId: string | null };
+/** `unmoved` counts files that could not be moved; the rest were moved and can be undone. */
+export type ServerTrashOutcome = { moved: number; undoId: string | null; unmoved: number };
 
 async function commitServerTrash(victims: string[]): Promise<ServerTrashOutcome> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
   cancelThumbWork(victims);
   const before = await loadResults("server");
-  const groups = before ? before.groups.filter((group) => group.items.some((item) => victims.includes(item.path))) : [];
-  const items = await moveToTrash(victims);
+  const victimSet = new Set(victims);
+  const groups = before ? before.groups.filter((group) => group.items.some((item) => victimSet.has(item.path))) : [];
+  const failures: unknown[] = [];
+  const items = await moveToTrash(victims, failures);
+  if (items.length === 0 && failures.length > 0) throw failures[0];
+  // Only what was moved leaves the results, and it is recorded for undo even when other files failed.
+  const movedPaths = new Set(items.map((entry) => entry.original));
   await updateResults("server", (current) => {
     if (!current) return current;
-    return dropItems(current, (item) => victims.includes(item.path));
+    return dropItems(current, (item) => movedPaths.has(item.path));
   });
   const undoId =
     before && items.length > 0
       ? rememberTrashUndo({ finishedAt: before.finishedAt, moved: items, groups: structuredClone(groups) })
       : null;
-  return { moved: items.length, undoId };
+  return { moved: items.length, undoId, unmoved: failures.length };
 }
 
 /** Takes a Files trash back: files return from `.vdf-trash` and their groups reappear in the results. */
@@ -897,11 +904,12 @@ export async function undoServerTrash(id: string): Promise<number> {
 
 async function commitImmichTrash(baseUrl: string, apiKey: string, victims: string[]): Promise<number> {
   if (victims.length === 0) throw new AppError("Nothing else in this group can be trashed");
+  const victimIds = new Set(victims);
   const snapshot = await loadResults("immich");
   const victimPaths =
     snapshot?.groups
       .flatMap((group) => group.items)
-      .filter((item) => item.assetId !== null && victims.includes(item.assetId))
+      .filter((item) => item.assetId !== null && victimIds.has(item.assetId))
       .map((item) => item.path) ?? [];
   await cancelThumbJobs("immich", victimPaths);
   await trashAssets(baseUrl, apiKey, victims);
@@ -910,12 +918,12 @@ async function commitImmichTrash(baseUrl: string, apiKey: string, victims: strin
     if (!current) return current;
     const victimItems = current.groups
       .flatMap((group) => group.items)
-      .filter((item) => item.assetId !== null && victims.includes(item.assetId));
+      .filter((item) => item.assetId !== null && victimIds.has(item.assetId));
     credited = victimItems.map((item) => ({
       id: item.assetId || `path:${item.path}`,
       bytes: Math.max(0, item.sizeBytes),
     }));
-    return dropItems(current, (item) => item.assetId !== null && victims.includes(item.assetId));
+    return dropItems(current, (item) => item.assetId !== null && victimIds.has(item.assetId));
   });
   if (credited.length > 0) await creditImmichTrash(credited);
   return victims.length;

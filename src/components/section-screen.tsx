@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/components/api";
 import { AppShell } from "@/components/app-shell";
 import { FolderPicker } from "@/components/folder-picker";
@@ -39,7 +39,7 @@ import { RESULTS_CHANGED_EVENT, publishUndo, undoIgnore, undoTrash } from "@/lib
 import { sectionLabel } from "@/lib/section-label";
 import { mergeClientGroups } from "@/lib/merge-groups";
 import { readViewPref, writeViewPref } from "@/lib/view-prefs";
-import { applyResultsPatch, type ResultsPatch } from "@/lib/results-patch";
+import { applyResultsPatch, patchFits, type ResultsPatch } from "@/lib/results-patch";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
   DEFAULT_RESULTS_GROUP_SORT,
@@ -186,10 +186,17 @@ export function SectionScreen({ section }: { section: SectionId }) {
     return next;
   }, [section]);
 
+  const resultsRef = useRef<ResultsResponse | null>(null);
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
+
   /** Applies what an action changed. Nothing is refetched, so the list keeps its place and the action ends sooner. */
   const applyPatch = useCallback(
     (patch: ResultsPatch) => {
-      setResults((current) => (current ? applyResultsPatch(current, patch) : current));
+      // A newer scan may have replaced the results while the action ran, so its groups no longer apply.
+      if (resultsRef.current && !patchFits(resultsRef.current, patch)) void reloadResults().catch(() => undefined);
+      else setResults((current) => (current ? applyResultsPatch(current, patch) : current));
       // The Trash count in the header changes when a file is trashed. This does not hold up the list.
       if (section === "server") {
         void api<{ entries: TrashEntry[] }>("/api/trash")
@@ -197,7 +204,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
           .catch(() => undefined);
       }
     },
-    [section],
+    [reloadResults, section],
   );
 
   const feed = useScanFeed(() => {
@@ -695,7 +702,7 @@ function Results({
 
   async function openGroupAfterRefresh(fromIndex: number, groupId: string | null, patch?: ResultsPatch) {
     let data: ResultsResponse;
-    if (patch && results) {
+    if (patch && results && patchFits(results, patch)) {
       data = applyResultsPatch(results, patch);
       onApplyPatch(patch);
     } else {

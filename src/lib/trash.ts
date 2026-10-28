@@ -53,37 +53,56 @@ export async function resolveMediaFile(roots: string[], candidate: string): Prom
   }
 }
 
-/** Moves files into `.vdf-trash`. Returns where each one went, so a move can be taken back. */
-export async function moveToTrash(paths: string[]): Promise<{ mount: string; relative: string; original: string }[]> {
+/**
+ * Moves files into `.vdf-trash`. Returns where each one went, so a move can be taken back. With `failures`, a file that
+ * cannot be moved is recorded there and the rest still move; without it the first failure throws.
+ */
+export async function moveToTrash(
+  paths: string[],
+  failures?: unknown[],
+): Promise<{ mount: string; relative: string; original: string }[]> {
   const roots = loadConfig().mediaRoots;
   const moved: { mount: string; relative: string; original: string }[] = [];
   for (const candidate of paths) {
-    const real = await resolveMediaFile(roots, candidate);
-    const root = await containingRoot(roots, real);
-    const relative = path.relative(root, real);
-    if (relative === TRASH || relative.startsWith(`${TRASH}${path.sep}`)) continue;
-    const destination = path.join(root, TRASH, relative);
-    await mkdir(path.dirname(destination), { recursive: true });
-    const parent = await resolveInside(roots, path.dirname(destination));
-    const trashRoot = path.join(root, TRASH);
-    if (parent !== trashRoot && !isInside(trashRoot, parent)) {
-      throw new PathJailError("Trash folder escapes the mount");
-    }
-    let target = destination;
     try {
-      await stat(destination);
-      const suffix = path.extname(destination);
-      const stem = destination.slice(0, destination.length - suffix.length);
-      target = `${stem}-${Date.now()}${suffix}`;
-    } catch {
-      // Destination is free.
+      await moveOne(roots, candidate, moved);
+    } catch (error) {
+      if (!failures) throw error;
+      failures.push(error);
     }
-    await rename(real, target);
-    const trashRelative = path.relative(trashRoot, target);
-    await rememberTrashAdded(root, trashRelative);
-    moved.push({ mount: root, relative: trashRelative, original: candidate });
   }
   return moved;
+}
+
+async function moveOne(
+  roots: string[],
+  candidate: string,
+  moved: { mount: string; relative: string; original: string }[],
+): Promise<void> {
+  const real = await resolveMediaFile(roots, candidate);
+  const root = await containingRoot(roots, real);
+  const relative = path.relative(root, real);
+  if (relative === TRASH || relative.startsWith(`${TRASH}${path.sep}`)) return;
+  const destination = path.join(root, TRASH, relative);
+  await mkdir(path.dirname(destination), { recursive: true });
+  const parent = await resolveInside(roots, path.dirname(destination));
+  const trashRoot = path.join(root, TRASH);
+  if (parent !== trashRoot && !isInside(trashRoot, parent)) {
+    throw new PathJailError("Trash folder escapes the mount");
+  }
+  let target = destination;
+  try {
+    await stat(destination);
+    const suffix = path.extname(destination);
+    const stem = destination.slice(0, destination.length - suffix.length);
+    target = `${stem}-${Date.now()}${suffix}`;
+  } catch {
+    // Destination is free.
+  }
+  await rename(real, target);
+  const trashRelative = path.relative(trashRoot, target);
+  await rememberTrashAdded(root, trashRelative);
+  moved.push({ mount: root, relative: trashRelative, original: candidate });
 }
 
 function safeTrashRelative(relative: string): string {

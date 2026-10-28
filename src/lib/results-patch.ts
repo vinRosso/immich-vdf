@@ -2,11 +2,17 @@ import type { ClientGroup, ResultsResponse } from "./types";
 
 /** What an action changed in the results list: groups to replace or add, groups that are gone, and the counts. */
 export type ResultsPatch = {
+  /** The scan the patch was built from. A client showing a newer scan reloads instead of applying it. */
+  finishedAt: string | null;
   removedIds: string[];
   groups: ClientGroup[];
   hiddenIgnored: number;
   unmatched: number;
 };
+
+export function patchFits(results: ResultsResponse, patch: ResultsPatch): boolean {
+  return results.finishedAt === patch.finishedAt;
+}
 
 /** The same patch applied on the server (to build it) and in the browser (to avoid reloading the whole list). */
 export function applyResultsPatch(results: ResultsResponse, patch: ResultsPatch): ResultsResponse {
