@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyResultsPatch, patchFits } from "../src/lib/results-patch";
+import { applyResultsPatch, neighbourAfterRemoval, patchFits } from "../src/lib/results-patch";
 import type { ClientGroup, ResultsResponse } from "../src/lib/types";
 
 const group = (groupId: string, ...paths: string[]): ClientGroup =>
@@ -40,4 +40,12 @@ test("a patch from another scan does not fit", () => {
   const patch = { finishedAt: "2026-02-01T00:00:00Z", removedIds: [], groups: [], hiddenIgnored: 0, unmatched: 0 };
   assert.equal(patchFits({ ...base, finishedAt: "2026-01-01T00:00:00Z" }, patch), false);
   assert.equal(patchFits({ ...base, finishedAt: "2026-02-01T00:00:00Z" }, patch), true);
+});
+
+test("after an action the open group moves to the next one that is still listed", () => {
+  const before = ["a", "b", "c", "d"];
+  assert.equal(neighbourAfterRemoval(before, 1, new Set(["a", "c", "d"])), "c");
+  assert.equal(neighbourAfterRemoval(before, 3, new Set(["a", "b", "c"])), "c");
+  assert.equal(neighbourAfterRemoval(before, 1, new Set(["a", "d"])), "d");
+  assert.equal(neighbourAfterRemoval(before, 0, new Set()), null);
 });

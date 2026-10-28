@@ -22,6 +22,7 @@ export const POST = api(async (request) => {
     return NextResponse.json({
       trashed: outcome.trashed,
       failed: outcome.failed,
+      trashedGroups: outcome.touched.length,
       patch: await resultsPatch("immich", outcome.touched),
       totalSavedBytes: trashStatsSavedTotal(await loadTrashStats()),
     });

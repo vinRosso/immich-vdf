@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { gzip } from "node:zlib";
 import { baseName } from "./format";
 import { AppError } from "./errors";
+import { addGroupEdit } from "./group-edits";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { assetsForOriginalPaths } from "./immich-asset-index";
 import { endRejoin, reportRejoin, tryBeginRejoin } from "./immich-rejoin-progress";
@@ -270,7 +271,7 @@ export async function extractResultGroup(section: SectionId, groupId: string, pa
 /** Remembered so the next scan puts the same files together again. */
 async function recordGroupEdit(section: SectionId, type: GroupEdit["type"], items: StoredItem[]): Promise<void> {
   const members = memberIds(section, items);
-  await updateGroupEdits(section, (edits) => [...edits, { type, members, createdAt: new Date().toISOString() }]);
+  await updateGroupEdits(section, (edits) => addGroupEdit(edits, { type, members, createdAt: new Date().toISOString() }));
 }
 
 export async function mergeResultGroups(section: SectionId, sourceGroupId: string, targetGroupId: string): Promise<void> {
@@ -320,8 +321,8 @@ export async function trashServerGroups(
   await runPool(entries, RESOLVE_PARALLEL, async (entry) => {
     try {
       const group = requireGroup(results, entry.groupId);
-      const keep = await realResultPath("server", entry.keepPath, group);
-      const extra = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keep);
+      await realResultPath("server", entry.keepPath, group);
+      const extra = group.items.map((item) => item.path).filter((itemPath) => itemPath !== entry.keepPath);
       if (extra.length === 0) return;
       for (const itemPath of extra) victims.add(itemPath);
       touched.push(entry.groupId);
@@ -336,8 +337,8 @@ export async function trashServerGroups(
 export async function trashServerGroup(groupId: string, keepPath: string): Promise<ServerTrashOutcome> {
   const results = await requireResults("server");
   const group = requireGroup(results, groupId);
-  const keep = await realResultPath("server", keepPath, group);
-  const victims = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keep);
+  await realResultPath("server", keepPath, group);
+  const victims = group.items.map((item) => item.path).filter((itemPath) => itemPath !== keepPath);
   return commitServerTrash(victims);
 }
 

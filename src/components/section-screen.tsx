@@ -39,7 +39,7 @@ import { RESULTS_CHANGED_EVENT, publishUndo, undoIgnore, undoTrash } from "@/lib
 import { sectionLabel } from "@/lib/section-label";
 import { mergeClientGroups } from "@/lib/merge-groups";
 import { readViewPref, writeViewPref } from "@/lib/view-prefs";
-import { applyResultsPatch, patchFits, type ResultsPatch } from "@/lib/results-patch";
+import { applyResultsPatch, neighbourAfterRemoval, patchFits, type ResultsPatch } from "@/lib/results-patch";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
   DEFAULT_RESULTS_GROUP_SORT,
@@ -717,8 +717,9 @@ function Results({
       setOpenGroupId(null);
       return;
     }
-    const next = groups[fromIndex] ?? groups[fromIndex - 1];
-    setOpenGroupId(next?.groupId ?? null);
+    // By id, so a list that changed under the request still lands on the group that followed this one.
+    const listedNow = new Set(groups.map((entry) => entry.groupId));
+    setOpenGroupId(neighbourAfterRemoval(sortedGroups.map((entry) => entry.groupId), fromIndex, listedNow));
   }
 
   async function ignoreGroup(groupId: string) {
@@ -803,11 +804,17 @@ function Results({
       });
       if (groups.length === 0) return;
       undoCount = groups.length;
-      const outcome = await api<{ undoId?: string | null; failed?: { groupId: string; error: string }[]; patch?: ResultsPatch }>(
+      const outcome = await api<{
+        undoId?: string | null;
+        trashedGroups?: number;
+        failed?: { groupId: string; error: string }[];
+        patch?: ResultsPatch;
+      }>(
         section === "server" ? "/api/trash" : "/api/immich/trash",
         { method: "POST", body: JSON.stringify({ groups }) },
       );
       undoId = outcome.undoId ?? null;
+      undoCount = outcome.trashedGroups ?? groups.length;
       setOpenGroupId(null);
       if (outcome.patch) onApplyPatch(outcome.patch);
       else await onReload();

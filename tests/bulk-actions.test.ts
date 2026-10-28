@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -143,4 +143,22 @@ test("a patch carries the results it was built from", async () => {
   await writeResults(dir, "server", [{ groupId: "ga", items: [item("/m/a1.jpg", null), item("/m/a2.jpg", null)] }]);
   const { resultsPatch } = await import("../src/lib/actions");
   assert.equal((await resultsPatch("server", ["ga"])).finishedAt, "2026-01-01T00:00:00Z");
+});
+
+test("the file the user keeps is not trashed when its path goes through a link", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "vdf-bulk-"));
+  const media = await realpath(await mkdtemp(path.join(os.tmpdir(), "vdf-media-")));
+  process.env.DATA_DIR = dir;
+  process.env.MEDIA_ROOTS = media;
+  const real = path.join(media, "real");
+  await mkdir(real);
+  const link = path.join(media, "link");
+  await symlink(real, link, "junction");
+  for (const name of ["k1", "k2"]) await writeFile(path.join(real, `${name}.jpg`), "x");
+  const keep = path.join(link, "k1.jpg");
+  await writeResults(dir, "server", [{ groupId: "gk", items: [item(keep, null), item(path.join(link, "k2.jpg"), null)] }]);
+  const { trashServerGroups } = await import("../src/lib/actions");
+  const outcome = await trashServerGroups([{ groupId: "gk", keepPath: keep }]);
+  assert.equal(outcome.moved, 1);
+  assert.ok(existsSync(path.join(real, "k1.jpg")));
 });

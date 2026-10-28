@@ -33,7 +33,7 @@ export const POST = api(async (request) => {
     );
     if (entries.length === 0 || entries.length !== body.groups.length) throw new AppError("Choose groups to trash");
     const { touched, ...outcome } = await trashServerGroups(entries);
-    return NextResponse.json({ ...outcome, patch: await resultsPatch("server", touched) });
+    return NextResponse.json({ ...outcome, trashedGroups: touched.length, patch: await resultsPatch("server", touched) });
   }
   if (!body.groupId) throw new AppError("Choose a file to keep");
   const outcome = Array.isArray(body.trashPaths)

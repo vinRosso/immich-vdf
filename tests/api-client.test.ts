@@ -51,3 +51,13 @@ test("empty body still returns {}", async () => {
     stub.restore();
   }
 });
+
+test("an error page that is not JSON is reported as a failed request, not a cut-off body", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => ({ status: 502, ok: false, text: async () => "<html>Bad gateway</html>" }) as Response) as typeof fetch;
+  try {
+    await assert.rejects(() => api("/x", { method: "POST", body: "{}" }), /Request failed \(502\)/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

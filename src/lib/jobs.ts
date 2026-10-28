@@ -23,7 +23,7 @@ import { applyLibraryStacks, expandImmichGroups } from "./immich-stack-sync";
 import { dropCompleteStacks } from "./immich-stacks";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
-import { applyGroupEdits } from "./group-edits";
+import { applyGroupEdits, pruneGroupEdits } from "./group-edits";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
 import { applyPrefixClusters, imagesInScanScopeParallel, overlayKnownItems, parseImageTimes, pathKey, prefixClustersParallel, prefixItem, stripPrefixItems } from "./prefix-groups";
@@ -619,7 +619,9 @@ async function replayGroupEdits(section: SectionId, groups: StoredGroup[]): Prom
   const edits = await loadGroupEdits(section);
   if (edits.length === 0) return groups;
   const replayed = applyGroupEdits(section, groups, edits);
-  if (replayed.edits.length < edits.length) await updateGroupEdits(section, () => replayed.edits);
+  if (replayed.edits.length < edits.length) {
+    await updateGroupEdits(section, (current) => pruneGroupEdits(current, edits, replayed.edits));
+  }
   return replayed.groups;
 }
 

@@ -10,6 +10,14 @@ export type ResultsPatch = {
   unmatched: number;
 };
 
+/** Where the open group goes once it is gone: the next listed one after it, else the nearest one before it. */
+export function neighbourAfterRemoval(before: string[], fromIndex: number, still: Set<string>): string | null {
+  const after = before.slice(fromIndex + 1).find((id) => still.has(id));
+  if (after) return after;
+  const earlier = before.slice(0, Math.max(0, fromIndex)).reverse().find((id) => still.has(id));
+  return earlier ?? null;
+}
+
 export function patchFits(results: ResultsResponse, patch: ResultsPatch): boolean {
   return results.finishedAt === patch.finishedAt;
 }

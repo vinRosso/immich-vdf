@@ -33,7 +33,8 @@ function applyExtract(section: SectionId, groups: StoredGroup[], edit: GroupEdit
       continue;
     }
     const remain = group.items.filter((item) => !hit.includes(item));
-    if (remain.length >= 2) out.push({ groupId: group.groupId, items: remain });
+    // A single file left behind stays until every edit has run, because a later merge may join it to something.
+    if (remain.length >= 1) out.push({ groupId: group.groupId, items: remain });
     if (!inserted) {
       out.push({ groupId: extractId(edit.members), items: orderGroupItems(taken) });
       inserted = true;
@@ -73,5 +74,24 @@ export function applyGroupEdits(
     current = next;
     kept.push(edit);
   }
-  return { groups: current, edits: kept };
+  return { groups: current.filter((group) => group.items.length >= 2), edits: kept };
+}
+
+function editKey(edit: GroupEdit): string {
+  return `${edit.type}|${edit.createdAt}|${edit.members.join("\n")}`;
+}
+
+/** Adds an edit. A merge makes earlier merges whose files it contains redundant, so they are dropped. */
+export function addGroupEdit(edits: GroupEdit[], added: GroupEdit): GroupEdit[] {
+  if (added.type !== "merge") return [...edits, added];
+  const members = new Set(added.members);
+  const kept = edits.filter((edit) => edit.type !== "merge" || !edit.members.every((member) => members.has(member)));
+  return [...kept, added];
+}
+
+/** The edits on disk now, minus the ones the replay found dead. An edit recorded while the replay ran stays. */
+export function pruneGroupEdits(current: GroupEdit[], loaded: GroupEdit[], kept: GroupEdit[]): GroupEdit[] {
+  const keptKeys = new Set(kept.map(editKey));
+  const dead = new Set(loaded.map(editKey).filter((key) => !keptKeys.has(key)));
+  return current.filter((edit) => !dead.has(editKey(edit)));
 }

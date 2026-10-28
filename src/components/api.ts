@@ -35,7 +35,10 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     }
     throw new Error("Sign in required");
   }
-  if (body === null) throw new Error(`Response cut off after ${new Blob([text]).size} bytes`);
+  if (body === null) {
+    if (!response.ok) throw new Error(`Request failed (${response.status})`);
+    throw new Error(`Response cut off after ${new Blob([text]).size} bytes`);
+  }
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
   return body as T;
 }
