@@ -14,8 +14,15 @@ export const GET = api(async (request) => {
     return NextResponse.json(await resultsPreview(section, sortId, Number.isFinite(limit) ? limit : 10));
   }
   if (request.headers.get("accept-encoding")?.includes("gzip")) {
-    return new NextResponse(new Uint8Array(await resultsViewGzip(section)), {
-      headers: { "Content-Type": "application/json", "Content-Encoding": "gzip", "Cache-Control": "private, no-cache", Vary: "Accept-Encoding" },
+    const body = new Uint8Array(await resultsViewGzip(section));
+    return new NextResponse(body, {
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+        "Content-Length": String(body.byteLength),
+        "Cache-Control": "private, no-cache",
+        Vary: "Accept-Encoding",
+      },
     });
   }
   return NextResponse.json(await resultsView(section));
