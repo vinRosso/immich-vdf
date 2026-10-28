@@ -38,6 +38,7 @@ import { totalReclaimBytes } from "@/lib/reclaim";
 import { RESULTS_CHANGED_EVENT, publishUndo, undoIgnore, undoTrash } from "@/lib/undo-events";
 import { sectionLabel } from "@/lib/section-label";
 import { mergeClientGroups } from "@/lib/merge-groups";
+import { applyResultsPatch, type ResultsPatch } from "@/lib/results-patch";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import {
   DEFAULT_RESULTS_GROUP_SORT,
@@ -54,7 +55,7 @@ import { CheckCircle2, ChevronRight, Clock, EyeOff, LayoutGrid, Loader2, Sliders
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import { matchingDefaults, normalizeScan } from "@/lib/scan-defaults";
 import { publishTrashSaved } from "@/lib/trash-events";
-import type { ClientGroup, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
+import type { ClientGroup, ClientItem, PublicSettings, ResultsResponse, RunsResponse, RuntimeInfo, ScanSettings, ScheduleSettings, SectionId, TrashEntry } from "@/lib/types";
 
 type Draft = {
   scan: ScanSettings;
@@ -183,6 +184,20 @@ export function SectionScreen({ section }: { section: SectionId }) {
     }
     return next;
   }, [section]);
+
+  /** Applies what an action changed. Nothing is refetched, so the list keeps its place and the action ends sooner. */
+  const applyPatch = useCallback(
+    (patch: ResultsPatch) => {
+      setResults((current) => (current ? applyResultsPatch(current, patch) : current));
+      // The Trash count in the header changes when a file is trashed. This does not hold up the list.
+      if (section === "server") {
+        void api<{ entries: TrashEntry[] }>("/api/trash")
+          .then((listed) => setTrash(listed.entries))
+          .catch(() => undefined);
+      }
+    },
+    [section],
+  );
 
   const feed = useScanFeed(() => {
     void reload().catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not refresh"));
@@ -477,6 +492,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
                   results={results}
                   onReload={reload}
                   onReloadResults={reloadResults}
+                  onApplyPatch={applyPatch}
                   matching={matching}
                   matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
                   onMatchAgain={() => void matchAgain()}
@@ -488,6 +504,7 @@ export function SectionScreen({ section }: { section: SectionId }) {
               results={results}
               onReload={reload}
               onReloadResults={reloadResults}
+              onApplyPatch={applyPatch}
               matching={matching}
               matchDisabled={busy || matching || feed.running || !settings?.immich.apiKeyConfigured}
               onMatchAgain={() => void matchAgain()}
@@ -563,6 +580,7 @@ function Results({
   results,
   onReload,
   onReloadResults,
+  onApplyPatch,
   matching,
   matchDisabled,
   onMatchAgain,
@@ -571,6 +589,7 @@ function Results({
   results: ResultsResponse | null;
   onReload: () => Promise<ResultsResponse>;
   onReloadResults: () => Promise<ResultsResponse>;
+  onApplyPatch: (patch: ResultsPatch) => void;
   matching: boolean;
   matchDisabled: boolean;
   onMatchAgain: () => void;
@@ -615,8 +634,9 @@ function Results({
       setMergeBusy(true);
       setGroupOverride(mergeClientGroups(base, sourceGroupId, targetGroupId));
       setOpenGroupId((current) => (current === sourceGroupId ? targetGroupId : current));
+      let merged: { patch?: ResultsPatch };
       try {
-        await api("/api/results/merge", {
+        merged = await api<{ patch?: ResultsPatch }>("/api/results/merge", {
           method: "POST",
           body: JSON.stringify({ section, sourceGroupId, targetGroupId }),
         });
@@ -627,14 +647,15 @@ function Results({
         return;
       }
       try {
-        await onReloadResults();
+        if (merged.patch) onApplyPatch(merged.patch);
+        else await onReloadResults();
       } catch (err) {
         setMergeError(err instanceof Error ? err.message : "Merged, but the list did not refresh");
       } finally {
         setMergeBusy(false);
       }
     },
-    [groupOverride, onReloadResults, results?.groups, section],
+    [groupOverride, onApplyPatch, onReloadResults, results?.groups, section],
   );
 
   const mergeDrag = useGroupMergeDrag({
@@ -658,8 +679,14 @@ function Results({
   const openIndex = openGroupId === null ? -1 : sortedGroups.findIndex((group) => group.groupId === openGroupId);
   const openGroup = openIndex >= 0 ? sortedGroups[openIndex] : null;
 
-  async function openGroupAfterRefresh(fromIndex: number, groupId: string | null) {
-    const data = await onReloadResults();
+  async function openGroupAfterRefresh(fromIndex: number, groupId: string | null, patch?: ResultsPatch) {
+    let data: ResultsResponse;
+    if (patch && results) {
+      data = applyResultsPatch(results, patch);
+      onApplyPatch(patch);
+    } else {
+      data = await onReloadResults();
+    }
     const groups = data.groups ? sortResultGroups(data.groups, sortId) : [];
     if (groupId && groups.some((entry) => entry.groupId === groupId)) {
       setOpenGroupId(groupId);
@@ -675,9 +702,12 @@ function Results({
 
   async function ignoreGroup(groupId: string) {
     const fromIndex = openGroupId === groupId ? openIndex : -1;
-    const ignored = await api<{ key?: string }>("/api/ignore", { method: "POST", body: JSON.stringify({ section, groupId }) });
+    const ignored = await api<{ key?: string; patch?: ResultsPatch }>("/api/ignore", {
+      method: "POST",
+      body: JSON.stringify({ section, groupId }),
+    });
     if (ignored.key) publishUndo({ message: "Group ignored", undo: undoIgnore(section, ignored.key) });
-    await openGroupAfterRefresh(fromIndex, groupId);
+    await openGroupAfterRefresh(fromIndex, groupId, ignored.patch);
   }
 
   function requestStackAll(keepSmallest: boolean) {
@@ -702,24 +732,37 @@ function Results({
     else await trashAllGroups(keepSmallest);
   }
 
+  function bulkKeep(group: ClientGroup, keepSmallest: boolean): ClientItem | undefined {
+    const index = keepSmallest ? pickSmallestIndex(group.items) : pickPrimaryIndex(group.items);
+    return group.items[index >= 0 ? index : 0];
+  }
+
+  function reportBulkFailures(verb: string, total: number, failed: { groupId: string; error: string }[]) {
+    if (failed.length === 0) return;
+    window.alert(`${failed.length} of ${total} groups could not be ${verb}: ${failed[0].error}`);
+  }
+
   async function stackAllGroups(keepSmallest: boolean) {
     const targets = sortedGroups.filter((group) => !group.items.some((item) => item.stackId) && group.items.some((item) => item.assetId));
     if (targets.length === 0) return;
     setBulkBusy(true);
     try {
-      for (const group of targets) {
-        const index = keepSmallest ? pickSmallestIndex(group.items) : pickPrimaryIndex(group.items);
-        const primary = group.items[index >= 0 ? index : 0];
-        if (!primary?.assetId) continue;
-        await api("/api/immich/stack", {
-          method: "POST",
-          body: JSON.stringify({ groupId: group.groupId, primaryId: primary.assetId }),
-        });
-      }
+      const groups = targets.flatMap((group) => {
+        const primary = bulkKeep(group, keepSmallest);
+        return primary?.assetId ? [{ groupId: group.groupId, primaryId: primary.assetId }] : [];
+      });
+      if (groups.length === 0) return;
+      const outcome = await api<{ failed?: { groupId: string; error: string }[]; patch?: ResultsPatch }>("/api/immich/stack", {
+        method: "POST",
+        body: JSON.stringify({ groups }),
+      });
       setOpenGroupId(null);
-      await onReload();
+      if (outcome.patch) onApplyPatch(outcome.patch);
+      else await onReload();
+      reportBulkFailures("stacked", groups.length, outcome.failed ?? []);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Could not stack the groups");
+      await onReload().catch(() => undefined);
     } finally {
       setBulkBusy(false);
     }
@@ -728,37 +771,32 @@ function Results({
   async function trashAllGroups(keepSmallest: boolean) {
     if (sortedGroups.length === 0) return;
     setBulkBusy(true);
-    const undoIds: string[] = [];
+    let undoCount = 0;
+    let undoId: string | null = null;
     try {
-      for (const group of sortedGroups) {
-        const index = keepSmallest ? pickSmallestIndex(group.items) : pickPrimaryIndex(group.items);
-        const keep = group.items[index >= 0 ? index : 0];
-        if (!keep) continue;
-        if (section === "server") {
-          const outcome = await api<{ undoId?: string | null }>("/api/trash", {
-            method: "POST",
-            body: JSON.stringify({ groupId: group.groupId, keepPath: keep.path }),
-          });
-          if (outcome.undoId) undoIds.push(outcome.undoId);
-        } else if (keep.assetId) {
-          await api("/api/immich/trash", {
-            method: "POST",
-            body: JSON.stringify({ groupId: group.groupId, keepId: keep.assetId }),
-          });
-        }
-      }
+      const groups = sortedGroups.flatMap((group): Record<string, string>[] => {
+        const keep = bulkKeep(group, keepSmallest);
+        if (!keep) return [];
+        if (section === "server") return [{ groupId: group.groupId, keepPath: keep.path }];
+        return keep.assetId ? [{ groupId: group.groupId, keepId: keep.assetId }] : [];
+      });
+      if (groups.length === 0) return;
+      undoCount = groups.length;
+      const outcome = await api<{ undoId?: string | null; failed?: { groupId: string; error: string }[]; patch?: ResultsPatch }>(
+        section === "server" ? "/api/trash" : "/api/immich/trash",
+        { method: "POST", body: JSON.stringify({ groups }) },
+      );
+      undoId = outcome.undoId ?? null;
       setOpenGroupId(null);
-      await onReload();
+      if (outcome.patch) onApplyPatch(outcome.patch);
+      else await onReload();
       publishTrashSaved();
+      reportBulkFailures("trashed", groups.length, outcome.failed ?? []);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Could not trash the copies");
-      // Groups trashed before the failure are gone from the saved results, so the grid has to catch up.
       await onReload().catch(() => undefined);
     } finally {
-      // Offered even after a failure, so what was already trashed can still be taken back.
-      if (undoIds.length > 0) {
-        publishUndo({ message: `Trashed copies from ${undoIds.length} groups`, undo: undoTrash(undoIds) });
-      }
+      if (undoId) publishUndo({ message: `Trashed copies from ${undoCount} groups`, undo: undoTrash([undoId]) });
       setBulkBusy(false);
     }
   }
@@ -958,7 +996,7 @@ function Results({
         }}
         onClose={() => setOpenGroupId(null)}
         neighbors={openIndex >= 0 ? [sortedGroups[openIndex - 1], sortedGroups[openIndex + 1]] : []}
-        onActionDone={() => openGroupAfterRefresh(openIndex, openGroupId)}
+        onActionDone={(patch) => openGroupAfterRefresh(openIndex, openGroupId, patch)}
       />
       <Dialog open={bulkConfirm !== null} onOpenChange={(open) => !open && !bulkBusy && setBulkConfirm(null)}>
         <DialogContent className="max-w-sm">

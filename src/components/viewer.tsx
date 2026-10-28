@@ -35,6 +35,7 @@ import {
 import { groupHasImmichArchived } from "@/lib/immich-archived";
 import { pickPrimaryIndex, pickSmallestIndex } from "@/lib/primary";
 import { flagLabel } from "@/lib/prefix-flag";
+import type { ResultsPatch } from "@/lib/results-patch";
 import { publishTrashSaved } from "@/lib/trash-events";
 import type { ClientGroup, ClientItem, MediaInfo, SectionId } from "@/lib/types";
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Star, Volume2, VolumeX, XIcon } from "lucide-react";
@@ -83,7 +84,8 @@ export function Viewer({
   onNext: () => void;
   onClose: () => void;
   /** Refresh results; stay on the current group when it still exists, otherwise open the next one. */
-  onActionDone: () => void | Promise<void>;
+  /** Gets the patch the server sent back, so the list can update without a reload. */
+  onActionDone: (patch?: ResultsPatch) => void | Promise<void>;
   /** When set, the group is on the ignored list and the header action restores it. */
   ignoredKey?: string | null;
   /** The groups before and after this one, so their first pictures can load while this one is read. */
@@ -217,7 +219,13 @@ export function Viewer({
     setPending(label);
     setError(null);
     try {
-      const result = await api<{ totalSavedBytes?: number; undoId?: string | null; moved?: number; key?: string }>(url, {
+      const result = await api<{
+        totalSavedBytes?: number;
+        undoId?: string | null;
+        moved?: number;
+        key?: string;
+        patch?: ResultsPatch;
+      }>(url, {
         method,
         body: JSON.stringify(body),
       });
@@ -228,7 +236,7 @@ export function Viewer({
       } else if (result.key && url === "/api/ignore" && method === "POST") {
         publishUndo({ message: "Group ignored", undo: undoIgnore(section, result.key) });
       }
-      await onActionDone();
+      await onActionDone(result.patch);
       setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
@@ -321,11 +329,11 @@ export function Viewer({
     setPending("Extract");
     setError(null);
     try {
-      await api<{ groupId: string }>("/api/results/extract", {
+      const extracted = await api<{ groupId: string; patch?: ResultsPatch }>("/api/results/extract", {
         method: "POST",
         body: JSON.stringify({ section, groupId: group.groupId, paths }),
       });
-      await onActionDone();
+      await onActionDone(extracted.patch);
       setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not extract that group");
