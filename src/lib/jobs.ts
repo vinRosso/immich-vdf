@@ -23,6 +23,7 @@ import { applyLibraryStacks, expandImmichGroups } from "./immich-stack-sync";
 import { dropCompleteStacks } from "./immich-stacks";
 import { resolveImmichPathMap } from "./immich-path-map";
 import { immichScanFolderPlan } from "./immich-scan-scope";
+import { applyGroupEdits } from "./group-edits";
 import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { parseCliResults, type ParsedGroup } from "./parse-results";
 import { applyPrefixClusters, imagesInScanScopeParallel, overlayKnownItems, parseImageTimes, pathKey, prefixClustersParallel, prefixItem, stripPrefixItems } from "./prefix-groups";
@@ -40,6 +41,7 @@ import { getScan } from "./scan";
 import { walkScanInventory, type InventoryEntry } from "./scan-inventory";
 import {
   creditImmichTrash,
+  loadGroupEdits,
   loadIgnored,
   loadResults,
   loadSettings,
@@ -47,6 +49,7 @@ import {
   patchRun,
   saveResults,
   updateIgnored,
+  updateGroupEdits,
   updateResults,
   saveStoredInventory,
   sectionDbDir,
@@ -496,12 +499,13 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
           section === "immich"
             ? await joinWithImmich(reused.groups, settings, input.scanSettings, timer)
             : { groups: reused.groups, warning: existing.warning ?? null };
-        let savedGroups = refreshed.groups;
+        const replayed = await replayGroupEdits(section, refreshed.groups);
+        let savedGroups = replayed;
         await updateResults(section, (current) => {
           if (!current) return null;
           // A trash or stack action may have changed the groups while this ran. Keep its result.
           const untouched = groupShape(current.groups) === shapeBefore;
-          savedGroups = untouched ? refreshed.groups : current.groups;
+          savedGroups = untouched ? replayed : current.groups;
           return {
             ...current,
             warning: untouched ? refreshed.warning : current.warning,
@@ -573,6 +577,7 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
         groups = joined.groups;
         warning = joined.warning;
       }
+      groups = await replayGroupEdits(section, groups);
       if (scan.cancelled) {
         error = stoppedText();
       } else {
@@ -607,6 +612,15 @@ async function collectResults(section: SectionId, input: FinishInput, settings: 
     ok = false;
   }
   return { ok, error, groupCount };
+}
+
+/** Puts the user's extracts and merges back on the scanned groups and forgets the ones whose files are gone. */
+async function replayGroupEdits(section: SectionId, groups: StoredGroup[]): Promise<StoredGroup[]> {
+  const edits = await loadGroupEdits(section);
+  if (edits.length === 0) return groups;
+  const replayed = applyGroupEdits(section, groups, edits);
+  if (replayed.edits.length < edits.length) await updateGroupEdits(section, () => replayed.edits);
+  return replayed.groups;
 }
 
 /**

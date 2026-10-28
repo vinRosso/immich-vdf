@@ -275,3 +275,10 @@ export type MediaInfo = {
   videoCodec: string | null;
   audioCodec: string | null;
 };
+
+/** An extract or merge the user made on scan results, replayed after every scan. `members` are `memberIds` keys. */
+export type GroupEdit = {
+  type: "extract" | "merge";
+  members: string[];
+  createdAt: string;
+};

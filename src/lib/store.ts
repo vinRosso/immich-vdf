@@ -5,7 +5,7 @@ import { clampScanParallelism } from "./scan-parallelism";
 import { exclusive, readJson, writeJson } from "./json-file";
 import { defaultScan } from "./scan-defaults";
 import { membershipFromResults, type ResultMediaMeta, type ResultsMembership } from "./results-membership";
-import type { IgnoredEntry, RunRecord, RunsFile, ScanSettings, SectionId, Settings, StoredResults } from "./types";
+import type { GroupEdit, IgnoredEntry, RunRecord, RunsFile, ScanSettings, SectionId, Settings, StoredResults } from "./types";
 import type { InventoryEntry } from "./scan-inventory";
 
 export { defaultScan } from "./scan-defaults";
@@ -53,6 +53,10 @@ function settingsPath(): string {
 
 function resultsPath(section: SectionId): string {
   return path.join(loadConfig().dataDir, "results", `${section}.json`);
+}
+
+function groupEditsPath(section: SectionId): string {
+  return path.join(loadConfig().dataDir, "group-edits", `${section}.json`);
 }
 
 function ignorePath(section: SectionId): string {
@@ -373,6 +377,22 @@ export function updateIgnored(
       await writeJson(ignorePath(section), next);
       wrote(section);
     }
+    return next;
+  });
+}
+
+export function loadGroupEdits(section: SectionId): Promise<GroupEdit[]> {
+  return readJson<GroupEdit[]>(groupEditsPath(section), []);
+}
+
+export function updateGroupEdits(
+  section: SectionId,
+  mutator: (current: GroupEdit[]) => GroupEdit[],
+): Promise<GroupEdit[]> {
+  return exclusive(async () => {
+    const current = await loadGroupEdits(section);
+    const next = mutator(current);
+    if (next !== current) await writeJson(groupEditsPath(section), next);
     return next;
   });
 }

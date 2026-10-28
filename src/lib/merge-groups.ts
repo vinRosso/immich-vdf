@@ -22,7 +22,7 @@ function preferItem(current: StoredItem, incoming: StoredItem): StoredItem {
   };
 }
 
-function combineStoredItems(target: StoredItem[], source: StoredItem[]): StoredItem[] {
+export function combineStoredItems(target: StoredItem[], source: StoredItem[]): StoredItem[] {
   const byPath = new Map<string, StoredItem>();
   for (const item of [...target, ...source]) {
     const key = slash(item.path);

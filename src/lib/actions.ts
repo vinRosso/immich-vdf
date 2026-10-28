@@ -53,6 +53,7 @@ import {
   loadSettings,
   resultsMembership,
   resultsStamp,
+  updateGroupEdits,
   updateIgnored,
   updateResults,
 } from "./store";
@@ -61,6 +62,7 @@ import { keepTrashUndo, rememberTrashUndo, restoreGroups, takeTrashUndo } from "
 import type {
   ClientGroup,
   ClientItem,
+  GroupEdit,
   IgnoredGroupCard,
   ResultsPreviewResponse,
   ResultsResponse,
@@ -244,7 +246,15 @@ export async function extractResultGroup(section: SectionId, groupId: string, pa
   });
   if (!saved) throw new AppError("There is no scan to act on", 404);
   await updateIgnored(section, (entries) => pruneIgnoredEntries(section, entries, saved.groups));
+  const created = saved.groups.find((group) => group.groupId === createdId);
+  if (created) await recordGroupEdit(section, "extract", created.items);
   return createdId;
+}
+
+/** Remembered so the next scan puts the same files together again. */
+async function recordGroupEdit(section: SectionId, type: GroupEdit["type"], items: StoredItem[]): Promise<void> {
+  const members = memberIds(section, items);
+  await updateGroupEdits(section, (edits) => [...edits, { type, members, createdAt: new Date().toISOString() }]);
 }
 
 export async function mergeResultGroups(section: SectionId, sourceGroupId: string, targetGroupId: string): Promise<void> {
@@ -254,6 +264,8 @@ export async function mergeResultGroups(section: SectionId, sourceGroupId: strin
   });
   if (!saved) throw new AppError("There is no scan to act on", 404);
   await updateIgnored(section, (entries) => pruneIgnoredEntries(section, entries, saved.groups));
+  const merged = saved.groups.find((group) => group.groupId === targetGroupId);
+  if (merged) await recordGroupEdit(section, "merge", merged.items);
 }
 
 /** Returns the ignore key, which is what restoring the group needs. */
