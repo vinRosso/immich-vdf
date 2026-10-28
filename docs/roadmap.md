@@ -6,7 +6,7 @@ Kevin listed 11 improvements: bugs, speed, UX polish, stack editing, OIDC, secur
 
 | Release | Items |
 |---|---|
-| **0.3.0** | A. JSON error, B. faster actions, C. remember sort, D. static UI first, F. extract/merge survive scans |
+| **0.2.1** | A. JSON error, B. faster actions, C. remember sort, D. static UI first, F. extract/merge survive scans |
 | **0.4.0** | E. action animations, G. stack drag, J. docs on Starlight |
 | **0.5.0** | H. OIDC (Authelia and Authentik), I. security hardening |
 | **0.6.0** | K. hardware encoding (several vendors, only where it helps) |
@@ -17,7 +17,7 @@ Each release is its own plan, run on its own branch with one commit per topic (C
 
 ---
 
-## Release 0.3.0: fixes, speed, persistence
+## Release 0.2.1: fixes, speed, persistence
 
 ### A. JSON.parse "unterminated string" (do first)
 This has not been reproduced. There are two likely causes, both found by reading the code:
@@ -154,7 +154,7 @@ The backend routes already exist: `/stack/join`, `/stack/remove` and `/stack/mer
 ---
 
 ## Dependencies
-- 0.3.0: A first. B, C, D and F are independent of each other.
+- 0.2.1: A first. B, C, D and F are independent of each other.
 - 0.4.0: E builds on B's local patching. G builds on B and E. J documents F and G.
 - 0.5.0: H adds its pages to J's site. I's CI workflow helps every later release.
 - K's benchmark can run any time, if an early answer on whether it's worth it is useful.
@@ -162,7 +162,7 @@ The backend routes already exist: `/stack/join`, `/stack/remove` and `/stack/mer
 ## Verification (per release)
 - The standard checks are green, plus the new tests named under each item.
 - Preview at `npm run dev`, port 4747. Check the port is free first.
-  - **0.3.0:**
+  - **0.2.1:**
     - The large results set loads with no parse error.
     - After an action, the network tab shows no `/api/results` GET.
     - The sort survives a browser restart.
