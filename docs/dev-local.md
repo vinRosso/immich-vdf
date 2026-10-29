@@ -18,7 +18,7 @@ nav_next_title: Checks
 
 ## Requirements
 
-You need Node.js 22, the .NET 10 SDK, and `ffmpeg` and `ffprobe` on `PATH`.
+You need Node.js 24, the .NET 10 SDK, and `ffmpeg` and `ffprobe` on `PATH`.
 
 ```bash
 npm install

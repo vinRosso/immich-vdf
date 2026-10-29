@@ -34,7 +34,7 @@ COPY engine/fork-version.txt ./
 RUN version=$(tr -d '[:space:]' < fork-version.txt) \
   && dotnet publish VDF.CLI/VDF.CLI.csproj -c Release -o /out --no-restore -p:VersionPrefix=$version
 
-FROM node:22-bookworm-slim AS web
+FROM node:24-bookworm-slim AS web
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -47,7 +47,7 @@ FROM mcr.microsoft.com/dotnet/runtime:10.0-noble
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=node:22-bookworm-slim /usr/local /usr/local
+COPY --from=node:24-bookworm-slim /usr/local /usr/local
 WORKDIR /app
 COPY --from=vdf /out /opt/vdf
 COPY --from=ffmpeg-libs /opt/ffmpeg/lib /opt/ffmpeg/lib
