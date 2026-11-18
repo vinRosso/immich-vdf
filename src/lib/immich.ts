@@ -1,3 +1,12 @@
+import { createHash } from "node:crypto";
+import { AppError } from "./errors";
+import {
+  type KeyPermissions,
+  keyHas,
+  missingPermissionFromMessage,
+  missingPermissionMessage,
+  UNKNOWN_KEY_PERMISSIONS,
+} from "./immich-permissions";
 import { assertHttpUrl, safeFetch } from "./urls";
 
 export type ImmichAsset = {
@@ -28,10 +37,67 @@ function headers(apiKey: string, json = false): HeadersInit {
   return value;
 }
 
+/**
+ * `safeFetch` for Immich calls. A 403 "Missing required permission: X" becomes an `AppError(403)` that
+ * names X and where to add it; any other answer is returned as is.
+ */
+export async function immichFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const response = await safeFetch(input, init);
+  if (response.status !== 403) return response;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { message?: unknown } | null;
+  const permission = missingPermissionFromMessage(body?.message);
+  if (permission) throw new AppError(missingPermissionMessage([permission]), 403);
+  return response;
+}
+
+/** The key's own permissions (`GET /api/api-keys/me`, which needs none). Unknown on an Immich without it. */
+export async function fetchImmichKeyPermissions(baseUrl: string, apiKey: string): Promise<KeyPermissions> {
+  // safeFetch, not immichFetch: an older Immich routes /me to another endpoint whose 403 names a permission
+  // immich-vdf never needs (apiKey.read). Anything but 401 means "unknown".
+  const response = await safeFetch(`${immichRoot(baseUrl)}/api/api-keys/me`, {
+    headers: headers(apiKey),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 401) throw new Error("Immich rejected the API key");
+  if (!response.ok) return UNKNOWN_KEY_PERMISSIONS;
+  const body = (await response.json().catch(() => null)) as { permissions?: unknown } | null;
+  if (!Array.isArray(body?.permissions)) return UNKNOWN_KEY_PERMISSIONS;
+  return { known: true, granted: new Set(body.permissions.filter((entry): entry is string => typeof entry === "string")) };
+}
+
+const PERMISSIONS_TTL_MS = 5 * 60_000;
+const permissionCache = new Map<string, { at: number; perms: KeyPermissions }>();
+
+function permissionCacheKey(baseUrl: string, apiKey: string): string {
+  return `${immichRoot(baseUrl)}\0${createHash("sha256").update(apiKey).digest("hex")}`;
+}
+
+/** Cached for 5 minutes per server and key; `refresh` reads them again (Connect, status). */
+export async function immichKeyPermissions(
+  baseUrl: string,
+  apiKey: string,
+  options: { refresh?: boolean } = {},
+): Promise<KeyPermissions> {
+  const key = permissionCacheKey(baseUrl, apiKey);
+  const hit = permissionCache.get(key);
+  if (!options.refresh && hit && Date.now() - hit.at < PERMISSIONS_TTL_MS) return hit.perms;
+  const perms = await fetchImmichKeyPermissions(baseUrl, apiKey);
+  if (permissionCache.size > 20) permissionCache.clear();
+  permissionCache.set(key, { at: Date.now(), perms });
+  return perms;
+}
+
+export async function immichKeyHas(baseUrl: string, apiKey: string, permission: string): Promise<boolean> {
+  return keyHas(await immichKeyPermissions(baseUrl, apiKey), permission);
+}
+
 export type ImmichUser = { id: string; email: string; name: string; storageLabel: string | null };
 
 export async function pingImmich(baseUrl: string, apiKey: string): Promise<void> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/server/ping`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/server/ping`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(10_000),
   });
@@ -44,7 +110,7 @@ export async function pingImmich(baseUrl: string, apiKey: string): Promise<void>
 export type ImmichAssetStatistics = { images: number; videos: number; total: number };
 
 export async function fetchImmichAssetStatistics(baseUrl: string, apiKey: string): Promise<ImmichAssetStatistics> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/assets/statistics`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/assets/statistics`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(15_000),
   });
@@ -60,7 +126,7 @@ export async function fetchImmichAssetStatistics(baseUrl: string, apiKey: string
 }
 
 export async function fetchImmichUser(baseUrl: string, apiKey: string): Promise<ImmichUser> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/users/me`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/users/me`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(10_000),
   });
@@ -101,7 +167,7 @@ export function importPathsFromLibraries(body: unknown): string[] {
 
 /** External library import paths as configured in Immich (container paths). */
 export async function listImmichLibraryImportPaths(baseUrl: string, apiKey: string): Promise<string[]> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/libraries`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/libraries`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(15_000),
   });
@@ -184,7 +250,7 @@ function searchMetadataBody(query: MetadataSearchQuery): string {
 }
 
 async function searchMetadataPage(baseUrl: string, apiKey: string, query: MetadataSearchQuery): Promise<SearchPage> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
     method: "POST",
     headers: headers(apiKey, true),
     body: searchMetadataBody(query),
@@ -240,7 +306,7 @@ async function listTrashedOfType(
   const entries: { id: string; originalPath: string | null }[] = [];
   let page = 1;
   for (let guard = 0; guard < 500; guard += 1) {
-    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+    const response = await immichFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
       method: "POST",
       headers: headers(apiKey, true),
       body: searchMetadataBody({ page, type, withDeleted: true, trashedAfter: TRASHED_AFTER_EPOCH }),
@@ -329,7 +395,7 @@ async function listAssetTimesOfType(
   const items: ImmichAssetTime[] = [];
   let page = 1;
   for (let guard = 0; guard < 5000; guard += 1) {
-    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+    const response = await immichFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
       method: "POST",
       headers: headers(apiKey, true),
       body: searchMetadataBody({ page, type, updatedAfter, withArchived: true }),
@@ -397,7 +463,7 @@ async function listUpdatedOfType(
   const items: ImmichAssetUpdate[] = [];
   let page = 1;
   for (let guard = 0; guard < 20; guard += 1) {
-    const response = await safeFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
+    const response = await immichFetch(`${immichRoot(baseUrl)}/api/search/metadata`, {
       method: "POST",
       headers: headers(apiKey, true),
       body: searchMetadataBody({ page, type, updatedAfter }),
@@ -434,7 +500,7 @@ function parseUpdatedAssets(body: unknown): { items: ImmichAssetUpdate[]; nextPa
 
 export async function fetchImmichAssetStackId(baseUrl: string, apiKey: string, assetId: string): Promise<string | null> {
   assertImmichId(assetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(20_000),
   });
@@ -496,7 +562,7 @@ export function parseImmichStack(body: unknown): ImmichStack | null {
 
 /** Every stack the API key can see. Metadata search omits stack membership, so this is the source for stacks that already exist. */
 export async function listImmichStacks(baseUrl: string, apiKey: string): Promise<ImmichStack[]> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/stacks`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(60_000),
   });
@@ -516,7 +582,7 @@ export async function listImmichStacks(baseUrl: string, apiKey: string): Promise
 
 export async function fetchImmichStack(baseUrl: string, apiKey: string, stackId: string): Promise<ImmichStack | null> {
   assertImmichId(stackId, "stack");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(20_000),
   });
@@ -527,7 +593,7 @@ export async function fetchImmichStack(baseUrl: string, apiKey: string, stackId:
 }
 
 export async function stackAssets(baseUrl: string, apiKey: string, assetIds: string[]): Promise<ImmichStack> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/stacks`, {
     method: "POST",
     headers: headers(apiKey, true),
     body: JSON.stringify({ assetIds }),
@@ -539,18 +605,31 @@ export async function stackAssets(baseUrl: string, apiKey: string, assetIds: str
   return { id: "", primaryAssetId: assetIds[0] ?? "", assets: assetIds.map((id) => ({ id, originalPath: "" })) };
 }
 
-/** Pull assets out of a stack. Immich deletes the stack when fewer than two assets remain. */
+export const STACK_COVER_MESSAGE = "The stack cover can't be removed from its stack. Choose another cover first.";
+
+/**
+ * Pull assets out of a stack, one `DELETE /stacks/:id/assets/:assetId` each (Immich has no bulk route).
+ * On a 400 or 404 the stack is read once: gone means done, an asset no longer in it is skipped, and the
+ * stack's cover (which Immich refuses to remove) or anything else is an error.
+ */
 export async function removeAssetsFromStack(baseUrl: string, apiKey: string, stackId: string, assetIds: string[]): Promise<void> {
   assertImmichId(stackId, "stack");
   for (const assetId of assetIds) assertImmichId(assetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}/assets`, {
-    method: "DELETE",
-    headers: headers(apiKey, true),
-    body: JSON.stringify({ assetIds }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (response.status === 404) return;
-  if (!response.ok) throw new Error(`Immich stack remove failed (${response.status})`);
+  for (const assetId of assetIds) {
+    const response = await immichFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}/assets/${assetId}`, {
+      method: "DELETE",
+      headers: headers(apiKey),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (response.ok) continue;
+    if (response.status === 400 || response.status === 404) {
+      const stack = await fetchImmichStack(baseUrl, apiKey, stackId);
+      if (!stack) return;
+      if (!stack.assets.some((asset) => asset.id === assetId)) continue;
+      if (stack.primaryAssetId === assetId) throw new AppError(STACK_COVER_MESSAGE);
+    }
+    throw new Error(`Immich stack remove failed (${response.status})`);
+  }
 }
 
 export async function updateStackPrimary(
@@ -561,7 +640,7 @@ export async function updateStackPrimary(
 ): Promise<ImmichStack | null> {
   assertImmichId(stackId, "stack");
   assertImmichId(primaryAssetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/stacks/${stackId}`, {
     method: "PUT",
     headers: headers(apiKey, true),
     body: JSON.stringify({ primaryAssetId }),
@@ -578,7 +657,7 @@ export async function updateStackPrimary(
 }
 
 export async function trashAssets(baseUrl: string, apiKey: string, ids: string[]): Promise<void> {
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/assets`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/assets`, {
     method: "DELETE",
     headers: headers(apiKey, true),
     body: JSON.stringify({ ids }),
@@ -613,7 +692,7 @@ function assertImmichId(id: string, label: string): void {
 export async function addAssetsToAlbum(baseUrl: string, apiKey: string, albumId: string, assetIds: string[]): Promise<void> {
   assertImmichId(albumId, "album");
   for (const assetId of assetIds) assertImmichId(assetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
     method: "PUT",
     headers: headers(apiKey, true),
     body: JSON.stringify({ ids: assetIds }),
@@ -625,7 +704,7 @@ export async function addAssetsToAlbum(baseUrl: string, apiKey: string, albumId:
 export async function removeAssetsFromAlbum(baseUrl: string, apiKey: string, albumId: string, assetIds: string[]): Promise<void> {
   assertImmichId(albumId, "album");
   for (const assetId of assetIds) assertImmichId(assetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/albums/${albumId}/assets`, {
     method: "DELETE",
     headers: headers(apiKey, true),
     body: JSON.stringify({ ids: assetIds }),
@@ -636,7 +715,7 @@ export async function removeAssetsFromAlbum(baseUrl: string, apiKey: string, alb
 
 export async function listAlbumsForAsset(baseUrl: string, apiKey: string, assetId: string): Promise<ImmichAlbum[]> {
   assertImmichId(assetId, "asset");
-  const response = await safeFetch(`${immichRoot(baseUrl)}/api/albums?assetId=${encodeURIComponent(assetId)}`, {
+  const response = await immichFetch(`${immichRoot(baseUrl)}/api/albums?assetId=${encodeURIComponent(assetId)}`, {
     headers: headers(apiKey),
     signal: AbortSignal.timeout(15_000),
   });
@@ -654,7 +733,7 @@ export async function openImmichThumbnail(
   size: "thumbnail" | "preview" = "preview",
 ): Promise<Response> {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
-  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/thumbnail?size=${size}`, {
+  return immichFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/thumbnail?size=${size}`, {
     headers: { "x-api-key": apiKey, accept: "image/*" },
     signal: AbortSignal.timeout(20_000),
   });
@@ -669,7 +748,7 @@ export async function openImmichVideo(
   signal: AbortSignal,
 ): Promise<Response> {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
-  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/video/playback`, {
+  return immichFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/video/playback`, {
     headers: { "x-api-key": apiKey, accept: "video/*", ...(range ? { range } : {}) },
     signal,
   });
@@ -678,8 +757,16 @@ export async function openImmichVideo(
 /** Original file, for compare when the path is not on a mounted folder. */
 export async function openImmichOriginal(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(assetId)) throw new Error("Unknown asset");
-  return safeFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/original`, {
+  return immichFetch(`${immichRoot(baseUrl)}/api/assets/${assetId}/original`, {
     headers: { "x-api-key": apiKey, accept: "image/*" },
     signal: AbortSignal.timeout(60_000),
   });
+}
+
+/** `openImmichOriginal` for a key with asset.download; otherwise a clear 403 without asking Immich for the file. */
+export async function openImmichOriginalIfAllowed(baseUrl: string, apiKey: string, assetId: string): Promise<Response> {
+  if (!(await immichKeyHas(baseUrl, apiKey, "asset.download"))) {
+    throw new AppError(missingPermissionMessage(["asset.download"]), 403);
+  }
+  return openImmichOriginal(baseUrl, apiKey, assetId);
 }

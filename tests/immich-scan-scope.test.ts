@@ -57,3 +57,53 @@ describe("planImmichScanPaths", () => {
     assert.deepEqual(plan.includes, ["/immich/library/admin/2024"]);
   });
 });
+
+describe("immichScanFolderPlan and the Immich user", () => {
+  const BASE = "http://203.0.113.7:2283";
+  const realFetch = globalThis.fetch;
+
+  async function withLibrary(fetcher: typeof fetch, run: () => Promise<void>) {
+    const { mkdtemp, mkdir } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "vdf-scope-"));
+    await mkdir(path.join(dir, "library", "admin"), { recursive: true });
+    const before = process.env.IMMICH_LIBRARY;
+    process.env.IMMICH_LIBRARY = dir;
+    globalThis.fetch = fetcher;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = realFetch;
+      if (before === undefined) delete process.env.IMMICH_LIBRARY;
+      else process.env.IMMICH_LIBRARY = before;
+    }
+  }
+
+  const settings = { includes: [], excludes: [] } as unknown as import("../src/lib/types").ScanSettings;
+
+  it("stops when the key cannot read the user instead of scanning every user", async () => {
+    const fetcher = (async (input: unknown) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/api/users/me") {
+        return Response.json({ message: "Missing required permission: user.read" }, { status: 403 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    await withLibrary(fetcher, async () => {
+      const { immichScanFolderPlan } = await import("../src/lib/immich-scan-scope");
+      await assert.rejects(immichScanFolderPlan(settings, { baseUrl: BASE, apiKey: "scope-a" }), /missing: user\.read/);
+    });
+  });
+
+  it("still plans the scan when Immich is unreachable", async () => {
+    const fetcher = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    await withLibrary(fetcher, async () => {
+      const { immichScanFolderPlan } = await import("../src/lib/immich-scan-scope");
+      const plan = await immichScanFolderPlan(settings, { baseUrl: BASE, apiKey: "scope-b" });
+      assert.ok(plan.includeSources.length > 0);
+    });
+  });
+});

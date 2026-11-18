@@ -30,6 +30,7 @@ import {
   groupAssetIds,
   missingAlbumIds,
   removableAlbumIds,
+  type AlbumAccess,
   type GroupAlbumMap,
 } from "@/lib/immich-album-sync";
 import { groupHasImmichArchived } from "@/lib/immich-archived";
@@ -1186,7 +1187,7 @@ function Player({
             {section === "immich" && item.assetId && immichAlbumSync ? (
               <ImmichAlbumTags assetId={item.assetId} sync={immichAlbumSync} />
             ) : null}
-            {soloImage ? <p className="truncate text-xs text-muted-foreground" title={item.path}>{item.path}</p> : null}
+            <p className="truncate text-xs text-muted-foreground" title={item.path}>{item.path}</p>
           </div>
         </div>
       ) : (
@@ -1382,12 +1383,19 @@ function LoadingImage({ src, className }: { src: string; className?: string }) {
 type ImmichGroupAlbumSync = {
   assetIds: string[];
   byAsset: GroupAlbumMap;
+  /** What the Immich key allows; null until known. Albums the key cannot read are not shown at all. */
+  access: AlbumAccess | null;
   loading: boolean;
   refresh: () => void;
 };
 
+const FULL_ALBUM_ACCESS: AlbumAccess = { read: true, add: true, remove: true };
+/** Learned once per page load, so later groups and viewer opens know it before their album request. */
+let knownAlbumAccess: AlbumAccess | null = null;
+
 function useImmichGroupAlbums(section: SectionId, group: ClientGroup | null): ImmichGroupAlbumSync {
   const [byAsset, setByAsset] = useState<GroupAlbumMap>({});
+  const [access, setAccess] = useState<AlbumAccess | null>(knownAlbumAccess);
   const [loading, setLoading] = useState(false);
   const [version, setVersion] = useState(0);
   const assetIds = useMemo(
@@ -1404,12 +1412,25 @@ function useImmichGroupAlbums(section: SectionId, group: ClientGroup | null): Im
     }
     let cancelled = false;
     setLoading(true);
+    const learn = (next: AlbumAccess) => {
+      knownAlbumAccess = next;
+      if (!cancelled) setAccess(next);
+    };
+    if (!knownAlbumAccess) {
+      // Access only: no Immich album calls, so it is answered at once and the row never flashes a placeholder.
+      void api<{ access?: AlbumAccess }>("/api/immich/albums?assetIds=")
+        .then((body) => learn(body.access ?? FULL_ALBUM_ACCESS))
+        .catch(() => undefined);
+    }
     // One batched request, sent after the photos and video have had their turn. The first load waits
     // briefly; a refresh after an album change goes out at once.
     const timer = window.setTimeout(
       () => {
-        void api<{ albumsByAsset: GroupAlbumMap }>(`/api/immich/albums?assetIds=${assetIds.map(encodeURIComponent).join(",")}`)
+        void api<{ albumsByAsset: GroupAlbumMap; access?: AlbumAccess }>(
+          `/api/immich/albums?assetIds=${assetIds.map(encodeURIComponent).join(",")}`,
+        )
           .then((body) => {
+            learn(body.access ?? FULL_ALBUM_ACCESS);
             if (!cancelled) setByAsset(body.albumsByAsset);
           })
           .catch(() => {
@@ -1428,7 +1449,7 @@ function useImmichGroupAlbums(section: SectionId, group: ClientGroup | null): Im
   }, [assetKey, version]);
 
   const refresh = useCallback(() => setVersion((value) => value + 1), []);
-  return useMemo(() => ({ assetIds, byAsset, loading, refresh }), [assetIds, byAsset, loading, refresh]);
+  return useMemo(() => ({ assetIds, byAsset, access, loading, refresh }), [assetIds, byAsset, access, loading, refresh]);
 }
 
 function ImmichAlbumTags({ assetId, sync }: { assetId: string; sync: ImmichGroupAlbumSync }) {
@@ -1436,11 +1457,11 @@ function ImmichAlbumTags({ assetId, sync }: { assetId: string; sync: ImmichGroup
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const { assetIds, byAsset, loading, refresh } = sync;
+  const { assetIds, byAsset, access, loading, refresh } = sync;
   const own = byAsset[assetId] ?? [];
   const mismatch = !loading && albumSetsMismatch(assetIds, byAsset);
-  const removable = mismatch ? removableAlbumIds(assetId, assetIds, byAsset) : [];
-  const missing = mismatch ? missingAlbumIds(assetId, assetIds, byAsset) : [];
+  const removable = mismatch && access?.remove ? removableAlbumIds(assetId, assetIds, byAsset) : [];
+  const missing = mismatch && access?.add ? missingAlbumIds(assetId, assetIds, byAsset) : [];
   const removableSet = new Set(removable);
   const shared = own.filter((album) => !removableSet.has(album.id));
 
@@ -1461,6 +1482,7 @@ function ImmichAlbumTags({ assetId, sync }: { assetId: string; sync: ImmichGroup
     }
   }
 
+  if (!access?.read) return null;
   if (loading) return <AlbumTagsSkeleton />;
 
   if (!mismatch) {

@@ -2,6 +2,9 @@ import type { ImmichAlbum } from "@/lib/immich";
 
 export type GroupAlbumMap = Record<string, ImmichAlbum[]>;
 
+/** What the Immich key allows for albums; the viewer hides what it may not do. */
+export type AlbumAccess = { read: boolean; add: boolean; remove: boolean };
+
 export function groupAssetIds(items: { assetId?: string | null }[]): string[] {
   return items.map((item) => item.assetId).filter((id): id is string => Boolean(id));
 }

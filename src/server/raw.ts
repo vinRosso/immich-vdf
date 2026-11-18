@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AppError, errorText } from "../lib/errors";
-import { openImmichOriginal, openImmichThumbnail, openImmichVideo } from "../lib/immich";
+import { openImmichOriginalIfAllowed, openImmichThumbnail, openImmichVideo } from "../lib/immich";
 import { loadConfig } from "../lib/config";
 import { PathJailError } from "../lib/path-jail";
 import { clientIp, mutationSiteAllowed, requestIsHttps } from "../lib/request-meta";
@@ -115,7 +115,7 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
       return true;
     }
     if (request.method === "GET" && pathname === "/api/immich-original") {
-      await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichOriginal, "Immich original failed");
+      await proxyImmichAsset(request, response, requiredQuery(url, "id"), openImmichOriginalIfAllowed, "Immich original failed");
       return true;
     }
   } catch (error) {

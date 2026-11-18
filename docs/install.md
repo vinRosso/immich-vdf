@@ -64,7 +64,7 @@ Immich sees its upload folder as `/data/library`. immich-vdf matches that to `/i
 
 Immich keeps uploaded originals under `/data/library/<storage label>/`. External libraries live at their own paths, for example `/mnt/photos`.
 
-In Docker, mount each extra folder at the same path in Immich and in immich-vdf. If the API key can't list your libraries, also list those paths in `IMMICH_SCAN_ROOTS`:
+In Docker, mount each extra folder at the same path in Immich and in immich-vdf. If the API key can't list your libraries (that needs an admin's key, see [API key permissions](immich#api-key-permissions)), also list those paths in `IMMICH_SCAN_ROOTS`:
 
 ```yaml
 volumes:

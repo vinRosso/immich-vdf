@@ -52,7 +52,7 @@ import {
   type ResultsGroupSortId,
 } from "@/lib/results-sort";
 import { cn } from "cn";
-import { CheckCircle2, ChevronRight, Clock, EyeOff, LayoutGrid, Loader2, SlidersHorizontal, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronRight, Clock, EyeOff, Info, LayoutGrid, Loader2, SlidersHorizontal, Trash2, XCircle } from "lucide-react";
 import type { RejoinProgress } from "@/lib/immich-rejoin-progress";
 import { matchingDefaults, normalizeScan } from "@/lib/scan-defaults";
 import { publishTrashSaved } from "@/lib/trash-events";
@@ -1070,6 +1070,8 @@ function Results({
   );
 }
 
+const API_KEY_DOCS_URL = "https://vinrosso.github.io/immich-vdf/immich#api-key-permissions";
+
 type ImmichStatusResponse =
   | { connected: true; baseUrl: string; user: { email: string; name: string }; libraryTotal: number | null }
   | { connected: false; baseUrl?: string; error?: string };
@@ -1167,7 +1169,23 @@ function ImmichConnectionFields({
   if (showForm) {
     return (
       <div className="min-w-0 space-y-2 text-xs text-muted-foreground">
-        <div>Immich connection</div>
+        <div className="flex items-center gap-1">
+          Immich connection
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <a
+                href={API_KEY_DOCS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Which permissions the API key needs"
+                className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Info className="size-3.5" />
+              </a>
+            </TooltipTrigger>
+            <TooltipContent side="top">Which permissions the API key needs</TooltipContent>
+          </Tooltip>
+        </div>
         <div className="grid w-full grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
           <Label htmlFor="base-url" className="text-xs text-muted-foreground justify-end">URL</Label>
           <Input

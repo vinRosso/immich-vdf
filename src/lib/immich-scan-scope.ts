@@ -1,6 +1,7 @@
 import { readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
+import { AppError } from "./errors";
 import { fetchImmichUser } from "./immich";
 import {
   mapImmichImportPathToHost,
@@ -146,7 +147,9 @@ export async function immichScanFolderPlan(
       const user = await fetchImmichUser(credentials.baseUrl, credentials.apiKey);
       storageLabel = user.storageLabel;
       userId = user.id;
-    } catch {
+    } catch (error) {
+      // A key without user.read would otherwise widen the scan to every user's folder.
+      if (error instanceof AppError && error.status === 403) throw error;
       // Scan library/ without a user folder when Immich is unreachable.
     }
   }

@@ -8,18 +8,23 @@ import { ignoreKey, memberIds, pruneIgnoredEntries } from "./ignore";
 import { assetsForOriginalPaths } from "./immich-asset-index";
 import { endRejoin, reportRejoin, tryBeginRejoin } from "./immich-rejoin-progress";
 import { attachAssets, originalPathsForGroups } from "./immich-join";
+import type { AlbumAccess } from "./immich-album-sync";
 import { resolveImmichScanRoots } from "./immich-mounts";
+import { keyHas, missingNeeded, missingPermissionMessage } from "./immich-permissions";
 import { resolveImmichPathMap } from "./immich-path-map";
 import {
   addAssetsToAlbum,
   fetchImmichAssetStatistics,
   fetchImmichUser,
+  immichKeyHas,
+  immichKeyPermissions,
   listAlbumsForAsset,
   pingImmich,
   removeAssetsFromAlbum,
   fetchImmichStack,
   listImmichStacks,
   removeAssetsFromStack,
+  STACK_COVER_MESSAGE,
   stackAssets,
   trashAssets,
   updateStackPrimary,
@@ -482,9 +487,14 @@ export async function removeFromImmichStack(groupId: string, assetIds: string[])
   if (chosen.length !== unique.length || stackIds.length !== 1 || chosen.some((item) => !item.stackId)) {
     throw new AppError("Select files from the same stack");
   }
+  if (chosen.some((item) => item.stackPrimary)) throw new AppError(STACK_COVER_MESSAGE);
   const stackId = stackIds[0];
-  await removeAssetsFromStack(settings.immich.baseUrl, settings.immich.apiKey, stackId, unique);
-  forgetImmichStacks([stackId]);
+  try {
+    await removeAssetsFromStack(settings.immich.baseUrl, settings.immich.apiKey, stackId, unique);
+  } finally {
+    // Immich may have changed before a later member failed: read the stack again on the next sync.
+    forgetImmichStacks([stackId]);
+  }
   const fresh = await fetchImmichStack(settings.immich.baseUrl, settings.immich.apiKey, stackId);
   if (fresh) rememberImmichStack(fresh);
   await saveImmichStackGroup(groupId, (current) =>
@@ -573,9 +583,18 @@ const ALBUM_CACHE_PRUNE_AT = 500;
 const ALBUM_PARALLEL = 4;
 
 /** Albums for several assets with a small cache and a cap on parallel Immich calls. */
-export async function albumsForAssets(assetIds: string[]): Promise<Record<string, ImmichAlbum[]>> {
+export async function albumsForAssets(
+  assetIds: string[],
+): Promise<{ albumsByAsset: Record<string, ImmichAlbum[]>; access: AlbumAccess }> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const perms = await immichKeyPermissions(settings.immich.baseUrl, settings.immich.apiKey);
+  const access: AlbumAccess = {
+    read: keyHas(perms, "album.read"),
+    add: keyHas(perms, "albumAsset.create"),
+    remove: keyHas(perms, "albumAsset.delete"),
+  };
+  if (!access.read) return { albumsByAsset: {}, access: { read: false, add: false, remove: false } };
   const out: Record<string, ImmichAlbum[]> = {};
   const missing: string[] = [];
   for (const id of new Set(assetIds.slice(0, 200))) {
@@ -592,12 +611,16 @@ export async function albumsForAssets(assetIds: string[]): Promise<Record<string
     }
     out[id] = albums;
   });
-  return out;
+  return { albumsByAsset: out, access };
 }
 
 export async function mutateImmichAlbumAsset(albumId: string, assetId: string, action: "add" | "remove"): Promise<void> {
   const settings = await loadSettings();
   requireImmich(settings.immich.baseUrl, settings.immich.apiKey);
+  const permission = action === "add" ? "albumAsset.create" : "albumAsset.delete";
+  if (!(await immichKeyHas(settings.immich.baseUrl, settings.immich.apiKey, permission))) {
+    throw new AppError(missingPermissionMessage([permission]), 403);
+  }
   const membership = await resultsMembership("immich");
   if (!membership.found || !membership.assetIds.has(assetId)) {
     throw new AppError("That asset is not in the current results", 404);
@@ -759,6 +782,8 @@ export async function immichConnectionInfo(baseUrl = "", apiKey = ""): Promise<I
   const key = apiKey.trim() || settings.immich.apiKey;
   requireImmich(url, key);
   await pingImmich(url, key);
+  const missing = missingNeeded(await immichKeyPermissions(url, key, { refresh: true }));
+  if (missing.length > 0) throw new AppError(missingPermissionMessage(missing));
   const user = await fetchImmichUser(url, key);
   return { baseUrl: url, user };
 }
@@ -780,8 +805,8 @@ export async function savedImmichStatus(): Promise<
     const info = await immichConnectionInfo();
     const [scanRoots, libraryTotal] = await Promise.all([
       resolveImmichScanRoots(creds),
-      fetchImmichAssetStatistics(creds.baseUrl, creds.apiKey)
-        .then((stats) => stats.total)
+      immichKeyHas(creds.baseUrl, creds.apiKey, "asset.statistics")
+        .then((allowed) => (allowed ? fetchImmichAssetStatistics(creds.baseUrl, creds.apiKey).then((stats) => stats.total) : null))
         .catch(() => null),
     ]);
     return { connected: true, ...info, scanRoots, libraryTotal };

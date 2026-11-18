@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, type AppConfig } from "./config";
-import { listImmichLibraryImportPaths } from "./immich";
+import { immichKeyHas, listImmichLibraryImportPaths } from "./immich";
 import { hostPathForContainerMount } from "./volume-binds";
 
 /** Immich media root inside the Immich container (`UPLOAD_LOCATION` is mounted at `/data`). */
@@ -151,7 +151,7 @@ async function computeScanRoots(config: AppConfig, credentials?: ImmichCredentia
   ]);
   const url = credentials?.baseUrl.trim() ?? "";
   const key = credentials?.apiKey ?? "";
-  if (url && key) {
+  if (url && key && (await immichKeyHas(url, key, "library.read").catch(() => true))) {
     try {
       const children = uploadMountChildren(config.immichLibrary);
       for (const importPath of await listImmichLibraryImportPaths(url, key)) {

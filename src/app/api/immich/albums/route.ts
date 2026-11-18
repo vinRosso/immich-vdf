@@ -5,12 +5,15 @@ import { AppError } from "@/lib/errors";
 import { api } from "@/lib/route";
 import { loadSettings } from "@/lib/store";
 
-/** `?assetIds=a,b,c` returns `{ albumsByAsset }` for the whole group. `?assetId=a` returns `{ albums }`. */
+/**
+ * `?assetIds=a,b,c` returns `{ albumsByAsset, access }` for the whole group, where `access` says what the key
+ * may do with albums; an empty `?assetIds=` returns only `access`. `?assetId=a` returns `{ albums }`.
+ */
 export const GET = api(async (request) => {
   const many = request.nextUrl.searchParams.get("assetIds");
   if (many !== null) {
     const ids = many.split(",").map((id) => id.trim()).filter(Boolean);
-    return NextResponse.json({ albumsByAsset: await albumsForAssets(ids) });
+    return NextResponse.json(await albumsForAssets(ids));
   }
   const assetId = request.nextUrl.searchParams.get("assetId") ?? "";
   const settings = await loadSettings();
