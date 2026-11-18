@@ -21,6 +21,26 @@ RUN set -eu; \
     echo "FFmpeg 8 libraries not downloaded: scans will use the ffmpeg program"; \
   fi
 
+# AI matching needs the ONNX Runtime library. The engine downloads it from microsoft/onnxruntime on GitHub, which
+# now returns 404, so the image carries it. NuGet keeps every version; ONNXRUNTIME_VERSION must match
+# AiComponents.RuntimeVersion in the engine. The checksum is of the whole .nupkg (NuGet publishes its SHA-512).
+FROM debian:bookworm-slim AS onnxruntime
+ARG ONNXRUNTIME_VERSION=1.23.2
+ARG ONNXRUNTIME_NUPKG_SHA256=25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a
+# Same rule as FFmpeg: a link that no longer downloads leaves AI matching to the engine's own download; a
+# checksum mismatch stops the build.
+RUN set -eu; \
+  mkdir -p /opt/onnxruntime; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends curl ca-certificates unzip; \
+  if curl -fsSL -o /tmp/ort.nupkg "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$ONNXRUNTIME_VERSION/microsoft.ml.onnxruntime.$ONNXRUNTIME_VERSION.nupkg"; then \
+    echo "$ONNXRUNTIME_NUPKG_SHA256  /tmp/ort.nupkg" | sha256sum -c -; \
+    unzip -j -q /tmp/ort.nupkg 'runtimes/linux-x64/native/*' -d /opt/onnxruntime; \
+    echo "$ONNXRUNTIME_VERSION" > /opt/onnxruntime/runtime.version; \
+  else \
+    echo "ONNX Runtime not downloaded: AI matching will try the engine's own download"; \
+  fi
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS vdf
 WORKDIR /src
 COPY engine/VDF.Core/VDF.Core.csproj VDF.Core/
@@ -51,6 +71,7 @@ COPY --from=node:24-bookworm-slim /usr/local /usr/local
 WORKDIR /app
 COPY --from=vdf /out /opt/vdf
 COPY --from=ffmpeg-libs /opt/ffmpeg/lib /opt/ffmpeg/lib
+COPY --from=onnxruntime /opt/onnxruntime /opt/onnxruntime
 COPY --from=web /app /app
 RUN rm -rf /app/upstream /app/engine /app/agent-tools
 ENV NODE_ENV=production \
@@ -73,7 +94,11 @@ RUN /opt/vdf/vdf-cli --help >/dev/null \
   && chmod 1777 /data \
   && chmod 755 /app/scripts/docker-entrypoint.sh \
   && command -v setpriv >/dev/null
-ENV HOME=/tmp
+# The engine keeps the AI runtime and model and its log.txt in $XDG_STATE_HOME/VDF. Under /data they survive a new
+# container; the entrypoint copies the runtime from /opt/onnxruntime there. Set after the build-time CLI run above,
+# so the image has no root-owned /data/state.
+ENV HOME=/tmp \
+  XDG_STATE_HOME=/data/state
 EXPOSE 4747
 # Docker runs HEALTHCHECK directly, not through ENTRYPOINT.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
