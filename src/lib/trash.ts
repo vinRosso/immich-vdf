@@ -1,4 +1,4 @@
-import { mkdir, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "./config";
 import { AppError } from "./errors";
@@ -20,22 +20,80 @@ import type { TrashEntry } from "./types";
 
 const TRASH = TRASH_DIR;
 
+type DeviceOf = (target: string) => Promise<number | bigint>;
+const deviceOf: DeviceOf = async (target) => (await stat(target)).dev;
+
+/**
+ * The folder whose `.vdf-trash` takes this file: the media root, or, when the file is on a drive or share mounted
+ * below the root, the top of that mount. A rename cannot cross filesystems (EXDEV).
+ */
+export async function trashBaseFor(root: string, file: string, devOf: DeviceOf = deviceOf): Promise<string> {
+  const device = await devOf(file);
+  if ((await devOf(root)) === device) return root;
+  let base = path.dirname(file);
+  for (;;) {
+    const parent = path.dirname(base);
+    if (parent === base || parent === root || !isInside(root, parent)) return base;
+    if ((await devOf(parent)) !== device) return base;
+    base = parent;
+  }
+}
+
+/** Mount points listed in /proc/self/mountinfo (the fifth field, with octal escapes such as `\040` decoded). */
+export function mountPointsFromMountinfo(text: string): string[] {
+  const points: string[] = [];
+  for (const line of text.split("\n")) {
+    const field = line.split(" ")[4];
+    if (field) points.push(field.replace(/\\([0-7]{3})/g, (_, code: string) => String.fromCharCode(parseInt(code, 8))));
+  }
+  return points;
+}
+
+/**
+ * Every folder that may hold a `.vdf-trash`: the media roots, the mounts below them, and the folders trash was
+ * recorded under (which covers systems without /proc).
+ */
+export async function trashBases(roots: string[]): Promise<string[]> {
+  const realRoots: string[] = [];
+  for (const root of roots) {
+    try {
+      realRoots.push(await realpath(root));
+    } catch {
+      // Root not mounted.
+    }
+  }
+  const candidates = new Set<string>(realRoots);
+  try {
+    for (const point of mountPointsFromMountinfo(await readFile("/proc/self/mountinfo", "utf8"))) candidates.add(point);
+  } catch {
+    // Not Linux, or /proc is not readable.
+  }
+  for (const key of Object.keys(await loadTrashAdded())) candidates.add(key.split("\n")[0]);
+  const bases = new Set<string>(realRoots);
+  for (const candidate of candidates) {
+    if (!realRoots.some((root) => isInside(root, candidate))) continue;
+    try {
+      const real = await resolveInside(roots, candidate);
+      if ((await stat(real)).isDirectory()) bases.add(real);
+    } catch {
+      // Gone, or outside the mounted folders.
+    }
+  }
+  return [...bases];
+}
+
 async function findTrashedCopy(roots: string[], candidate: string): Promise<string | null> {
   const normalized = path.normalize(candidate);
-  for (const mount of roots) {
-    let root: string;
-    try {
-      root = await realpath(mount);
-    } catch {
-      continue;
-    }
-    const rel = path.relative(root, normalized);
+  // Deepest first: a file on a nested mount is trashed at that mount, not at the media root.
+  const bases = (await trashBases(roots)).sort((a, b) => b.length - a.length);
+  for (const base of bases) {
+    const rel = path.relative(base, normalized);
     if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
     if (rel === TRASH || rel.startsWith(`${TRASH}${path.sep}`)) continue;
     try {
-      return await resolveInside(roots, path.join(root, TRASH, rel));
+      return await resolveInside(roots, path.join(base, TRASH, rel));
     } catch {
-      // Not in trash on this mount.
+      // Not in trash at this folder.
     }
   }
   return null;
@@ -80,9 +138,10 @@ async function moveOne(
   moved: { mount: string; relative: string; original: string }[],
 ): Promise<void> {
   const real = await resolveMediaFile(roots, candidate);
-  const root = await containingRoot(roots, real);
+  const mediaRoot = await containingRoot(roots, real);
+  if (real.split(path.sep).includes(TRASH)) return;
+  const root = await trashBaseFor(mediaRoot, real);
   const relative = path.relative(root, real);
-  if (relative === TRASH || relative.startsWith(`${TRASH}${path.sep}`)) return;
   const destination = path.join(root, TRASH, relative);
   await mkdir(path.dirname(destination), { recursive: true });
   const parent = await resolveInside(roots, path.dirname(destination));
@@ -203,13 +262,7 @@ export async function listTrash(): Promise<TrashEntry[]> {
   const entries: TrashEntry[] = [];
   const added = await loadTrashAdded();
   const missing: { mount: string; relative: string; atMs: number }[] = [];
-  for (const mount of loadConfig().mediaRoots) {
-    let root: string;
-    try {
-      root = await resolveInside([mount], mount);
-    } catch {
-      continue;
-    }
+  for (const root of await trashBases(loadConfig().mediaRoots)) {
     const trashRoot = path.join(root, TRASH);
     await walk(trashRoot, root, trashRoot, entries, added, missing);
   }
@@ -261,16 +314,10 @@ async function walk(
 export async function emptyTrash(): Promise<{ removed: number; freedBytes: number; totalSavedBytes: number }> {
   const listed = await listTrash();
   const freedBytes = listed.reduce((sum, entry) => sum + entry.sizeBytes, 0);
-  for (const mount of loadConfig().mediaRoots) {
-    let root: string;
-    try {
-      root = await resolveInside([mount], mount);
-    } catch {
-      continue;
-    }
+  for (const root of await trashBases(loadConfig().mediaRoots)) {
     const trashRoot = path.join(root, TRASH);
     try {
-      const real = await resolveInside([mount], trashRoot);
+      const real = await resolveInside([root], trashRoot);
       if (!isInside(root, real)) continue;
       await rm(real, { recursive: true, force: true });
     } catch {

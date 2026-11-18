@@ -35,6 +35,7 @@ import { cliFailure, type CliOutcome } from "./cli-failure";
 import { nativeFfmpegEnv, nativeFfmpegMode, resolveNativeFfmpeg, runCliQuietly, shouldRetryWithoutNative } from "./native-ffmpeg";
 import { PhaseTimer } from "./phase-timer";
 import { slotPatch } from "./schedule";
+import { trashBases } from "./trash";
 import { TRASH_DIR } from "./trash-dir";
 import { redact } from "./redact";
 import { getScan } from "./scan";
@@ -146,7 +147,7 @@ async function resolveScanPaths(
   const includes: string[] = [];
   for (const folder of includeSources) includes.push(await resolveInside(roots, folder));
   const excludes: string[] = [];
-  const trashFolders = section === "server" ? roots.map((root) => path.join(root, TRASH_DIR)) : [];
+  const trashFolders = section === "server" ? (await trashBases(roots)).map((base) => path.join(base, TRASH_DIR)) : [];
   for (const folder of [...scanSettings.excludes, ...extraExcludes, ...trashFolders]) {
     try {
       excludes.push(await resolveInside(roots, folder));

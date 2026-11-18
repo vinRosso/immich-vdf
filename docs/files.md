@@ -21,6 +21,8 @@ Set your external library as `MEDIA_PATH`. On the Files page, add that folder (o
 
 Trashing a file moves it into a `.vdf-trash/` folder in the same library. **Restore** puts it back. The container's user must be allowed to rename files there.
 
+A file can only be moved within its own drive. If a drive or network share is mounted inside `MEDIA_PATH`, its files go to a `.vdf-trash/` at the top of that mount instead, for example `/media/photos/.vdf-trash/`. The Trash page lists all of them.
+
 Immich keeps showing the photo until it rescans that library.
 
 ## Ignore
