@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resultsPreview, resultsView, resultsViewGzip } from "@/lib/actions";
+import { resultsPreview, resultsView } from "@/lib/actions";
 import { AppError } from "@/lib/errors";
 import { DEFAULT_RESULTS_GROUP_SORT, isResultsGroupSortId } from "@/lib/results-sort";
 import { api } from "@/lib/route";
@@ -13,17 +13,6 @@ export const GET = api(async (request) => {
     const limit = Number(request.nextUrl.searchParams.get("limit") ?? 10);
     return NextResponse.json(await resultsPreview(section, sortId, Number.isFinite(limit) ? limit : 10));
   }
-  if (request.headers.get("accept-encoding")?.includes("gzip")) {
-    const body = new Uint8Array(await resultsViewGzip(section));
-    return new NextResponse(body, {
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Encoding": "gzip",
-        "Content-Length": String(body.byteLength),
-        "Cache-Control": "private, no-cache",
-        Vary: "Accept-Encoding",
-      },
-    });
-  }
+  // With gzip, the custom server sends the cached compressed view (src/server/raw.ts).
   return NextResponse.json(await resultsView(section));
 });

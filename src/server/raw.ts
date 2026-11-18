@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AppError, errorText } from "../lib/errors";
+import { resultsViewGzip } from "../lib/actions";
 import { openImmichOriginalIfAllowed, openImmichThumbnail, openImmichVideo } from "../lib/immich";
 import { loadConfig } from "../lib/config";
 import { PathJailError } from "../lib/path-jail";
@@ -53,12 +54,25 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
     sendJson(response, 200, { ok: true });
     return true;
   }
-  if (!isProtected(pathname)) return false;
+  const resultsGzip = wantsResultsGzip(request, url);
+  if (!isProtected(pathname) && !resultsGzip) return false;
   if (!(await cookieIsValid(request.headers.cookie))) {
     sendJson(response, 401, { error: "Sign in required" });
     return true;
   }
   try {
+    if (resultsGzip) {
+      const body = await resultsViewGzip(sectionParam(url.searchParams.get("section")));
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+        "Content-Length": body.byteLength,
+        "Cache-Control": "private, no-cache",
+        Vary: "Accept-Encoding",
+      });
+      response.end(body);
+      return true;
+    }
     if (request.method === "GET" && pathname === "/api/scan/events") {
       await events(request, response);
       return true;
@@ -133,6 +147,20 @@ export async function handleRaw(request: IncomingMessage, response: ServerRespon
     return true;
   }
   return false;
+}
+
+/**
+ * The full results view, when the browser takes gzip, is sent here and not by the Next.js route: Next.js drops a
+ * route's Content-Encoding and Content-Length and compresses the body again, so the browser got gzip bytes
+ * instead of JSON. The preview and uncompressed requests stay with the route.
+ */
+function wantsResultsGzip(request: IncomingMessage, url: URL): boolean {
+  return (
+    request.method === "GET" &&
+    url.pathname === "/api/results" &&
+    url.searchParams.get("preview") !== "1" &&
+    String(request.headers["accept-encoding"] ?? "").includes("gzip")
+  );
 }
 
 function isProtected(pathname: string): boolean {
