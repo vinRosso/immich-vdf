@@ -37,4 +37,3 @@ flowchart LR
 | `server.ts` | HTTP server, scheduler, scan job, ffmpeg streaming |
 | `src/` | Next.js UI and JSON API |
 | `fixtures/cli-results.json` | Parser contract for tests and the image build |
-| `docs/immich-vdf-plan.md` | Design notes. Not published on the docs site. |
