@@ -4,10 +4,11 @@
 # Scans decode inside vdf-cli when the FFmpeg 8 shared libraries below are installed, about 4x faster than
 # starting one ffmpeg program per frame. If they cannot be fetched the image still builds and scans use the program.
 FROM debian:bookworm-slim AS ffmpeg-libs
-# A dated release stays downloadable; "latest" does not. When this link stops working, take a newer
-# autobuild tag and its checksum from https://github.com/BtbN/FFmpeg-Builds/releases (an 8.1 "linux64-gpl-shared" file).
-ARG FFMPEG_LIBS_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-20-13-08/ffmpeg-n8.1.3-18-g46d899d7a0-linux64-gpl-shared-8.1.tar.xz
-ARG FFMPEG_LIBS_SHA256=1550d95f723911d1bd356dabfc1c1b6d26b1e7adaa36a5eda203f8e089d2bbd2
+# A dated release keeps one checksum, but BtbN deletes dated releases after about a month ("latest" changes daily).
+# Before a release, take a newer autobuild tag and its checksum from https://github.com/BtbN/FFmpeg-Builds/releases
+# (an 8.1 "linux64-gpl-shared" file; GitHub shows each file's SHA-256).
+ARG FFMPEG_LIBS_URL=https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-18-12-39/ffmpeg-n8.1.3-36-ge22a4510c9-linux64-gpl-shared-8.1.tar.xz
+ARG FFMPEG_LIBS_SHA256=700803775cd1b6ba1cad0c91d5ec4ac6897814b34d9d7d69186d95844a62cba4
 # A link that no longer downloads leaves the image without the libraries (scans use the ffmpeg program). A download that
 # does not match the checksum stops the build: that is a changed or damaged file, not a missing one.
 RUN set -eu; \
